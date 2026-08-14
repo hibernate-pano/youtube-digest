@@ -1495,3 +1495,53 @@ body {
 }
 .word-add-btn:hover { color: var(--accent); border-color: var(--accent); }
 
+
+/* note editing */
+.note-edit-input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 13px;
+  background: var(--surface);
+  color: var(--text);
+  resize: vertical;
+}
+.note-edit-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 6px;
+}
+.note-text { cursor: pointer; }
+.note-text:hover { outline: 1px dashed var(--border); outline-offset: 3px; border-radius: 6px; }
+
+
+.word-translation { cursor: pointer; }
+.word-translation-input {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 13px;
+  background: var(--surface);
+  color: var(--text);
+  max-width: 220px;
+}
+
+
+.tab-badge {
+  display: inline-block;
+  min-width: 16px;
+  margin-left: 5px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 800;
+  text-align: center;
+  line-height: 16px;
+}
+

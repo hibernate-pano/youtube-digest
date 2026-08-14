@@ -31,6 +31,50 @@ async function saveNoteToStorage(note) {
 /**
  * Gets notes from storage (account-namespaced), optionally filtered by video ID
  */
+/**
+ * Updates a note's text locally (account-namespaced) and on the cloud when
+ * signed in. A local edit bumps updatedAt, so the next full sync treats the
+ * local copy as newer and pushes it even if the direct PATCH failed.
+ */
+async function handleUpdateNote(noteId, text) {
+  try {
+    const cleanText = String(text || "").trim().slice(0, 20000);
+    if (!cleanText) return { success: false, error: "EMPTY_NOTE" };
+    const namespace = await notesNamespace();
+    const notes = await readLocalNotes(namespace);
+    const note = notes.find((candidate) => candidate.id === noteId);
+    if (!note) return { success: false, error: "Note not found" };
+    note.text = cleanText;
+    note.rawText = cleanText;
+    note.updatedAt = Date.now();
+    await writeLocalNotes(namespace, notes);
+    const session = await getGithubSession();
+    if (session) {
+      try {
+        if (note.cloudId) {
+          await cloudFetch("/api/notes/" + encodeURIComponent(note.cloudId), {
+            method: "PATCH",
+            token: session.token,
+            body: localNoteToCloudPayload(note),
+          });
+        } else {
+          const pushed = await pushNoteToCloud(session, note);
+          const cloudId = pushed && pushed.note && pushed.note.id;
+          if (cloudId) {
+            note.cloudId = cloudId;
+            await writeLocalNotes(namespace, notes);
+          }
+        }
+      } catch (error) {
+        console.warn("[YouTube Digest] Note update cloud sync failed:", error.message);
+      }
+    }
+    return { success: true, note };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
 async function handleGetNotes(videoId) {
   try {
     const namespace = await notesNamespace();
@@ -165,62 +209,66 @@ function cloudToLocalNote(cloud) {
 }
 
 /**
- * Pure merge with the cloud as the source of truth:
- * - Notes the cloud has (by clientId) come down, newest edit wins on conflict.
- * - Local notes that were never synced (no cloudId yet) are kept and queued
- *   for push: they are new since the last sync.
- * - Local notes that were synced before (have a cloudId) but are missing
- *   from the cloud were deleted elsewhere (e.g. from the web dashboard), so
- *   they are dropped locally too. Without this, dashboard deletions would
- *   resurrect on the next sync.
+ * Generic collection merge shared by notes and vocabulary. Semantics:
+ * - Cloud rows come down; on a conflict the newest edit wins.
+ * - Local rows that were never synced (no cloudId yet) are kept and queued
+ *   for push.
+ * - Local rows that were synced before but are missing from the cloud were
+ *   deleted elsewhere (e.g. from the web dashboard), so they are dropped
+ *   locally too; without this, deletions would resurrect on the next sync.
  */
-function mergeNotesForSync(localNotes, cloudNotes) {
-  const cloudById = new Map();
-  for (const cloud of cloudNotes || []) {
-    if (cloud && cloud.clientId) cloudById.set(String(cloud.clientId), cloud);
+function mergeCollectionsForSync(localItems, cloudItems, { keyOfLocal, keyOfCloud, toLocal }) {
+  const cloudByKey = new Map();
+  for (const cloud of cloudItems || []) {
+    const key = keyOfCloud(cloud);
+    if (key) cloudByKey.set(key, cloud);
   }
   const merged = new Map();
-  for (const local of localNotes || []) {
-    if (!local || !local.id) continue;
-    const cloud = cloudById.get(String(local.id));
+  for (const local of localItems || []) {
+    const key = keyOfLocal(local);
+    if (!key) continue;
+    const cloud = cloudByKey.get(key);
     if (cloud) {
       const cloudMs = new Date(cloud.updatedAt).getTime();
       const localMs = Number(local.updatedAt) || Number(local.createdAt) || 0;
-      if (cloudMs > localMs) {
-        merged.set(String(local.id), { source: "cloud", note: cloud, updatedAt: cloudMs });
-      } else {
-        merged.set(String(local.id), { source: "local", note: local, updatedAt: localMs });
-      }
+      const cloudNewer = cloudMs > localMs;
+      merged.set(key, {
+        source: cloudNewer ? "cloud" : "local",
+        item: cloudNewer ? cloud : local,
+        updatedAt: Math.max(cloudMs, localMs),
+      });
     } else if (!local.cloudId) {
-      // Never synced: brand-new local note, keep and push.
-      merged.set(String(local.id), {
+      // Never synced: brand-new local item, keep and push.
+      merged.set(key, {
         source: "local",
-        note: local,
+        item: local,
         updatedAt: Number(local.updatedAt) || Number(local.createdAt) || 0,
       });
     }
     // else: synced before but missing from the cloud -> deleted elsewhere.
   }
-  for (const cloud of cloudById.values()) {
-    if (!merged.has(String(cloud.clientId))) {
-      merged.set(String(cloud.clientId), {
-        source: "cloud",
-        note: cloud,
-        updatedAt: new Date(cloud.updatedAt).getTime(),
-      });
+  for (const cloud of cloudByKey.values()) {
+    const key = keyOfCloud(cloud);
+    if (!merged.has(key)) {
+      merged.set(key, { source: "cloud", item: cloud, updatedAt: new Date(cloud.updatedAt).getTime() });
     }
   }
-  const localResult = [];
+  const mergedItems = [];
   const toPush = [];
   for (const entry of merged.values()) {
-    if (entry.source === "cloud") {
-      localResult.push(cloudToLocalNote(entry.note));
-    } else {
-      localResult.push(entry.note);
-      toPush.push(entry.note);
-    }
+    mergedItems.push(entry.source === "cloud" ? toLocal(entry.item) : entry.item);
+    if (entry.source === "local") toPush.push(entry.item);
   }
-  return { mergedNotes: localResult, toPush };
+  return { mergedItems, toPush };
+}
+
+function mergeNotesForSync(localNotes, cloudNotes) {
+  const result = mergeCollectionsForSync(localNotes, cloudNotes, {
+    keyOfLocal: (item) => (item && item.id ? String(item.id) : ""),
+    keyOfCloud: (item) => (item && item.clientId ? String(item.clientId) : ""),
+    toLocal: cloudToLocalNote,
+  });
+  return { mergedNotes: result.mergedItems, toPush: result.toPush };
 }
 
 async function pushNoteToCloud(session, note) {
@@ -243,35 +291,75 @@ async function deleteNoteFromCloud(session, noteId) {
  * merge by clientId (newest wins), push local-only notes, write back locally.
  * Never touches the signed-out namespace, so accounts stay isolated.
  */
-async function fullSyncNotes() {
+/**
+ * Shared full-sync runner for notes and vocabulary: pull the cloud list,
+ * merge (newest wins, deletions propagate), push local-only items while
+ * recording their cloudId, write back locally. Never touches the signed-out
+ * namespace, so accounts stay isolated.
+ */
+async function runFullSync({
+  namespaceFor,
+  fetchPath,
+  pushPath,
+  keyOfLocal,
+  keyOfCloud,
+  toLocal,
+  toCloudPayload,
+  cloudIdOf,
+  readLocal,
+  writeLocal,
+}) {
   const session = await getGithubSession();
   if (!session) return { success: true, synced: false, reason: "not signed in" };
-  const namespace = "ytd_notes_" + session.githubId;
-  const local = await readLocalNotes(namespace);
+  const namespace = namespaceFor(session);
+  const local = await readLocal(namespace);
   let cloud = [];
   try {
-    const data = await cloudFetch("/api/notes", { token: session.token });
-    cloud = data && data.notes ? data.notes : [];
+    const data = await cloudFetch(fetchPath, { token: session.token });
+    cloud = data && (data.notes || data.vocabulary) ? data.notes || data.vocabulary : [];
   } catch (error) {
     return { success: false, error: error.message };
   }
-  const { mergedNotes, toPush } = mergeNotesForSync(local, cloud);
-  for (const note of toPush) {
+  const { mergedItems, toPush } = mergeCollectionsForSync(local, cloud, {
+    keyOfLocal,
+    keyOfCloud,
+    toLocal,
+  });
+  for (const item of toPush) {
     try {
-      const pushed = await pushNoteToCloud(session, note);
-      const cloudId = pushed && pushed.note && pushed.note.id;
+      const pushed = await cloudFetch(pushPath, {
+        method: "POST",
+        token: session.token,
+        body: toCloudPayload(item),
+      });
+      const cloudId = cloudIdOf(pushed);
       if (cloudId) {
         // Remember the server id so future merges treat it as synced and
         // deletions elsewhere propagate instead of resurrecting.
-        const target = mergedNotes.find((candidate) => candidate.id === note.id);
+        const target = mergedItems.find((candidate) => keyOfLocal(candidate) === keyOfLocal(item));
         if (target) target.cloudId = cloudId;
       }
     } catch (error) {
-      console.warn("[YouTube Digest] Push note failed (kept locally):", error.message);
+      console.warn("[YouTube Digest] Sync push failed (kept locally):", error.message);
     }
   }
-  await writeLocalNotes(namespace, mergedNotes);
-  return { success: true, synced: true, count: mergedNotes.length };
+  await writeLocal(namespace, mergedItems);
+  return { success: true, synced: true, count: mergedItems.length };
+}
+
+async function fullSyncNotes() {
+  return runFullSync({
+    namespaceFor: (session) => "ytd_notes_" + session.githubId,
+    fetchPath: "/api/notes",
+    pushPath: "/api/notes",
+    keyOfLocal: (item) => (item && item.id ? String(item.id) : ""),
+    keyOfCloud: (item) => (item && item.clientId ? String(item.clientId) : ""),
+    toLocal: cloudToLocalNote,
+    toCloudPayload: localNoteToCloudPayload,
+    cloudIdOf: (pushed) => pushed && pushed.note && pushed.note.id,
+    readLocal: readLocalNotes,
+    writeLocal: writeLocalNotes,
+  });
 }
 
 async function handleGetGithubSession() {
@@ -376,36 +464,18 @@ function mergeVocabularyForSync(localItems, cloudItems) {
 }
 
 async function fullSyncVocabulary() {
-  const session = await getGithubSession();
-  if (!session) return { success: true, synced: false, reason: "not signed in" };
-  const namespace = "ytd_vocabulary_" + session.githubId;
-  const local = await readLocalVocabulary(namespace);
-  let cloud = [];
-  try {
-    const data = await cloudFetch("/api/vocabulary", { token: session.token });
-    cloud = data && data.vocabulary ? data.vocabulary : [];
-  } catch (error) {
-    return { success: false, error: error.message };
-  }
-  const { mergedItems, toPush } = mergeVocabularyForSync(local, cloud);
-  for (const item of toPush) {
-    try {
-      const pushed = await cloudFetch("/api/vocabulary", {
-        method: "POST",
-        token: session.token,
-        body: localVocabToCloudPayload(item),
-      });
-      const cloudId = pushed && pushed.vocabulary && pushed.vocabulary.id;
-      if (cloudId) {
-        const target = mergedItems.find((candidate) => vocabKey(candidate) === vocabKey(item));
-        if (target) target.cloudId = cloudId;
-      }
-    } catch (error) {
-      console.warn("[YouTube Digest] Vocabulary push failed (kept locally):", error.message);
-    }
-  }
-  await writeLocalVocabulary(namespace, mergedItems);
-  return { success: true, synced: true, count: mergedItems.length };
+  return runFullSync({
+    namespaceFor: (session) => "ytd_vocabulary_" + session.githubId,
+    fetchPath: "/api/vocabulary",
+    pushPath: "/api/vocabulary",
+    keyOfLocal: vocabKey,
+    keyOfCloud: vocabKey,
+    toLocal: cloudVocabToLocal,
+    toCloudPayload: localVocabToCloudPayload,
+    cloudIdOf: (pushed) => pushed && pushed.vocabulary && pushed.vocabulary.id,
+    readLocal: readLocalVocabulary,
+    writeLocal: writeLocalVocabulary,
+  });
 }
 
 /**

@@ -1079,6 +1079,65 @@ let reviewQueue = [];
 let reviewIndex = 0;
 let reviewRevealed = false;
 
+
+/**
+ * Inline edit for a word's translation. Reuses the idempotent
+ * saveVocabulary path (same term + sentence updates, never duplicates),
+ * which mirrors locally and to the cloud.
+ */
+async function editWordTranslation(item, el) {
+  if (el.dataset.editing === "true") return;
+  el.dataset.editing = "true";
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "word-translation-input";
+  input.value = item.translation || "";
+  el.replaceWith(input);
+  input.focus();
+  input.select();
+
+  const commit = async (save) => {
+    if (save) {
+      const next = input.value.trim().slice(0, 500);
+      const result = await chrome.runtime.sendMessage({
+        action: "saveVocabulary",
+        entry: {
+          term: item.term,
+          translation: next,
+          explanation: item.explanation,
+          sentence: item.sentence,
+          videoId: item.videoId,
+          videoTitle: item.videoTitle,
+          timestampSeconds: item.timestampSeconds,
+        },
+      }).catch(() => null);
+      if (result && result.success) {
+        item.translation = next;
+      }
+    }
+    const replacement = document.createElement("span");
+    replacement.className = "word-translation";
+    replacement.title = "Click to edit translation";
+    replacement.textContent = item.translation || "";
+    replacement.addEventListener("click", (event) => {
+      event.stopPropagation();
+      editWordTranslation(item, replacement);
+    });
+    input.replaceWith(replacement);
+  };
+
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      void commit(true);
+    } else if (event.key === "Escape") {
+      void commit(false);
+    }
+  });
+  input.addEventListener("blur", () => {
+    void commit(true);
+  });
+}
 async function loadWords() {
   try {
     const result = await chrome.runtime.sendMessage({
@@ -1113,7 +1172,12 @@ function renderWords(items) {
     term.textContent = item.term;
     const translation = document.createElement("span");
     translation.className = "word-translation";
+    translation.title = "Click to edit translation";
     translation.textContent = item.translation || "";
+    translation.addEventListener("click", (event) => {
+      event.stopPropagation();
+      editWordTranslation(item, translation);
+    });
     const status = document.createElement("span");
     status.className = "word-status " + (item.status || "learning");
     status.textContent = item.status || "learning";
@@ -1159,17 +1223,35 @@ async function refreshReviewCount() {
   const countEl = document.getElementById("reviewCount");
   const reviewBtn = document.getElementById("reviewBtn");
   if (!countEl || !reviewBtn) return;
+  const wordsTab = document.querySelector('.tab[data-tab="words"]');
+  const setWordsTabBadge = (count) => {
+    if (!wordsTab) return;
+    const badge = wordsTab.querySelector(".tab-badge");
+    if (count > 0) {
+      if (!badge) {
+        const el = document.createElement("span");
+        el.className = "tab-badge";
+        wordsTab.appendChild(el);
+      }
+      wordsTab.querySelector(".tab-badge").textContent = String(count);
+    } else if (badge) {
+      badge.remove();
+    }
+  };
   if (result && result.success) {
     const count = result.reviews.length;
     countEl.textContent = String(count);
     reviewBtn.disabled = count === 0;
+    setWordsTabBadge(count);
   } else if (result && result.error === "NO_SESSION") {
     countEl.textContent = "–";
     reviewBtn.disabled = true;
     reviewBtn.title = "Sign in to review your vocabulary";
+    setWordsTabBadge(0);
   } else {
     countEl.textContent = "–";
     reviewBtn.disabled = true;
+    setWordsTabBadge(0);
   }
 }
 
@@ -1881,7 +1963,7 @@ function renderNotes(notes, filteredVideoId) {
         ${!filteredVideoId ? `<span class="note-video-title">${escapeHtml(note.videoTitle)}</span>` : ""}
         <button class="note-delete" data-id="${escapeHtml(note.id)}" title="Delete note">✕</button>
       </div>
-      <div class="note-text">"${escapeHtml(note.text)}"</div>
+      <div class="note-text" title="Click to edit">"${escapeHtml(note.text)}"</div>
       <div class="note-actions">
         <button class="note-action-btn note-copy-text">⧉ Copy text</button>
         <button class="note-action-btn note-copy-link" data-url="${escapeHtml(note.timestampedUrl)}">🔗 Copy timestamp</button>
@@ -1892,6 +1974,12 @@ function renderNotes(notes, filteredVideoId) {
     // Timestamp click - play from this point (in this tab or a new one)
     noteEl.querySelector(".note-timestamp").addEventListener("click", () => {
       playNote(note);
+    });
+
+    // Click the note text to edit it
+    noteEl.querySelector(".note-text").addEventListener("click", (event) => {
+      event.stopPropagation();
+      startEditingNote(note, noteEl);
     });
 
     // Delete button
@@ -1944,6 +2032,80 @@ function renderNotes(notes, filteredVideoId) {
   });
 }
 
+/**
+ * Swaps a note's text for a textarea with Save/Cancel so learners can fix
+ * typos or reword a note. Persists locally and to the cloud when signed in.
+ */
+function startEditingNote(note, noteEl) {
+  const textEl = noteEl.querySelector(".note-text");
+  if (!textEl || textEl.dataset.editing === "true") return;
+  textEl.dataset.editing = "true";
+
+  const textarea = document.createElement("textarea");
+  textarea.className = "note-edit-input";
+  textarea.value = note.text || "";
+  textarea.rows = 3;
+
+  const actions = document.createElement("div");
+  actions.className = "note-edit-actions";
+  const saveBtn = document.createElement("button");
+  saveBtn.type = "button";
+  saveBtn.className = "note-action-btn";
+  saveBtn.textContent = "Save";
+  const cancelBtn = document.createElement("button");
+  cancelBtn.type = "button";
+  cancelBtn.className = "note-action-btn";
+  cancelBtn.textContent = "Cancel";
+  actions.append(saveBtn, cancelBtn);
+
+  textEl.replaceWith(textarea);
+  textarea.after(actions);
+  textarea.focus();
+  textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+
+  const restore = () => {
+    const replacement = document.createElement("div");
+    replacement.className = "note-text";
+    replacement.title = "Click to edit";
+    replacement.textContent = '"' + (note.text || "") + '"';
+    replacement.addEventListener("click", (event) => {
+      event.stopPropagation();
+      startEditingNote(note, noteEl);
+    });
+    textarea.replaceWith(replacement);
+    actions.remove();
+  };
+
+  cancelBtn.addEventListener("click", () => {
+    restore();
+  });
+
+  saveBtn.addEventListener("click", async () => {
+    const next = textarea.value.trim();
+    if (!next) {
+      restore();
+      return;
+    }
+    const result = await chrome.runtime.sendMessage({
+      action: "updateNote",
+      noteId: note.id,
+      text: next,
+    }).catch(() => null);
+    if (result && result.success) {
+      note.text = result.note.text;
+      restore();
+      const filterAll = document
+        .getElementById("notesFilterAll")
+        ?.classList.contains("active");
+      loadNotes(filterAll ? null : currentVideoId);
+    } else {
+      const hint = document.createElement("span");
+      hint.className = "word-sentence";
+      hint.textContent = "Could not save. Try again.";
+      actions.appendChild(hint);
+    }
+  });
+}
 /**
  * Deletes a note by ID.
  */

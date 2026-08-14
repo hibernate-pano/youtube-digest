@@ -101,7 +101,22 @@
       del.className = "del-btn";
       del.textContent = "Delete";
       del.addEventListener("click", () => deleteNote(note));
-      head.append(star, title, link, del);
+      const copy = document.createElement("button");
+      copy.type = "button";
+      copy.className = "del-btn";
+      copy.textContent = "Copy";
+      copy.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(note.note || "");
+          copy.textContent = "Copied";
+          setTimeout(() => {
+            copy.textContent = "Copy";
+          }, 1500);
+        } catch (error) {
+          statusLine("Could not copy: " + error.message, true);
+        }
+      });
+      head.append(star, title, link, copy, del);
       const body = document.createElement("div");
       body.className = "card-body";
       body.textContent = note.note || "";
@@ -141,13 +156,18 @@
         status.appendChild(el);
       }
       status.addEventListener("change", () => setVocabStatus(row, status.value));
+      const del = document.createElement("button");
+      del.type = "button";
+      del.className = "del-btn";
+      del.textContent = "Delete";
+      del.addEventListener("click", () => deleteVocabularyEntry(row));
       const video = document.createElement("a");
       video.className = "ts-link";
       video.href = watchUrl(row.videoId, row.timestampSeconds);
       video.target = "_blank";
       video.rel = "noreferrer";
       video.textContent = row.videoTitle || row.videoId || "";
-      head.append(term, status, video);
+      head.append(term, status, video, del);
       const translation = document.createElement("div");
       translation.className = "vocab-translation";
       translation.textContent = row.translation || "";
@@ -180,6 +200,17 @@
     try {
       await api("/api/notes/" + note.id, { method: "DELETE" });
       STATE.notes = STATE.notes.filter((item) => item.id !== note.id);
+      renderAll();
+    } catch (error) {
+      statusLine(error.message, true);
+    }
+  }
+
+  async function deleteVocabularyEntry(row) {
+    if (!confirm("Delete this word and its review history?")) return;
+    try {
+      await api("/api/vocabulary/" + row.id, { method: "DELETE" });
+      STATE.vocabulary = STATE.vocabulary.filter((item) => item.id !== row.id);
       renderAll();
     } catch (error) {
       statusLine(error.message, true);

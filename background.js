@@ -400,6 +400,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.action === "updateNote") {
+    handleUpdateNote(message.noteId, message.text)
+      .then(sendResponse)
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
   if (message.action === "getNotes") {
     // Get all saved notes
     handleGetNotes(message.videoId)
@@ -1781,6 +1788,7 @@ globalThis.__YTD_TRANSLATION_TESTING__ = {
   saveNoteToStorage,
   handleGetNotes,
   handleDeleteNote,
+  handleUpdateNote,
   migrateLegacyLocalNotes,
   mergeVocabularyForSync,
   handleExtractVocabulary,
