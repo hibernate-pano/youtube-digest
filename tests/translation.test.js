@@ -786,6 +786,22 @@ function makeSyncEnv({ signedIn = false, notes = [] } = {}) {
   return { storageMock };
 }
 
+test("mergeNotesForSync drops notes deleted elsewhere (cloud is truth)", () => {
+  const helpers = loadBackgroundHelpers();
+  const local = [
+    // Synced before (has cloudId) but missing from cloud: deleted on the dashboard.
+    { id: "note_gone", text: "deleted elsewhere", cloudId: "uuid-gone", createdAt: 5000 },
+    // Never synced: must be kept and pushed.
+    { id: "note_new", text: "brand new", createdAt: 6000 },
+  ];
+  const cloud = [];
+  const { mergedNotes, toPush } = helpers.mergeNotesForSync(local, cloud);
+  assert.equal(mergedNotes.length, 1);
+  assert.equal(mergedNotes[0].id, "note_new");
+  assert.equal(toPush.length, 1);
+  assert.equal(toPush[0].id, "note_new");
+});
+
 test("mergeNotesForSync pulls cloud-only notes and pushes local-only notes", () => {
   const helpers = loadBackgroundHelpers();
   const local = [

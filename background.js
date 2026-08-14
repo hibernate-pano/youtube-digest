@@ -1557,25 +1557,49 @@ function cloudToLocalNote(cloud) {
 }
 
 /**
- * Pure merge: by clientId, the newer of local and cloud wins. Returns the
- * merged local list and the local-only notes that still need a cloud push.
+ * Pure merge with the cloud as the source of truth:
+ * - Notes the cloud has (by clientId) come down, newest edit wins on conflict.
+ * - Local notes that were never synced (no cloudId yet) are kept and queued
+ *   for push: they are new since the last sync.
+ * - Local notes that were synced before (have a cloudId) but are missing
+ *   from the cloud were deleted elsewhere (e.g. from the web dashboard), so
+ *   they are dropped locally too. Without this, dashboard deletions would
+ *   resurrect on the next sync.
  */
 function mergeNotesForSync(localNotes, cloudNotes) {
+  const cloudById = new Map();
+  for (const cloud of cloudNotes || []) {
+    if (cloud && cloud.clientId) cloudById.set(String(cloud.clientId), cloud);
+  }
   const merged = new Map();
   for (const local of localNotes || []) {
     if (!local || !local.id) continue;
-    merged.set(String(local.id), {
-      source: "local",
-      note: local,
-      updatedAt: Number(local.updatedAt) || Number(local.createdAt) || 0,
-    });
+    const cloud = cloudById.get(String(local.id));
+    if (cloud) {
+      const cloudMs = new Date(cloud.updatedAt).getTime();
+      const localMs = Number(local.updatedAt) || Number(local.createdAt) || 0;
+      if (cloudMs > localMs) {
+        merged.set(String(local.id), { source: "cloud", note: cloud, updatedAt: cloudMs });
+      } else {
+        merged.set(String(local.id), { source: "local", note: local, updatedAt: localMs });
+      }
+    } else if (!local.cloudId) {
+      // Never synced: brand-new local note, keep and push.
+      merged.set(String(local.id), {
+        source: "local",
+        note: local,
+        updatedAt: Number(local.updatedAt) || Number(local.createdAt) || 0,
+      });
+    }
+    // else: synced before but missing from the cloud -> deleted elsewhere.
   }
-  for (const cloud of cloudNotes || []) {
-    if (!cloud || !cloud.clientId) continue;
-    const cloudMs = new Date(cloud.updatedAt).getTime();
-    const existing = merged.get(String(cloud.clientId));
-    if (!existing || cloudMs > existing.updatedAt) {
-      merged.set(String(cloud.clientId), { source: "cloud", note: cloud, updatedAt: cloudMs });
+  for (const cloud of cloudById.values()) {
+    if (!merged.has(String(cloud.clientId))) {
+      merged.set(String(cloud.clientId), {
+        source: "cloud",
+        note: cloud,
+        updatedAt: new Date(cloud.updatedAt).getTime(),
+      });
     }
   }
   const localResult = [];
@@ -1626,7 +1650,14 @@ async function fullSyncNotes() {
   const { mergedNotes, toPush } = mergeNotesForSync(local, cloud);
   for (const note of toPush) {
     try {
-      await pushNoteToCloud(session, note);
+      const pushed = await pushNoteToCloud(session, note);
+      const cloudId = pushed && pushed.note && pushed.note.id;
+      if (cloudId) {
+        // Remember the server id so future merges treat it as synced and
+        // deletions elsewhere propagate instead of resurrecting.
+        const target = mergedNotes.find((candidate) => candidate.id === note.id);
+        if (target) target.cloudId = cloudId;
+      }
     } catch (error) {
       console.warn("[YouTube Digest] Push note failed (kept locally):", error.message);
     }
