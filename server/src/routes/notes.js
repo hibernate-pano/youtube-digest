@@ -17,6 +17,16 @@ async function createNote(ctx) {
   return json({ note: row }, 201);
 }
 
+async function setNoteStarred(ctx) {
+  const input = await ctx.request.json().catch(() => null);
+  if (typeof input?.starred !== "boolean") {
+    throw new HttpError(400, "starred must be a boolean.");
+  }
+  const row = await ctx.store.setNoteStarred(ctx.user.id, ctx.params.id, input.starred);
+  if (!row) throw new HttpError(404, "Note not found.");
+  return json({ note: row });
+}
+
 async function deleteNoteByClientId(ctx) {
   const deleted = await ctx.store.deleteNoteByClientId(
     ctx.user.id,
@@ -47,4 +57,5 @@ module.exports = {
   updateNote,
   deleteNote,
   deleteNoteByClientId,
+  setNoteStarred,
 };

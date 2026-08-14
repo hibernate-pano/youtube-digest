@@ -43,12 +43,28 @@ const COMPLETE_PAGE = [
   "</body></html>",
 ].join("");
 
+const REDIRECT_COOKIE = "ytd_oauth_redirect";
+
+/**
+ * Only same-origin paths starting with "/" (and not "//") may be used as
+ * post-login redirects; anything else is ignored. This prevents open
+ * redirects while letting the dashboard (and future web clients) return to
+ * their own page after sign-in.
+ */
+function safeRedirectPath(value) {
+  if (typeof value !== "string" || value.length === 0) return "";
+  if (!value.startsWith("/") || value.startsWith("//")) return "";
+  if (/[^A-Za-z0-9/._~-]/.test(value)) return "";
+  return value;
+}
+
 async function handleLogin(ctx) {
   const env = ctx.env;
   if (!env.GITHUB_CLIENT_ID || !env.GITHUB_CLIENT_SECRET) {
     throw new HttpError(500, "GitHub OAuth is not configured on the server.");
   }
-  const origin = new URL(ctx.request.url).origin;
+  const url = new URL(ctx.request.url);
+  const origin = url.origin;
   const redirectUri = origin + "/api/auth/callback";
   const state = auth.randomState();
   const authorizeUrl = auth.buildAuthorizeUrl({
@@ -67,6 +83,18 @@ async function handleLogin(ctx) {
       maxAgeSeconds: 600,
     }),
   );
+  const postLoginPath = safeRedirectPath(url.searchParams.get("redirect"));
+  if (postLoginPath) {
+    response.headers.set(
+      "Set-Cookie",
+      auth.setCookie(REDIRECT_COOKIE, postLoginPath, {
+        httpOnly: true,
+        sameSite: "Lax",
+        path: "/",
+        maxAgeSeconds: 600,
+      }),
+    );
+  }
   return response;
 }
 
@@ -96,11 +124,19 @@ async function handleCallback(ctx) {
     env.JWT_SECRET,
     SESSION_TTL_SECONDS,
   );
-  const response = redirect(origin + "/auth/complete#access_token=" + token);
+  const postLoginPath = safeRedirectPath(cookies[REDIRECT_COOKIE]);
+  const completePath = postLoginPath || "/auth/complete";
+  const response = redirect(origin + completePath + "#access_token=" + token);
   response.headers.set(
     "Set-Cookie",
     auth.setCookie(STATE_COOKIE, "", { httpOnly: true, sameSite: "Lax", path: "/", maxAgeSeconds: 0 }),
   );
+  if (postLoginPath) {
+    response.headers.set(
+      "Set-Cookie",
+      auth.setCookie(REDIRECT_COOKIE, "", { httpOnly: true, sameSite: "Lax", path: "/", maxAgeSeconds: 0 }),
+    );
+  }
   return response;
 }
 
@@ -124,6 +160,7 @@ const ROUTES = [
   { method: "POST", pattern: "/api/notes", handler: notes.createNote },
   { method: "PATCH", pattern: "/api/notes/:id", handler: notes.updateNote },
   { method: "DELETE", pattern: "/api/notes/:id", handler: notes.deleteNote },
+  { method: "PATCH", pattern: "/api/notes/:id/star", handler: notes.setNoteStarred },
   { method: "DELETE", pattern: "/api/notes/client/:clientId", handler: notes.deleteNoteByClientId },
   { method: "GET", pattern: "/api/vocabulary", handler: vocabulary.listVocabulary },
   { method: "POST", pattern: "/api/vocabulary", handler: vocabulary.upsertVocabulary },
@@ -157,6 +194,8 @@ function matchRoute(method, pathname) {
 
 async function handleRequest(request, env) {
   const url = new URL(request.url);
+  // The dashboard is served by the Workers Assets binding, which takes
+  // precedence for non-API paths; only /api/* reaches this router.
   const match = matchRoute(request.method, url.pathname);
   if (!match) throw new HttpError(404, "Not found.");
   const { route, params } = match;

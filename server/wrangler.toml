@@ -2,6 +2,13 @@ name = "youtube-digest-server"
 main = "src/entry.mjs"
 compatibility_date = "2026-08-01"
 
+# User dashboard: static assets served from the same origin as the API.
+# /api/* runs the Worker first; everything else is served from Assets.
+[assets]
+directory = "./dashboard"
+binding = "ASSETS"
+run_worker_first = ["/api/*"]
+
 # Account id is read from wrangler login / CLOUDFLARE_ACCOUNT_ID at deploy time.
 # No [vars] here: OAuth client id/secret and the database URL are configured
 # as Worker secrets (wrangler secret put) so they never enter git. For local

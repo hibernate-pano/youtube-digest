@@ -20,6 +20,7 @@ create table if not exists notes (
   timestamp_seconds integer not null,
   quote text not null default '',
   note text not null,
+  starred boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique (user_id, client_id)

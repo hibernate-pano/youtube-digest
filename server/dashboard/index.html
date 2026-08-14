@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>YouTube Digest · My Dashboard</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">YouTube Digest <span class="brand-sub">My dashboard</span></div>
+      <div class="user-area" id="userArea">
+        <a class="login-btn" id="loginBtn" href="/api/auth/login?redirect=/">Sign in with GitHub</a>
+        <span class="user-chip" id="userChip" hidden>
+          <img id="userAvatar" alt="" width="24" height="24" />
+          <span id="userName"></span>
+          <button id="logoutBtn" type="button" class="ghost-btn">Sign out</button>
+        </span>
+      </div>
+    </header>
+
+    <main class="shell">
+      <nav class="tabs" id="tabsNav" hidden>
+        <button class="tab active" data-tab="notes">Notes</button>
+        <button class="tab" data-tab="favorites">★ Favorites</button>
+        <button class="tab" data-tab="vocabulary">Vocabulary</button>
+      </nav>
+
+      <section id="signedOut" class="signed-out" hidden>
+        <h1>Your learning data, in one place</h1>
+        <p>
+          Sign in with GitHub to see the notes, favorites, and vocabulary you
+          saved in the YouTube Digest extension. Each GitHub account only
+          ever sees its own data.
+        </p>
+        <a class="login-btn big" href="/api/auth/login?redirect=/">Sign in with GitHub</a>
+      </section>
+
+      <section id="notesPanel" hidden>
+        <div class="list-head">
+          <h2>Notes</h2>
+          <span class="count" id="notesCount"></span>
+        </div>
+        <div class="empty" id="notesEmpty" hidden>No notes yet. Save one from the extension while watching a video.</div>
+        <div id="notesList" class="cards"></div>
+      </section>
+
+      <section id="favoritesPanel" hidden>
+        <div class="list-head">
+          <h2>★ Favorites</h2>
+          <span class="count" id="favoritesCount"></span>
+        </div>
+        <div class="empty" id="favoritesEmpty" hidden>Nothing favorited yet. Star a note to pin it here.</div>
+        <div id="favoritesList" class="cards"></div>
+      </section>
+
+      <section id="vocabularyPanel" hidden>
+        <div class="list-head">
+          <h2>Vocabulary</h2>
+          <span class="count" id="vocabularyCount"></span>
+        </div>
+        <div class="empty" id="vocabularyEmpty" hidden>No saved words yet. The extension will let you capture them soon.</div>
+        <div id="vocabularyList" class="cards"></div>
+      </section>
+
+      <div class="status-line" id="statusLine" role="status" aria-live="polite"></div>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

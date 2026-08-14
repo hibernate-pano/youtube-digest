@@ -19,6 +19,7 @@ function rowToNote(row) {
   return {
     id: row.id,
     clientId: row.clientId || "",
+    starred: !!row.starred,
     videoId: row.videoId,
     videoTitle: row.videoTitle || "",
     channelName: row.channelName || "",
@@ -95,6 +96,14 @@ class MemoryStore {
       updatedAt: now,
     });
     this.notes.set(row.id, row);
+    return rowToNote(row);
+  }
+
+  async setNoteStarred(userId, noteId, starred) {
+    const row = this.notes.get(noteId);
+    if (!row || row.userId !== userId) return null;
+    row.starred = !!starred;
+    row.updatedAt = this.clock().toISOString();
     return rowToNote(row);
   }
 
@@ -276,7 +285,7 @@ class NeonStore {
 
   async listNotes(userId) {
     const rows = await this.sql`
-      select id, client_id as "clientId", video_id as "videoId", video_title as "videoTitle",
+      select id, client_id as "clientId", starred, video_id as "videoId", video_title as "videoTitle",
         channel_name as "channelName", timestamp_seconds as "timestampSeconds", quote, note,
         created_at as "createdAt", updated_at as "updatedAt"
       from notes where user_id = ${userId} order by updated_at desc
@@ -293,7 +302,7 @@ class NeonStore {
         video_id = excluded.video_id, video_title = excluded.video_title,
         channel_name = excluded.channel_name, timestamp_seconds = excluded.timestamp_seconds,
         quote = excluded.quote, note = excluded.note, updated_at = now()
-      returning id, client_id as "clientId", video_id as "videoId", video_title as "videoTitle",
+      returning id, client_id as "clientId", starred, video_id as "videoId", video_title as "videoTitle",
         channel_name as "channelName", timestamp_seconds as "timestampSeconds", quote, note,
         created_at as "createdAt", updated_at as "updatedAt"
     `;
@@ -305,6 +314,18 @@ class NeonStore {
       delete from notes where user_id = ${userId} and client_id = ${clientId} returning id
     `;
     return rows.length > 0;
+  }
+
+  async setNoteStarred(userId, noteId, starred) {
+    const rows = await this.sql`
+      update notes set starred = ${!!starred}, updated_at = now()
+      where id = ${noteId} and user_id = ${userId}
+      returning id, client_id as "clientId", starred, video_id as "videoId",
+        video_title as "videoTitle", channel_name as "channelName",
+        timestamp_seconds as "timestampSeconds", quote, note,
+        created_at as "createdAt", updated_at as "updatedAt"
+    `;
+    return rows.length ? rowToNote(rows[0]) : null;
   }
 
   async updateNote(userId, noteId, patch) {
@@ -423,7 +444,7 @@ class NeonStore {
   async getSyncDelta(userId, sinceIso) {
     const since = sinceIso || new Date(0).toISOString();
     const notes = await this.sql`
-      select id, client_id as "clientId", video_id as "videoId", video_title as "videoTitle",
+      select id, client_id as "clientId", starred, video_id as "videoId", video_title as "videoTitle",
         channel_name as "channelName", timestamp_seconds as "timestampSeconds", quote, note,
         created_at as "createdAt", updated_at as "updatedAt"
       from notes where user_id = ${userId} and updated_at > ${since}

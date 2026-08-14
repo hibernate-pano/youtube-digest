@@ -1,0 +1,178 @@
+:root {
+  --bg: #faf7f4;
+  --surface: #ffffff;
+  --border: #e5ddd6;
+  --text: #2b211c;
+  --muted: #8a7a70;
+  --accent: #c8684f;
+  --accent-hover: #b2573f;
+  --accent-dim: #fbead9;
+  --star: #e0a33c;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 20px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+}
+
+.brand { font-weight: 800; font-size: 16px; }
+.brand-sub { font-weight: 500; color: var(--muted); font-size: 13px; margin-left: 8px; }
+
+.user-area { display: flex; align-items: center; gap: 10px; }
+
+.login-btn {
+  display: inline-block;
+  padding: 8px 16px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 700;
+  font-size: 14px;
+  text-decoration: none;
+  border: 1px solid var(--accent);
+}
+.login-btn:hover { background: var(--accent-hover); }
+.login-btn.big { padding: 12px 24px; font-size: 15px; }
+
+.user-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 14px;
+}
+.user-chip img { border-radius: 50%; border: 1px solid var(--border); }
+.ghost-btn {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 4px 12px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.ghost-btn:hover { color: var(--accent); border-color: var(--accent); }
+
+.shell { max-width: 760px; margin: 0 auto; padding: 24px 20px 60px; }
+
+.tabs { display: flex; gap: 6px; margin-bottom: 20px; }
+.tab {
+  padding: 8px 16px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: 999px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--muted);
+}
+.tab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+.signed-out { max-width: 520px; margin: 60px auto 0; text-align: center; }
+.signed-out h1 { font-size: 24px; }
+.signed-out p { color: var(--muted); }
+
+.list-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 14px; }
+.list-head h2 { margin: 0; font-size: 18px; }
+.count { color: var(--muted); font-size: 13px; }
+
+.empty {
+  padding: 28px;
+  border: 1px dashed var(--border);
+  border-radius: 14px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.cards { display: grid; gap: 12px; }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 14px 16px;
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.card-title { font-weight: 700; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+
+.ts-link {
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 13px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.ts-link:hover { text-decoration: underline; }
+
+.star-btn {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 16px;
+  color: var(--muted);
+  padding: 2px 6px;
+}
+.star-btn.on { color: var(--star); }
+
+.del-btn {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 3px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.del-btn:hover { color: #c0392b; border-color: #c0392b; }
+
+.card-body { color: var(--text); font-size: 14px; white-space: pre-wrap; word-break: break-word; }
+
+.card-meta { color: var(--muted); font-size: 12px; margin-top: 8px; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+
+.vocab-term { font-weight: 800; font-size: 16px; }
+.vocab-translation { color: var(--accent); font-weight: 600; }
+.vocab-sentence { color: var(--muted); font-size: 13px; margin-top: 4px; }
+
+select.status-select {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.status-line { margin-top: 18px; color: var(--muted); font-size: 13px; min-height: 20px; }
+.status-line.error { color: #c0392b; }
+
+[hidden] { display: none !important; }
+
+@media (max-width: 560px) {
+  .brand-sub { display: none; }
+  .shell { padding: 16px 12px 50px; }
+}

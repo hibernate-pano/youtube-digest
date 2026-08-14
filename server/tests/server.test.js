@@ -269,3 +269,90 @@ test("createStore falls back to memory without DATABASE_URL", () => {
   const store = createStore({});
   assert.ok(store instanceof MemoryStore);
 });
+
+test("notes can be starred and unstarred by their owner only", async () => {
+  const env = makeEnv();
+  const aliceToken = await signIn(env, 1001, "alice");
+  const bobToken = await signIn(env, 1002, "bob");
+  const created = await api(env, "POST", "/api/notes", {
+    token: aliceToken,
+    body: { note: "favorite idea", videoId: "abc123xyz", clientId: "note_star_1" },
+  });
+  const noteId = created.data.note.id;
+  assert.equal(created.data.note.starred, false);
+
+  const starred = await api(env, "PATCH", "/api/notes/" + noteId + "/star", {
+    token: aliceToken,
+    body: { starred: true },
+  });
+  assert.equal(starred.status, 200);
+  assert.equal(starred.data.note.starred, true);
+
+  const bobStar = await api(env, "PATCH", "/api/notes/" + noteId + "/star", {
+    token: bobToken,
+    body: { starred: true },
+  });
+  assert.equal(bobStar.status, 404);
+
+  const badBody = await api(env, "PATCH", "/api/notes/" + noteId + "/star", {
+    token: aliceToken,
+    body: { starred: "yes" },
+  });
+  assert.equal(badBody.status, 400);
+
+  const unstarred = await api(env, "PATCH", "/api/notes/" + noteId + "/star", {
+    token: aliceToken,
+    body: { starred: false },
+  });
+  assert.equal(unstarred.data.note.starred, false);
+});
+
+test("OAuth login honors only same-origin redirect paths", async () => {
+  const env = makeEnv();
+  const login = await api(env, "GET", "/api/auth/login?redirect=/dashboard");
+  const cookies = login.response.headers.get("set-cookie") || "";
+  assert.match(cookies, /ytd_oauth_redirect=%2Fdashboard/);
+  assert.match(cookies, /HttpOnly/);
+
+  const evil = await api(env, "GET", "/api/auth/login?redirect=https://evil.example");
+  const evilCookies = evil.response.headers.get("set-cookie") || "";
+  assert.doesNotMatch(evilCookies, /ytd_oauth_redirect=/);
+
+  const protoRelative = await api(env, "GET", "/api/auth/login?redirect=//evil.example");
+  const protoCookies = protoRelative.response.headers.get("set-cookie") || "";
+  assert.doesNotMatch(protoCookies, /ytd_oauth_redirect=/);
+
+  const weird = await api(env, "GET", "/api/auth/login?redirect=/dash%0dboard");
+  const weirdCookies = weird.response.headers.get("set-cookie") || "";
+  assert.doesNotMatch(weirdCookies, /ytd_oauth_redirect=/);
+});
+
+test("callback redirects to the stored same-origin path with the token", async () => {
+  const env = makeEnv();
+  const token = await signIn(env, 1001, "alice");
+  const request = new Request("https://test.example/api/auth/callback?code=abc&state=expected", {
+    headers: {
+      cookie: "ytd_oauth_state=expected; ytd_oauth_redirect=%2Fdashboard",
+    },
+  });
+  // Stub the GitHub exchange so no network is needed.
+  const originalExchange = require("../src/auth").exchangeCode;
+  const originalFetchUser = require("../src/auth").fetchGithubUser;
+  require("../src/auth").exchangeCode = async () => "gh-token";
+  require("../src/auth").fetchGithubUser = async () => ({
+    githubId: 1001,
+    login: "alice",
+    avatarUrl: "",
+  });
+  try {
+    const response = await worker.fetch(request, env);
+    assert.equal(response.status, 302);
+    const location = response.headers.get("location") || "";
+    assert.match(location, /^https:\/\/test\.example\/dashboard#access_token=/);
+    assert.ok(location.length > 60);
+  } finally {
+    require("../src/auth").exchangeCode = originalExchange;
+    require("../src/auth").fetchGithubUser = originalFetchUser;
+  }
+});
+

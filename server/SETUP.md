@@ -87,6 +87,16 @@ callback URL at the deployed Worker, and set `SERVER_BASE_URL` in
 `settings.js` to the deployed origin. Rebuild the extension (`npm run
 package`) and reload it in Chrome.
 
+## User dashboard
+
+The same Worker also serves a personal dashboard at
+`https://youtube-digest-server.panbo362472407.workers.dev/` (static assets
+from `server/dashboard/` via the Workers Assets binding, same origin as the
+API). Any extension user can sign in with GitHub there and see their own
+notes, favorites (starred notes), and vocabulary. Login uses
+`/api/auth/login?redirect=/` so the OAuth callback returns to the dashboard
+with the token in the URL fragment.
+
 ## API summary
 
 | Method | Path | Purpose |
@@ -96,8 +106,10 @@ package`) and reload it in Chrome.
 | GET | /auth/complete | landing page shown after login (no auth) |
 | GET | /api/me | current user |
 | GET | /api/sync?since=ISO | notes/vocabulary changed since timestamp |
-| GET/POST | /api/notes | list / create notes |
+| GET/POST | /api/notes | list / create notes (idempotent by clientId) |
 | PATCH/DELETE | /api/notes/:id | update / delete a note |
+| PATCH | /api/notes/:id/star | set starred (favorite) flag |
+| DELETE | /api/notes/client/:clientId | delete by client id |
 | GET/POST | /api/vocabulary | list / upsert vocabulary (deduped by term+sentence) |
 | PATCH/DELETE | /api/vocabulary/:id | update status / delete entry |
 | GET | /api/reviews/due | due review items with their vocabulary |
