@@ -22,6 +22,15 @@
     const el = $("statusLine");
     el.textContent = message || "";
     el.classList.toggle("error", !!isError);
+    if (isError) {
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "ghost-btn";
+      retry.textContent = "Retry";
+      retry.style.marginLeft = "10px";
+      retry.addEventListener("click", () => void boot());
+      el.appendChild(retry);
+    }
   }
 
   async function api(path, options) {

@@ -191,6 +191,9 @@ function loadBackgroundHelpers({
     },
   };
   sandbox.globalThis = sandbox;
+  // cloud-sync.js is imported by background.js via importScripts; the test
+  // sandbox stubs importScripts, so load it explicitly first.
+  vm.runInNewContext(read("cloud-sync.js"), sandbox);
   vm.runInNewContext(read("background.js"), sandbox);
   return sandbox.__YTD_TRANSLATION_TESTING__;
 }

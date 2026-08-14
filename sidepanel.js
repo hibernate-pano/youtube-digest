@@ -243,6 +243,18 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   await refreshGithubSyncStatus();
+  // Pull cloud changes when the panel opens (no-op when signed out).
+  chrome.runtime
+    .sendMessage({ action: "syncNotes" })
+    .then(() => chrome.runtime.sendMessage({ action: "syncVocabulary" }))
+    .then(() => {
+      const filterAll = document
+        .getElementById("notesFilterAll")
+        ?.classList.contains("active");
+      loadNotes(filterAll ? null : currentVideoId);
+      void loadWords();
+    })
+    .catch(() => {});
   await checkCurrentTab();
 });
 
@@ -1233,8 +1245,10 @@ async function addWordForSegment(segment) {
   extractSegment = segment;
   const hint = document.getElementById("vocabExtractHint");
   const modal = document.getElementById("vocabExtractModal");
+  const saveBtn = document.getElementById("vocabSaveBtn");
   hint.textContent = "Extracting from: " + segment.text.slice(0, 120) + "…";
   modal.hidden = false;
+  saveBtn.disabled = true;
   document.getElementById("vocabCandidates").innerHTML =
     '<div class="word-sentence">Analyzing…</div>';
   try {
@@ -1252,10 +1266,12 @@ async function addWordForSegment(segment) {
     }
     extractCandidates = result.words || [];
     renderExtractCandidates();
+    saveBtn.disabled = extractCandidates.length === 0;
   } catch (error) {
     document.getElementById("vocabCandidates").innerHTML =
       '<div class="word-sentence">' + escapeHtml(error.message || "Extraction failed") + "</div>";
     extractCandidates = [];
+    saveBtn.disabled = true;
   }
 }
 

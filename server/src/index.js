@@ -28,6 +28,34 @@ const meRoutes = require("./routes/me");
 const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days
 const STATE_COOKIE = "ytd_oauth_state";
 
+// Simple per-worker rate limit for the public OAuth entry point. In-memory
+// and per-isolate (approximate across replicas), which is fine for abuse
+// damping: legitimate users log in a handful of times per day.
+const LOGIN_RATE_WINDOW_MS = 10 * 60 * 1000;
+const LOGIN_RATE_MAX = 20;
+const loginAttempts = new Map(); // ip -> [timestamps]
+
+function checkLoginRate(ip) {
+  const now = Date.now();
+  const cutoff = now - LOGIN_RATE_WINDOW_MS;
+  const timestamps = (loginAttempts.get(ip) || []).filter((t) => t > cutoff);
+  if (timestamps.length >= LOGIN_RATE_MAX) {
+    loginAttempts.set(ip, timestamps);
+    return false;
+  }
+  timestamps.push(now);
+  loginAttempts.set(ip, timestamps);
+  return true;
+}
+
+function clientIp(request) {
+  return (
+    request.headers.get("cf-connecting-ip") ||
+    request.headers.get("x-forwarded-for") ||
+    "unknown"
+  );
+}
+
 function redirect(location) {
   return new Response(null, {
     status: 302,
@@ -62,6 +90,9 @@ async function handleLogin(ctx) {
   const env = ctx.env;
   if (!env.GITHUB_CLIENT_ID || !env.GITHUB_CLIENT_SECRET) {
     throw new HttpError(500, "GitHub OAuth is not configured on the server.");
+  }
+  if (!checkLoginRate(clientIp(ctx.request))) {
+    throw new HttpError(429, "Too many sign-in attempts. Try again in a few minutes.");
   }
   const url = new URL(ctx.request.url);
   const origin = url.origin;

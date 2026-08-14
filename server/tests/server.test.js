@@ -258,6 +258,23 @@ test("callback rejects mismatched OAuth state", async () => {
   assert.match(data.error, /state mismatch/i);
 });
 
+test("login endpoint rate-limits repeated attempts per client", async () => {
+  const env = makeEnv();
+  const headers = { "cf-connecting-ip": "203.0.113.9" };
+  let lastStatus = 0;
+  for (let i = 0; i < 25; i++) {
+    const request = new Request("https://test.example/api/auth/login", { headers });
+    const response = await worker.fetch(request, env);
+    lastStatus = response.status;
+  }
+  assert.equal(lastStatus, 429);
+  const other = await worker.fetch(
+    new Request("https://test.example/api/auth/login", { headers: { "cf-connecting-ip": "203.0.113.10" } }),
+    env,
+  );
+  assert.equal(other.status, 302);
+});
+
 test("unconfigured server refuses to start OAuth", async () => {
   const env = makeEnv({ GITHUB_CLIENT_ID: "", GITHUB_CLIENT_SECRET: "" });
   const result = await api(env, "GET", "/api/auth/login");
