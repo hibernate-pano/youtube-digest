@@ -18,6 +18,7 @@ function toIso(value) {
 function rowToNote(row) {
   return {
     id: row.id,
+    clientId: row.clientId || "",
     videoId: row.videoId,
     videoTitle: row.videoTitle || "",
     channelName: row.channelName || "",
@@ -80,6 +81,13 @@ class MemoryStore {
 
   async createNote(userId, note) {
     const now = this.clock().toISOString();
+    const existing = [...this.notes.values()].find(
+      (row) => row.userId === userId && row.clientId === note.clientId,
+    );
+    if (existing) {
+      Object.assign(existing, note, { updatedAt: now });
+      return rowToNote(existing);
+    }
     const row = Object.assign({}, note, {
       id: crypto.randomUUID(),
       userId,
@@ -88,6 +96,16 @@ class MemoryStore {
     });
     this.notes.set(row.id, row);
     return rowToNote(row);
+  }
+
+  async deleteNoteByClientId(userId, clientId) {
+    const row = [...this.notes.values()].find(
+      (candidate) =>
+        candidate.userId === userId && candidate.clientId === clientId,
+    );
+    if (!row) return false;
+    this.notes.delete(row.id);
+    return true;
   }
 
   async updateNote(userId, noteId, patch) {
@@ -258,8 +276,8 @@ class NeonStore {
 
   async listNotes(userId) {
     const rows = await this.sql`
-      select id, video_id as "videoId", video_title as "videoTitle", channel_name as "channelName",
-        timestamp_seconds as "timestampSeconds", quote, note,
+      select id, client_id as "clientId", video_id as "videoId", video_title as "videoTitle",
+        channel_name as "channelName", timestamp_seconds as "timestampSeconds", quote, note,
         created_at as "createdAt", updated_at as "updatedAt"
       from notes where user_id = ${userId} order by updated_at desc
     `;
@@ -268,14 +286,25 @@ class NeonStore {
 
   async createNote(userId, note) {
     const rows = await this.sql`
-      insert into notes (user_id, video_id, video_title, channel_name, timestamp_seconds, quote, note)
-      values (${userId}, ${note.videoId}, ${note.videoTitle}, ${note.channelName},
+      insert into notes (user_id, client_id, video_id, video_title, channel_name, timestamp_seconds, quote, note)
+      values (${userId}, ${note.clientId}, ${note.videoId}, ${note.videoTitle}, ${note.channelName},
         ${note.timestampSeconds}, ${note.quote}, ${note.note})
-      returning id, video_id as "videoId", video_title as "videoTitle", channel_name as "channelName",
-        timestamp_seconds as "timestampSeconds", quote, note,
+      on conflict (user_id, client_id) do update set
+        video_id = excluded.video_id, video_title = excluded.video_title,
+        channel_name = excluded.channel_name, timestamp_seconds = excluded.timestamp_seconds,
+        quote = excluded.quote, note = excluded.note, updated_at = now()
+      returning id, client_id as "clientId", video_id as "videoId", video_title as "videoTitle",
+        channel_name as "channelName", timestamp_seconds as "timestampSeconds", quote, note,
         created_at as "createdAt", updated_at as "updatedAt"
     `;
     return rowToNote(rows[0]);
+  }
+
+  async deleteNoteByClientId(userId, clientId) {
+    const rows = await this.sql`
+      delete from notes where user_id = ${userId} and client_id = ${clientId} returning id
+    `;
+    return rows.length > 0;
   }
 
   async updateNote(userId, noteId, patch) {
@@ -394,8 +423,8 @@ class NeonStore {
   async getSyncDelta(userId, sinceIso) {
     const since = sinceIso || new Date(0).toISOString();
     const notes = await this.sql`
-      select id, video_id as "videoId", video_title as "videoTitle", channel_name as "channelName",
-        timestamp_seconds as "timestampSeconds", quote, note,
+      select id, client_id as "clientId", video_id as "videoId", video_title as "videoTitle",
+        channel_name as "channelName", timestamp_seconds as "timestampSeconds", quote, note,
         created_at as "createdAt", updated_at as "updatedAt"
       from notes where user_id = ${userId} and updated_at > ${since}
     `;

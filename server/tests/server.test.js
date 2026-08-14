@@ -97,29 +97,45 @@ test("notes are fully isolated between GitHub accounts", async () => {
 
   const created = await api(env, "POST", "/api/notes", {
     token: aliceToken,
-    body: { note: "Alice's note", videoId: "abc123xyz" },
+    body: { note: "Alice's note", videoId: "abc123xyz", clientId: "note_local_1" },
   });
   assert.equal(created.status, 201);
   const noteId = created.data.note.id;
+  assert.equal(created.data.note.clientId, "note_local_1");
 
-  const aliceList = await api(env, "GET", "/api/notes", { token: aliceToken });
-  assert.equal(aliceList.data.notes.length, 1);
-  assert.equal(aliceList.data.notes[0].note, "Alice's note");
+  // Idempotent: pushing the same clientId again updates, never duplicates.
+  const recreated = await api(env, "POST", "/api/notes", {
+    token: aliceToken,
+    body: { note: "Alice's note v2", videoId: "abc123xyz", clientId: "note_local_1" },
+  });
+  assert.equal(recreated.status, 201);
+  assert.equal(recreated.data.note.id, noteId);
+  const afterDedupe = await api(env, "GET", "/api/notes", { token: aliceToken });
+  assert.equal(afterDedupe.data.notes.length, 1);
+  assert.equal(afterDedupe.data.notes[0].note, "Alice's note v2");
 
+  // Bob cannot delete by Alice's clientId.
+  const bobClientDelete = await api(env, "DELETE", "/api/notes/client/note_local_1", {
+    token: bobToken,
+  });
+  assert.equal(bobClientDelete.status, 404);
+  const aliceClientDelete = await api(env, "DELETE", "/api/notes/client/note_local_1", {
+    token: aliceToken,
+  });
+  assert.equal(aliceClientDelete.status, 200);
+  const afterDelete = await api(env, "GET", "/api/notes", { token: aliceToken });
+  assert.equal(afterDelete.data.notes.length, 0);
+
+  // Bob never sees Alice's rows and cannot act on her ids.
   const bobList = await api(env, "GET", "/api/notes", { token: bobToken });
   assert.equal(bobList.data.notes.length, 0);
-
   const bobUpdate = await api(env, "PATCH", "/api/notes/" + noteId, {
     token: bobToken,
     body: { note: "stolen" },
   });
   assert.equal(bobUpdate.status, 404);
-
   const bobDelete = await api(env, "DELETE", "/api/notes/" + noteId, { token: bobToken });
   assert.equal(bobDelete.status, 404);
-
-  const aliceStillHasIt = await api(env, "GET", "/api/notes", { token: aliceToken });
-  assert.equal(aliceStillHasIt.data.notes.length, 1);
 });
 
 test("vocabulary upserts by (user, term, sentence) and is isolated", async () => {
@@ -192,11 +208,11 @@ test("sync delta returns only changed rows for the caller", async () => {
   const bobToken = await signIn(env, 1002, "bob");
   await api(env, "POST", "/api/notes", {
     token: aliceToken,
-    body: { note: "before", videoId: "abc123xyz" },
+    body: { note: "before", videoId: "abc123xyz", clientId: "alice_sync_1" },
   });
   await api(env, "POST", "/api/notes", {
     token: bobToken,
-    body: { note: "bob note", videoId: "def456uvw" },
+    body: { note: "bob note", videoId: "def456uvw", clientId: "bob_sync_1" },
   });
   const aliceDelta = await api(env, "GET", "/api/sync?since=2000-01-01T00:00:00Z", { token: aliceToken });
   assert.equal(aliceDelta.data.notes.length, 1);
@@ -212,9 +228,14 @@ test("input validation caps lengths and rejects empty payloads", async () => {
   const token = await signIn(env, 1001, "alice");
   const empty = await api(env, "POST", "/api/notes", { token, body: { note: "   " } });
   assert.equal(empty.status, 400);
+  const noClient = await api(env, "POST", "/api/notes", {
+    token,
+    body: { note: "valid but no clientId", videoId: "abc123xyz" },
+  });
+  assert.equal(noClient.status, 400);
   const oversized = await api(env, "POST", "/api/notes", {
     token,
-    body: { note: "x".repeat(25_000), videoId: "abc123xyz" },
+    body: { note: "x".repeat(25_000), videoId: "abc123xyz", clientId: "oversized_1" },
   });
   assert.equal(oversized.status, 201);
   assert.ok(oversized.data.note.note.length <= 20_000);

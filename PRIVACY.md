@@ -20,6 +20,23 @@ Depending on the feature you use, YouTube Digest handles:
 
 ## Where data goes
 
+### GitHub sync (optional)
+
+If you sign in with GitHub, your saved notes are mirrored to the YouTube Digest sync
+service at `https://youtube-digest-server.panbo362472407.workers.dev` (a Cloudflare
+Worker backed by a Neon PostgreSQL database). Sign-in uses the GitHub OAuth web
+flow: GitHub sends the OAuth code only to that Worker, which exchanges it with
+GitHub using the client secret and then issues a short-lived token the extension
+stores locally.
+
+- Notes are stored under your GitHub account id and only your account's rows are
+  ever served: the server scopes every query by the verified token, and the
+  extension keeps separate local namespaces per account.
+- Signing out keeps the token local until you remove it; notes remain on the
+  server under your account until deleted from the extension or with the account.
+- This sync service is optional and separate from AI and transcript processing:
+  when you are not signed in, no note data leaves the device at all.
+
 ### Supadata
 
 YouTube Digest sends the canonical YouTube video URL to `https://api.supadata.ai` with your Supadata API key. Supadata returns the transcript and timestamps. A Supadata key is required for transcript retrieval.

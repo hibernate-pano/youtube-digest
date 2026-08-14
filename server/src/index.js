@@ -124,6 +124,7 @@ const ROUTES = [
   { method: "POST", pattern: "/api/notes", handler: notes.createNote },
   { method: "PATCH", pattern: "/api/notes/:id", handler: notes.updateNote },
   { method: "DELETE", pattern: "/api/notes/:id", handler: notes.deleteNote },
+  { method: "DELETE", pattern: "/api/notes/client/:clientId", handler: notes.deleteNoteByClientId },
   { method: "GET", pattern: "/api/vocabulary", handler: vocabulary.listVocabulary },
   { method: "POST", pattern: "/api/vocabulary", handler: vocabulary.upsertVocabulary },
   { method: "PATCH", pattern: "/api/vocabulary/:id", handler: vocabulary.updateVocabularyStatus },

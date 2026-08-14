@@ -127,7 +127,9 @@ body {
   flex: 1;
 }
 
-.settings-btn {
+.settings-btn,
+.sync-btn,
+.sync-account {
   flex-shrink: 0;
   padding: 5px 10px;
   border: 1px solid var(--border);
@@ -138,10 +140,24 @@ body {
   font: 600 11px/1.4 var(--font-body);
 }
 
-.settings-btn:hover {
+.settings-btn:hover,
+.sync-btn:hover,
+.sync-account:hover {
   border-color: var(--accent);
   color: var(--accent);
   background: var(--accent-dim);
+}
+
+.sync-account {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sync-account[hidden],
+.sync-btn[hidden] {
+  display: none;
 }
 
 /* ============================================================

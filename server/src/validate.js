@@ -30,8 +30,10 @@ function cleanTimestampSeconds(value) {
 function parseNote(input) {
   const note = cleanString(input && input.note, MAX_NOTE_LENGTH);
   if (!note) return null;
+  const clientId = cleanString(input && input.clientId, 128);
   return {
     note,
+    clientId,
     videoId: cleanVideoId(input && input.videoId),
     videoTitle: cleanString(input && input.videoTitle, MAX_VIDEO_TITLE_LENGTH),
     channelName: cleanString(input && input.channelName, MAX_CHANNEL_LENGTH),

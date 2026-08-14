@@ -16,6 +16,12 @@ async function main() {
   const schemaPath = path.join(__dirname, "..", "schema.sql");
   const schema = fs.readFileSync(schemaPath, "utf8");
   try {
+    // Tables created before client_id existed need an idempotent upgrade;
+    // run ALTERs first so schema.sql's client_id index can be created.
+    await pool.query("alter table notes add column if not exists client_id text;");
+    await pool.query(
+      "create unique index if not exists notes_user_client_unique on notes (user_id, client_id);",
+    );
     await pool.query(schema);
     console.log("Schema applied.");
   } catch (error) {

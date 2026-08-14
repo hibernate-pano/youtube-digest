@@ -242,6 +242,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     return;
   }
 
+  await refreshGithubSyncStatus();
   await checkCurrentTab();
 });
 
@@ -268,8 +269,43 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     loadNotes(filterAll ? null : currentVideoId);
     sendResponse({ success: true });
   }
+  if (message.action === "githubLoginChanged") {
+    refreshGithubSyncStatus();
+    const filterAll = document
+      .getElementById("notesFilterAll")
+      ?.classList.contains("active");
+    loadNotes(filterAll ? null : currentVideoId);
+    sendResponse({ success: true });
+  }
   return false;
 });
+
+/**
+ * Reflects the GitHub sign-in state in the panel header. Signed out shows
+ * the sign-in button; signed in shows the account name (click to sign out).
+ */
+async function refreshGithubSyncStatus() {
+  const syncBtn = document.getElementById("syncBtn");
+  const syncAccount = document.getElementById("syncAccount");
+  if (!syncBtn || !syncAccount) return;
+  try {
+    const result = await chrome.runtime.sendMessage({
+      action: "getGithubSession",
+    });
+    const session = result && result.success ? result.session : null;
+    if (session) {
+      syncBtn.hidden = true;
+      syncAccount.hidden = false;
+      syncAccount.textContent = "👤 " + session.login;
+      syncAccount.title = "Signed in as " + session.login + ". Click to sign out.";
+    } else {
+      syncBtn.hidden = false;
+      syncAccount.hidden = true;
+    }
+  } catch (error) {
+    console.error("[YouTube Digest Panel] Sync status error:", error);
+  }
+}
 
 // ============================================================
 // FOLLOW THE ACTIVE TAB
@@ -369,6 +405,19 @@ function setupEventListeners() {
 
   document.getElementById("settingsBtn")?.addEventListener("click", () => {
     chrome.runtime.sendMessage({ action: "openOptions" });
+  });
+
+  // GitHub sync: sign-in opens the OAuth flow; the account button signs out.
+  document.getElementById("syncBtn")?.addEventListener("click", () => {
+    chrome.runtime.sendMessage({ action: "startGithubLogin" });
+  });
+  document.getElementById("syncAccount")?.addEventListener("click", async () => {
+    await chrome.runtime.sendMessage({ action: "logoutGithub" });
+    await refreshGithubSyncStatus();
+    const filterAll = document
+      .getElementById("notesFilterAll")
+      ?.classList.contains("active");
+    loadNotes(filterAll ? null : currentVideoId);
   });
 
   // Transcript actions

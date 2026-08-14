@@ -414,6 +414,34 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.action === "getGithubSession") {
+    handleGetGithubSession()
+      .then(sendResponse)
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (message.action === "startGithubLogin") {
+    handleStartGithubLogin()
+      .then(sendResponse)
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (message.action === "logoutGithub") {
+    handleLogoutGithub()
+      .then(sendResponse)
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (message.action === "syncNotes") {
+    fullSyncNotes()
+      .then(sendResponse)
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
   if (message.action === "getVideoInfo") {
     handleGetVideoInfo(message.tabId)
       .then(sendResponse)
@@ -1366,11 +1394,14 @@ async function cleanupNoteText(
 }
 
 /**
- * Saves a note to chrome.storage.local
+ * Saves a note to chrome.storage.local, namespaced by the signed-in GitHub
+ * account so one learner's data never leaks into another account's view.
+ * When signed in, the note is also pushed to the sync server.
  */
 async function saveNoteToStorage(note) {
-  const result = await chrome.storage.local.get("ytd_notes");
-  const notes = result.ytd_notes || [];
+  const namespace = await notesNamespace();
+  const result = await chrome.storage.local.get(namespace);
+  const notes = result[namespace] || [];
   notes.unshift(note); // Add to beginning (newest first)
 
   // Keep only last 100 notes to prevent storage bloat
@@ -1378,16 +1409,25 @@ async function saveNoteToStorage(note) {
     notes.splice(100);
   }
 
-  await chrome.storage.local.set({ ytd_notes: notes });
+  await chrome.storage.local.set({ [namespace]: notes });
+
+  // Cloud mirror: best-effort, never blocks the local save.
+  const session = await getGithubSession();
+  if (session) {
+    await pushNoteToCloud(session, note).catch((error) => {
+      console.warn("[YouTube Digest] Note cloud sync failed:", error.message);
+    });
+  }
 }
 
 /**
- * Gets notes from storage, optionally filtered by video ID
+ * Gets notes from storage (account-namespaced), optionally filtered by video ID
  */
 async function handleGetNotes(videoId) {
   try {
-    const result = await chrome.storage.local.get("ytd_notes");
-    let notes = result.ytd_notes || [];
+    const namespace = await notesNamespace();
+    const result = await chrome.storage.local.get(namespace);
+    let notes = result[namespace] || [];
 
     if (videoId) {
       notes = notes.filter((n) => n.videoId === videoId);
@@ -1400,19 +1440,261 @@ async function handleGetNotes(videoId) {
 }
 
 /**
- * Deletes a note by ID
+ * Deletes a note locally (account-namespaced) and from the cloud when signed in
  */
 async function handleDeleteNote(noteId) {
   try {
-    const result = await chrome.storage.local.get("ytd_notes");
-    let notes = result.ytd_notes || [];
+    const namespace = await notesNamespace();
+    const result = await chrome.storage.local.get(namespace);
+    let notes = result[namespace] || [];
     notes = notes.filter((n) => n.id !== noteId);
-    await chrome.storage.local.set({ ytd_notes: notes });
+    await chrome.storage.local.set({ [namespace]: notes });
+
+    const session = await getGithubSession();
+    if (session) {
+      await deleteNoteFromCloud(session, noteId).catch((error) => {
+        console.warn("[YouTube Digest] Note cloud delete failed:", error.message);
+      });
+    }
     return { success: true };
   } catch (error) {
     return { success: false, error: error.message };
   }
 }
+
+// ============================================================
+// CLOUD SYNC (GitHub account)
+// ============================================================
+
+function formatSyncTimestamp(seconds) {
+  const safe = Math.max(0, Number(seconds) || 0);
+  const whole = Math.floor(safe);
+  const minutes = Math.floor(whole / 60);
+  const remaining = whole % 60;
+  const hours = Math.floor(minutes / 60);
+  if (hours > 0) {
+    return hours + ":" + String(minutes % 60).padStart(2, "0") + ":" + String(remaining).padStart(2, "0");
+  }
+  return minutes + ":" + String(remaining).padStart(2, "0");
+}
+
+/**
+ * Returns the stored GitHub session, or null when signed out. The token is
+ * only ever used inside the service worker; UI callers receive login info.
+ */
+async function getGithubSession() {
+  const stored = await chrome.storage.local.get(YTD_SETTINGS.GITHUB_SESSION_KEY);
+  const session = stored[YTD_SETTINGS.GITHUB_SESSION_KEY];
+  return session && session.token ? session : null;
+}
+
+async function cloudFetch(path, options) {
+  const token = (options && options.token) || "";
+  const method = (options && options.method) || "GET";
+  const body = options && options.body;
+  const headers = { "Content-Type": "application/json" };
+  if (token) headers.Authorization = "Bearer " + token;
+  const response = await fetch(YTD_SETTINGS.SERVER_BASE_URL + path, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    const error = new Error((data && data.error) || "Sync request failed: " + response.status);
+    error.status = response.status;
+    throw error;
+  }
+  return data;
+}
+
+async function notesNamespace() {
+  const session = await getGithubSession();
+  return session ? "ytd_notes_" + session.githubId : "ytd_notes";
+}
+
+async function readLocalNotes(namespace) {
+  const result = await chrome.storage.local.get(namespace);
+  return result[namespace] || [];
+}
+
+async function writeLocalNotes(namespace, notes) {
+  await chrome.storage.local.set({ [namespace]: notes });
+}
+
+function localNoteToCloudPayload(note) {
+  return {
+    clientId: String(note.id || ""),
+    note: String(note.text || ""),
+    videoId: String(note.videoId || ""),
+    videoTitle: String(note.videoTitle || ""),
+    channelName: String(note.channelName || ""),
+    timestampSeconds: Number(note.timestampSeconds) || 0,
+    quote: String(note.text || "").slice(0, 3000),
+  };
+}
+
+function cloudToLocalNote(cloud) {
+  const seconds = Number(cloud.timestampSeconds) || 0;
+  const createdMs = new Date(cloud.createdAt).getTime();
+  const updatedMs = new Date(cloud.updatedAt).getTime();
+  return {
+    id: String(cloud.clientId || ""),
+    videoId: String(cloud.videoId || ""),
+    videoTitle: String(cloud.videoTitle || "Untitled Video"),
+    channelName: String(cloud.channelName || ""),
+    timestamp: formatSyncTimestamp(seconds),
+    timestampSeconds: seconds,
+    timestampedUrl: cloud.videoId
+      ? "https://www.youtube.com/watch?v=" + cloud.videoId + "&t=" + seconds + "s"
+      : "",
+    text: String(cloud.note || ""),
+    rawText: String(cloud.note || ""),
+    createdAt: Number.isFinite(createdMs) ? createdMs : Date.now(),
+    updatedAt: Number.isFinite(updatedMs) ? updatedMs : Date.now(),
+    cloudId: String(cloud.id || ""),
+  };
+}
+
+/**
+ * Pure merge: by clientId, the newer of local and cloud wins. Returns the
+ * merged local list and the local-only notes that still need a cloud push.
+ */
+function mergeNotesForSync(localNotes, cloudNotes) {
+  const merged = new Map();
+  for (const local of localNotes || []) {
+    if (!local || !local.id) continue;
+    merged.set(String(local.id), {
+      source: "local",
+      note: local,
+      updatedAt: Number(local.updatedAt) || Number(local.createdAt) || 0,
+    });
+  }
+  for (const cloud of cloudNotes || []) {
+    if (!cloud || !cloud.clientId) continue;
+    const cloudMs = new Date(cloud.updatedAt).getTime();
+    const existing = merged.get(String(cloud.clientId));
+    if (!existing || cloudMs > existing.updatedAt) {
+      merged.set(String(cloud.clientId), { source: "cloud", note: cloud, updatedAt: cloudMs });
+    }
+  }
+  const localResult = [];
+  const toPush = [];
+  for (const entry of merged.values()) {
+    if (entry.source === "cloud") {
+      localResult.push(cloudToLocalNote(entry.note));
+    } else {
+      localResult.push(entry.note);
+      toPush.push(entry.note);
+    }
+  }
+  return { mergedNotes: localResult, toPush };
+}
+
+async function pushNoteToCloud(session, note) {
+  return cloudFetch("/api/notes", {
+    method: "POST",
+    token: session.token,
+    body: localNoteToCloudPayload(note),
+  });
+}
+
+async function deleteNoteFromCloud(session, noteId) {
+  return cloudFetch("/api/notes/client/" + encodeURIComponent(noteId), {
+    method: "DELETE",
+    token: session.token,
+  });
+}
+
+/**
+ * Full bidirectional sync for the signed-in account: pull the cloud list,
+ * merge by clientId (newest wins), push local-only notes, write back locally.
+ * Never touches the signed-out namespace, so accounts stay isolated.
+ */
+async function fullSyncNotes() {
+  const session = await getGithubSession();
+  if (!session) return { success: true, synced: false, reason: "not signed in" };
+  const namespace = "ytd_notes_" + session.githubId;
+  const local = await readLocalNotes(namespace);
+  let cloud = [];
+  try {
+    const data = await cloudFetch("/api/notes", { token: session.token });
+    cloud = data && data.notes ? data.notes : [];
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+  const { mergedNotes, toPush } = mergeNotesForSync(local, cloud);
+  for (const note of toPush) {
+    try {
+      await pushNoteToCloud(session, note);
+    } catch (error) {
+      console.warn("[YouTube Digest] Push note failed (kept locally):", error.message);
+    }
+  }
+  await writeLocalNotes(namespace, mergedNotes);
+  return { success: true, synced: true, count: mergedNotes.length };
+}
+
+async function handleGetGithubSession() {
+  const session = await getGithubSession();
+  return {
+    success: true,
+    session: session
+      ? { login: session.login, githubId: session.githubId, savedAt: session.savedAt }
+      : null,
+  };
+}
+
+async function handleLogoutGithub() {
+  await chrome.storage.local.remove(YTD_SETTINGS.GITHUB_SESSION_KEY);
+  return { success: true };
+}
+
+/**
+ * Opens the OAuth login tab. The completion redirect is caught by the
+ * persistent tabs.onUpdated listener registered at the bottom of this file.
+ */
+async function handleStartGithubLogin() {
+  const session = await getGithubSession();
+  if (session) return { success: true, alreadySignedIn: true };
+  const loginUrl = YTD_SETTINGS.SERVER_BASE_URL + "/api/auth/login";
+  const tab = await chrome.tabs.create({ url: loginUrl });
+  return { success: true, tabId: tab.id };
+}
+
+/**
+ * Completes login when the OAuth redirect lands on /auth/complete#access_token=...
+ * Validates the token against /api/me, stores the session (never the token in
+ * UI-visible surfaces), syncs the account's notes, and closes the login tab.
+ */
+async function completeGithubLogin(token, tabId) {
+  try {
+    const data = await cloudFetch("/api/me", { token });
+    const user = data && data.user;
+    if (!user) throw new Error("GitHub profile unavailable");
+    await chrome.storage.local.set({
+      [YTD_SETTINGS.GITHUB_SESSION_KEY]: {
+        token,
+        login: user.login,
+        githubId: user.githubId,
+        savedAt: Date.now(),
+      },
+    });
+    if (tabId) await chrome.tabs.remove(tabId).catch(() => {});
+    const sync = await fullSyncNotes();
+    chrome.runtime
+      .sendMessage({ action: "githubLoginChanged", login: user.login, sync })
+      .catch(() => {});
+    return sync;
+  } catch (error) {
+    console.warn("[YouTube Digest] Login completion failed:", error.message);
+    chrome.runtime
+      .sendMessage({ action: "githubLoginFailed", error: error.message })
+      .catch(() => {});
+    return { success: false, error: error.message };
+  }
+}
+
 
 async function handleExplainSelection(
   selectedText,
@@ -1692,4 +1974,29 @@ globalThis.__YTD_TRANSLATION_TESTING__ = {
   validateTranscriptBatchRequest,
   normalizeTranslatedSegmentBatch,
   handleTranslateContent,
+  mergeNotesForSync,
+  cloudToLocalNote,
+  localNoteToCloudPayload,
+  formatSyncTimestamp,
+  getGithubSession,
+  cloudFetch,
+  fullSyncNotes,
+  handleGetGithubSession,
+  handleLogoutGithub,
+  completeGithubLogin,
+  saveNoteToStorage,
+  handleGetNotes,
+  handleDeleteNote,
 };
+
+// Persistent OAuth completion listener. The service worker may be suspended
+// while the user authorizes on GitHub; MV3 keeps registered listeners and
+// wakes the worker on tab events, so login completes even after a long pause.
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  const url = (tab && tab.url) || (changeInfo && changeInfo.url) || "";
+  const marker = YTD_SETTINGS.SERVER_BASE_URL + "/auth/complete#access_token=";
+  if (!url.startsWith(marker)) return;
+  const token = url.slice(marker.length);
+  if (!token) return;
+  void completeGithubLogin(token, tabId);
+});

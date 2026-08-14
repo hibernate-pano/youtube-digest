@@ -13,6 +13,7 @@ create table if not exists users (
 create table if not exists notes (
   id uuid primary key default gen_random_uuid(),
   user_id bigint not null references users(id) on delete cascade,
+  client_id text not null,
   video_id text not null,
   video_title text not null default '',
   channel_name text not null default '',
@@ -20,9 +21,11 @@ create table if not exists notes (
   quote text not null default '',
   note text not null,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  unique (user_id, client_id)
 );
 create index if not exists notes_user_updated_idx on notes (user_id, updated_at);
+create index if not exists notes_user_client_idx on notes (user_id, client_id);
 
 create table if not exists vocabulary (
   id uuid primary key default gen_random_uuid(),

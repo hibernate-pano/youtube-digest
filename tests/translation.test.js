@@ -58,6 +58,32 @@ function loadSidepanelHelpers({
   return sandbox.__YTD_TRANSCRIPT_TESTING__;
 }
 
+function createStorageMock(initial = {}) {
+  const values = { ...initial };
+  return {
+    async get(keys) {
+      if (keys === null) return { ...values };
+      const requested = Array.isArray(keys) ? keys : [keys];
+      const result = {};
+      for (const key of requested) {
+        if (Object.hasOwn(values, key)) result[key] = values[key];
+      }
+      return result;
+    },
+    async set(items) {
+      Object.assign(values, items);
+    },
+    async remove(keys) {
+      for (const key of Array.isArray(keys) ? keys : [keys]) {
+        delete values[key];
+      }
+    },
+    async clear() {
+      for (const key of Object.keys(values)) delete values[key];
+    },
+  };
+}
+
 function loadBackgroundHelpers({
   settings = {
     provider: "deepseek",
@@ -68,6 +94,7 @@ function loadBackgroundHelpers({
   fetchImpl = fetch,
   setTimeoutImpl = () => 0,
   clearTimeoutImpl = () => {},
+  storageMock,
 } = {}) {
   const listeners = { addListener() {} };
   const sandbox = {
@@ -84,7 +111,22 @@ function loadBackgroundHelpers({
       storage: {
         local: {
           setAccessLevel: () => Promise.resolve(),
-          get: async () => ({ ytd_settings: settings }),
+          get: async (keys) => {
+            const mock = storageMock || {
+              async get() {
+                return { ytd_settings: settings };
+              },
+            };
+            return mock.get(keys);
+          },
+          set: async (items) => {
+            if (!storageMock) throw new Error("storage.set requires storageMock");
+            return storageMock.set(items);
+          },
+          remove: async (keys) => {
+            if (!storageMock) throw new Error("storage.remove requires storageMock");
+            return storageMock.remove(keys);
+          },
         },
       },
       action: { onClicked: listeners },
@@ -102,6 +144,8 @@ function loadBackgroundHelpers({
     },
     YTD_SETTINGS: {
       STORAGE_KEY: "ytd_settings",
+      GITHUB_SESSION_KEY: "ytd_github_session",
+      SERVER_BASE_URL: "https://sync.test",
       normalize: (value) => value,
       getProvider: (id) => ({
         deepseek: {
@@ -723,3 +767,203 @@ test("Chinese prompt preserves natural bilingual-learning style rules", () => {
   assert.match(prompt, /spaces between Chinese and adjacent English words or digits/);
   assert.match(prompt, /source-language `text`/);
 });
+// ============================================================
+// CLOUD SYNC TESTS
+// ============================================================
+
+function makeSyncEnv({ signedIn = false, notes = [] } = {}) {
+  const storageMock = createStorageMock({ ytd_notes: [...notes] });
+  if (signedIn) {
+    storageMock.set({
+      ytd_github_session: {
+        token: "jwt-token",
+        login: "alice",
+        githubId: 1001,
+        savedAt: Date.now(),
+      },
+    });
+  }
+  return { storageMock };
+}
+
+test("mergeNotesForSync pulls cloud-only notes and pushes local-only notes", () => {
+  const helpers = loadBackgroundHelpers();
+  const local = [
+    { id: "note_local_1", text: "local new", videoId: "abc123xyz", createdAt: 1000, updatedAt: 1000 },
+  ];
+  const cloud = [
+    {
+      id: "cloud-uuid-2",
+      clientId: "note_cloud_2",
+      note: "cloud only",
+      videoId: "def456uvw",
+      videoTitle: "Cloud Video",
+      channelName: "Chan",
+      timestampSeconds: 42,
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+    },
+  ];
+  const { mergedNotes, toPush } = helpers.mergeNotesForSync(local, cloud);
+  assert.equal(mergedNotes.length, 2);
+  assert.equal(toPush.length, 1);
+  assert.equal(toPush[0].id, "note_local_1");
+  const cloudMerged = mergedNotes.find((note) => note.id === "note_cloud_2");
+  assert.equal(cloudMerged.text, "cloud only");
+  assert.equal(cloudMerged.timestamp, "0:42");
+  assert.equal(cloudMerged.cloudId, "cloud-uuid-2");
+});
+
+test("mergeNotesForSync picks the newer of local and cloud by clientId", () => {
+  const helpers = loadBackgroundHelpers();
+  const local = [{ id: "note_x", text: "local version", createdAt: 5000 }];
+  const cloud = [{
+    id: "uuid-x",
+    clientId: "note_x",
+    note: "cloud version",
+    videoId: "abc123xyz",
+    createdAt: "2026-01-01T00:00:00Z",
+    updatedAt: "2026-01-02T00:00:00Z",
+  }];
+  const { mergedNotes, toPush } = helpers.mergeNotesForSync(local, cloud);
+  assert.equal(mergedNotes.length, 1);
+  assert.equal(mergedNotes[0].text, "cloud version");
+  assert.equal(toPush.length, 0);
+});
+
+test("signed-out save keeps notes local and never touches the network", async () => {
+  let networkCalls = 0;
+  const helpers = loadBackgroundHelpers({
+    fetchImpl: async () => {
+      networkCalls += 1;
+      throw new Error("should not be called");
+    },
+    storageMock: createStorageMock(),
+  });
+  await helpers.saveNoteToStorage({
+    id: "note_1",
+    text: "offline note",
+    videoId: "abc123xyz",
+    videoTitle: "V",
+    timestampSeconds: 10,
+  });
+  assert.equal(networkCalls, 0);
+  const stored = await helpers.handleGetNotes();
+  assert.equal(stored.success, true);
+  assert.equal(stored.notes.length, 1);
+  assert.equal(stored.notes[0].text, "offline note");
+});
+
+test("signed-in save mirrors the note to the account namespace and cloud", async () => {
+  const requests = [];
+  const storageMock = createStorageMock();
+  await storageMock.set({
+    ytd_github_session: { token: "jwt-token", login: "alice", githubId: 1001, savedAt: Date.now() },
+  });
+  const helpers = loadBackgroundHelpers({
+    fetchImpl: async (url, options) => {
+      requests.push({ url, auth: options.headers.Authorization, body: JSON.parse(options.body) });
+      return { ok: true, json: async () => ({ note: { id: "uuid-1", clientId: "note_1" } }) };
+    },
+    storageMock,
+  });
+  await helpers.saveNoteToStorage({
+    id: "note_1",
+    text: "my learning note",
+    videoId: "abc123xyz",
+    videoTitle: "My Video",
+    channelName: "Chan",
+    timestampSeconds: 65,
+  });
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, "https://sync.test/api/notes");
+  assert.equal(requests[0].auth, "Bearer jwt-token");
+  assert.equal(requests[0].body.clientId, "note_1");
+  assert.equal(requests[0].body.note, "my learning note");
+  assert.equal(requests[0].body.timestampSeconds, 65);
+  const raw = await storageMock.get(null);
+  assert.equal(raw.ytd_notes, undefined);
+  assert.equal(raw.ytd_notes_1001.length, 1);
+  assert.equal(raw.ytd_notes_1001[0].text, "my learning note");
+});
+
+test("signed-in delete removes the note locally and on the server", async () => {
+  const requests = [];
+  const storageMock = createStorageMock();
+  await storageMock.set({
+    ytd_github_session: { token: "jwt-token", login: "alice", githubId: 1001, savedAt: Date.now() },
+    ytd_notes_1001: [{ id: "note_1", text: "to delete", videoId: "abc123xyz" }],
+  });
+  const helpers = loadBackgroundHelpers({
+    fetchImpl: async (url, options) => {
+      requests.push({ url, method: options.method });
+      return { ok: true, json: async () => ({ deleted: true }) };
+    },
+    storageMock,
+  });
+  const result = await helpers.handleDeleteNote("note_1");
+  assert.equal(result.success, true);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].method, "DELETE");
+  assert.equal(requests[0].url, "https://sync.test/api/notes/client/note_1");
+  const raw = await storageMock.get(null);
+  assert.equal(raw.ytd_notes_1001.length, 0);
+});
+
+test("fullSyncNotes pulls cloud notes, pushes local-only, and writes back", async () => {
+  const requests = [];
+  const storageMock = createStorageMock();
+  await storageMock.set({
+    ytd_github_session: { token: "jwt-token", login: "alice", githubId: 1001, savedAt: Date.now() },
+    ytd_notes_1001: [{ id: "note_local", text: "local only", videoId: "abc123xyz", createdAt: Date.now() }],
+  });
+  const helpers = loadBackgroundHelpers({
+    fetchImpl: async (url, options) => {
+      requests.push({ url, method: options.method });
+      if (options.method === "GET") {
+        return {
+          ok: true,
+          json: async () => ({
+            notes: [{
+              id: "uuid-c",
+              clientId: "note_cloud",
+              note: "from cloud",
+              videoId: "def456uvw",
+              videoTitle: "Cloud",
+              timestampSeconds: 5,
+              createdAt: "2026-01-01T00:00:00Z",
+              updatedAt: "2026-01-01T00:00:00Z",
+            }],
+          }),
+        };
+      }
+      return { ok: true, json: async () => ({ note: { id: "uuid-l" } }) };
+    },
+    storageMock,
+  });
+  const result = await helpers.fullSyncNotes();
+  assert.equal(result.success, true);
+  assert.equal(result.synced, true);
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].method, "GET");
+  assert.equal(requests[1].method, "POST");
+  const raw = await storageMock.get(null);
+  const ids = raw.ytd_notes_1001.map((note) => note.id).sort();
+  assert.equal(ids.join(","), "note_cloud,note_local");
+});
+
+test("fullSyncNotes is a no-op when signed out", async () => {
+  let networkCalls = 0;
+  const helpers = loadBackgroundHelpers({
+    fetchImpl: async () => {
+      networkCalls += 1;
+      throw new Error("should not be called");
+    },
+    storageMock: createStorageMock(),
+  });
+  const result = await helpers.fullSyncNotes();
+  assert.equal(result.success, true);
+  assert.equal(result.synced, false);
+  assert.equal(networkCalls, 0);
+});
+
