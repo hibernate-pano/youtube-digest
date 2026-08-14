@@ -1651,6 +1651,30 @@ async function handleLogoutGithub() {
 }
 
 /**
+ * One-time migration of the signed-out local notes into the account's
+ * namespace (copied, never moved) so existing notes appear after login.
+ * The signed-out copy is removed only after a successful full sync, so a
+ * failed sync can never lose data; the id-based dedupe keeps re-logins
+ * from importing the same note twice.
+ */
+async function migrateLegacyLocalNotes(githubId) {
+  const legacy = await readLocalNotes("ytd_notes");
+  if (!Array.isArray(legacy) || legacy.length === 0) return 0;
+  const namespace = "ytd_notes_" + githubId;
+  const current = await readLocalNotes(namespace);
+  const byId = new Map(current.map((note) => [String(note.id), note]));
+  let added = 0;
+  for (const note of legacy) {
+    if (note && note.id && !byId.has(String(note.id))) {
+      byId.set(String(note.id), note);
+      added += 1;
+    }
+  }
+  if (added > 0) await writeLocalNotes(namespace, [...byId.values()]);
+  return added;
+}
+
+/**
  * Opens the OAuth login tab. The completion redirect is caught by the
  * persistent tabs.onUpdated listener registered at the bottom of this file.
  */
@@ -1681,7 +1705,13 @@ async function completeGithubLogin(token, tabId) {
       },
     });
     if (tabId) await chrome.tabs.remove(tabId).catch(() => {});
+    // Import notes saved before sign-in, then mirror everything to the cloud.
+    // The signed-out copy is cleared only after the sync succeeded.
+    const migrated = await migrateLegacyLocalNotes(user.githubId);
     const sync = await fullSyncNotes();
+    if (sync.success && migrated > 0) {
+      await chrome.storage.local.remove("ytd_notes");
+    }
     chrome.runtime
       .sendMessage({ action: "githubLoginChanged", login: user.login, sync })
       .catch(() => {});
@@ -1987,6 +2017,7 @@ globalThis.__YTD_TRANSLATION_TESTING__ = {
   saveNoteToStorage,
   handleGetNotes,
   handleDeleteNote,
+  migrateLegacyLocalNotes,
 };
 
 // Persistent OAuth completion listener. The service worker may be suspended

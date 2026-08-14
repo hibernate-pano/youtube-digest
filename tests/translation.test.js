@@ -967,3 +967,23 @@ test("fullSyncNotes is a no-op when signed out", async () => {
   assert.equal(networkCalls, 0);
 });
 
+
+test("login migrates signed-out notes into the account namespace once", async () => {
+  const storageMock = createStorageMock({
+    ytd_notes: [
+      { id: "legacy_1", text: "old note", videoId: "abc123xyz", createdAt: 1000 },
+      { id: "legacy_2", text: "another", videoId: "abc123xyz", createdAt: 2000 },
+    ],
+    ytd_notes_1001: [{ id: "legacy_1", text: "old note", videoId: "abc123xyz", createdAt: 1000 }],
+  });
+  const helpers = loadBackgroundHelpers({ storageMock });
+  const added = await helpers.migrateLegacyLocalNotes(1001);
+  assert.equal(added, 1);
+  const raw = await storageMock.get(null);
+  const ids = raw.ytd_notes_1001.map((note) => note.id).sort();
+  assert.equal(ids.join(","), "legacy_1,legacy_2");
+  // Second login does not import again.
+  const again = await helpers.migrateLegacyLocalNotes(1001);
+  assert.equal(again, 0);
+});
+
