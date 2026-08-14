@@ -1,6 +1,6 @@
 name = "youtube-digest-server"
-main = "src/index.js"
-compatibility_date = "2025-01-01"
+main = "src/entry.mjs"
+compatibility_date = "2026-08-01"
 
 # Account id is read from wrangler login / CLOUDFLARE_ACCOUNT_ID at deploy time.
 # vars are NOT secrets; put GITHUB_CLIENT_SECRET and DATABASE_URL in .dev.vars

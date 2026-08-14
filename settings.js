@@ -14,7 +14,7 @@ var YTD_SETTINGS = (() => {
    * Local development: set this to "http://localhost:8787" and run
    * "npm run dev" inside server/.
    */
-  const SERVER_BASE_URL = "https://ytd-api.panbo.workers.dev";
+  const SERVER_BASE_URL = "https://youtube-digest-server.panbo362472407.workers.dev";
   const GITHUB_SESSION_KEY = "ytd_github_session";
 
   /**
