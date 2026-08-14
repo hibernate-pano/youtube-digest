@@ -38,8 +38,8 @@
         <h1 data-i18n="heading">Bring your own API keys</h1>
         <p class="lede" data-i18n="lede">
           Keys stay in this Chrome profile and are sent only to Supadata and
-          DeepSeek. This open-source extension has no developer server or
-          analytics.
+          your chosen AI provider. This open-source extension has no developer
+          server or analytics.
         </p>
       </header>
 
@@ -75,45 +75,157 @@
 
         <section class="card">
           <h2 data-i18n="aiProvider">AI provider</h2>
-          <div
-            class="provider-summary"
-            aria-label="Supported AI provider"
-            data-i18n-aria-label="providerSummaryLabel"
-          >
-            <span class="provider-name">DeepSeek V4 Flash</span>
-            <span class="provider-badge" data-i18n="providerBadge"
-              >Supported in this version</span
+          <fieldset class="provider-options">
+            <legend class="sr-only" data-i18n="aiProvider">AI provider</legend>
+
+            <label class="provider-option">
+              <input
+                class="provider-radio"
+                type="radio"
+                name="aiProviderChoice"
+                value="deepseek"
+                checked
+              />
+              <span class="provider-option-copy">
+                <span class="provider-option-name">DeepSeek V4 Flash</span>
+                <span class="provider-option-detail"
+                  >api.deepseek.com</span
+                >
+              </span>
+            </label>
+
+            <label class="provider-option">
+              <input
+                class="provider-radio"
+                type="radio"
+                name="aiProviderChoice"
+                value="minimax"
+              />
+              <span class="provider-option-copy">
+                <span class="provider-option-name">MiniMax M3</span>
+                <span class="provider-option-detail"
+                  >api.minimaxi.com</span
+                >
+              </span>
+            </label>
+
+            <label class="provider-option">
+              <input
+                class="provider-radio"
+                type="radio"
+                name="aiProviderChoice"
+                value="opencode-go"
+              />
+              <span class="provider-option-copy">
+                <span class="provider-option-name"
+                  >OpenCode Go · DeepSeek V4 Flash</span
+                >
+                <span class="provider-option-detail"
+                  >opencode.ai/zen/go</span
+                >
+              </span>
+            </label>
+          </fieldset>
+
+          <div class="provider-field" data-provider-field="deepseek">
+            <label for="aiApiKey" data-i18n="deepseekApiKeyLabel"
+              >DeepSeek API key</label
             >
+            <input
+              id="aiApiKey"
+              name="aiApiKey"
+              type="password"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="Paste your DeepSeek key"
+            />
+            <p class="help">
+              <span data-i18n="deepseekHelp"
+                >YouTube Digest uses DeepSeek V4 Flash for overviews,
+                explanations, translation, and note polishing.</span
+              >
+              <a
+                href="https://platform.deepseek.com/api_keys"
+                target="_blank"
+                rel="noreferrer"
+                data-i18n="deepseekLink"
+                >Create a DeepSeek API key</a
+              ><span data-i18n="deepseekHelpSuffix">.</span>
+            </p>
+            <div class="privacy-note" data-i18n="deepseekPrivacyNote">
+              When you use AI features, DeepSeek receives the video transcript
+              and relevant video context. Review DeepSeek's terms and pricing
+              before saving.
+            </div>
           </div>
 
-          <label for="aiApiKey" data-i18n="deepseekApiKeyLabel"
-            >DeepSeek API key</label
-          >
-          <input
-            id="aiApiKey"
-            name="aiApiKey"
-            type="password"
-            autocomplete="off"
-            spellcheck="false"
-            placeholder="Paste your DeepSeek key"
-          />
-          <p class="help">
-            <span data-i18n="deepseekHelp"
-              >YouTube Digest uses DeepSeek V4 Flash for overviews,
-              explanations, translation, and note polishing.</span
+          <div class="provider-field" data-provider-field="minimax" hidden>
+            <label for="minimaxApiKey" data-i18n="minimaxApiKeyLabel"
+              >MiniMax API key</label
             >
-            <a
-              href="https://platform.deepseek.com/api_keys"
-              target="_blank"
-              rel="noreferrer"
-              data-i18n="deepseekLink"
-              >Create a DeepSeek API key</a
-            ><span data-i18n="deepseekHelpSuffix">.</span>
-          </p>
-          <div class="privacy-note" data-i18n="privacyNote">
-            When you use AI features, DeepSeek receives the video transcript
-            and relevant video context. Review DeepSeek's terms and pricing
-            before saving.
+            <input
+              id="minimaxApiKey"
+              name="minimaxApiKey"
+              type="password"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="Paste your MiniMax key"
+            />
+            <p class="help">
+              <span data-i18n="minimaxHelp"
+                >YouTube Digest uses MiniMax M3 for overviews, explanations,
+                translation, and note polishing.</span
+              >
+              <a
+                href="https://platform.minimaxi.com"
+                target="_blank"
+                rel="noreferrer"
+                data-i18n="minimaxLink"
+                >Create a MiniMax API key</a
+              ><span data-i18n="minimaxHelpSuffix">.</span>
+            </p>
+            <div class="privacy-note" data-i18n="minimaxPrivacyNote">
+              When you use AI features, MiniMax receives the video transcript
+              and relevant video context. Review MiniMax's terms and pricing
+              before saving.
+            </div>
+          </div>
+
+          <div
+            class="provider-field"
+            data-provider-field="opencode-go"
+            hidden
+          >
+            <label for="opencodeGoApiKey" data-i18n="opencodeGoApiKeyLabel"
+              >OpenCode Go API key</label
+            >
+            <input
+              id="opencodeGoApiKey"
+              name="opencodeGoApiKey"
+              type="password"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="Paste your OpenCode Go key"
+            />
+            <p class="help">
+              <span data-i18n="opencodeGoHelp"
+                >OpenCode Go is a low-cost subscription that includes DeepSeek
+                V4 Flash. YouTube Digest uses it for overviews, explanations,
+                translation, and note polishing.</span
+              >
+              <a
+                href="https://opencode.ai/auth"
+                target="_blank"
+                rel="noreferrer"
+                data-i18n="opencodeGoLink"
+                >Create an OpenCode Go API key</a
+              ><span data-i18n="opencodeGoHelpSuffix">.</span>
+            </p>
+            <div class="privacy-note" data-i18n="opencodeGoPrivacyNote">
+              When you use AI features, the OpenCode Go service receives the
+              video transcript and relevant video context. Review its terms
+              and pricing before saving.
+            </div>
           </div>
         </section>
 

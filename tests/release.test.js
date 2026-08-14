@@ -16,8 +16,10 @@ test("manifest uses minimized install-time permissions", () => {
   assert.equal(manifest.options_ui.page, "options.html");
   assert.ok(!manifest.permissions.includes("activeTab"));
   assert.ok(manifest.host_permissions.includes("https://api.deepseek.com/*"));
+  assert.ok(manifest.host_permissions.includes("https://api.minimaxi.com/*"));
+  assert.ok(manifest.host_permissions.includes("https://opencode.ai/zen/go/*"));
   assert.equal(Object.hasOwn(manifest, "optional_host_permissions"), false);
-  assert.equal(manifest.version, "1.1.5");
+  assert.equal(manifest.version, "1.2.0");
 });
 
 test("release copy documents current scope without em dashes", () => {
@@ -177,10 +179,34 @@ test("release copy documents current scope without em dashes", () => {
   ].join("\n");
   assert.doesNotMatch(publishedDocs, /custom OpenAI-compatible/i);
   assert.doesNotMatch(publishedDocs, /optional custom-origin/i);
-  assert.doesNotMatch(publishedDocs, /chosen AI provider/i);
   assert.doesNotMatch(publishedDocs, /configure a different OpenAI-compatible/i);
-  assert.match(readme, /published version supports DeepSeek V4 Flash as its only AI provider/i);
-  assert.match(chineseReadme, /发布版本只支持 DeepSeek V4 Flash/);
+  assert.doesNotMatch(publishedDocs, /only AI provider/i);
+  assert.doesNotMatch(publishedDocs, /只支持 DeepSeek V4 Flash/);
+  assert.match(readme, /published version supports three AI providers/i);
+  assert.match(
+    readme,
+    /DeepSeek:\s+Base URL https:\/\/api\.deepseek\.com\s+Model deepseek-v4-flash/i,
+  );
+  assert.match(
+    readme,
+    /MiniMax:\s+Base URL https:\/\/api\.minimaxi\.com\/v1\s+Model MiniMax-M3/i,
+  );
+  assert.match(
+    readme,
+    /OpenCode Go:\s+Base URL https:\/\/opencode\.ai\/zen\/go\/v1\s+Model deepseek-v4-flash/i,
+  );
+  assert.match(chineseReadme, /发布版本支持三个 AI 服务/);
+  assert.match(
+    chineseReadme,
+    /MiniMax:\s+Base URL https:\/\/api\.minimaxi\.com\/v1\s+Model MiniMax-M3/,
+  );
+  assert.match(
+    chineseReadme,
+    /OpenCode Go:\s+Base URL https:\/\/opencode\.ai\/zen\/go\/v1\s+Model deepseek-v4-flash/,
+  );
+  assert.match(optionsPage, /platform\.minimaxi\.com/);
+  assert.match(optionsPage, /opencode\.ai\/auth/);
+  assert.match(optionsPage, /name="aiProviderChoice"/);
 });
 
 test("notes filters preserve selected contrast and expose pressed state", () => {

@@ -22,7 +22,7 @@ YouTube Digest 是一个需要自行提供 API Key 的开源项目，通过 GitH
 你的 Agent 应该帮你：
 
 1. 先询问你想把项目长期保存在哪里，再下载或克隆到那里，并告诉你准确的完整路径。如果你需要建议，可以推荐 macOS 或 Linux 上的 `~/Documents/youtube-digest`，或 Windows 上的 `%USERPROFILE%\Documents\youtube-digest`。
-2. 打开下方 Supadata 和 DeepSeek 官方页面，指导你创建自己的账号。
+2. 打开下方 Supadata 官方页面和你所选 AI 服务的官方页面，指导你创建自己的账号。
 3. 指导你在 Chrome 中通过“加载已解压的扩展程序”选择你刚才确定的那个准确项目文件夹。
 4. 告诉你应该在扩展的“设置”页面哪个位置填写 API Key。
 5. 打开一个带字幕的 YouTube 视频，确认字幕和翻译功能可以使用。
@@ -48,10 +48,10 @@ YouTube Digest 是一个需要自行提供 API Key 的开源项目，通过 GitH
 
 ## 设置 API Key
 
-YouTube Digest 需要你在自己的服务账号中准备两个 Key：
+YouTube Digest 需要一个 Supadata Key 和一个你所选 AI 服务的 Key：
 
 1. **Supadata API Key**，用于获取 YouTube 字幕。
-2. **DeepSeek API Key**，用于生成概览、讲解内容、翻译和自动润色笔记。
+2. **AI 服务 Key**，从 DeepSeek、MiniMax（国内版）或 OpenCode Go 中选择，用于生成概览、讲解内容、翻译和自动润色笔记。
 
 ### 获取 Supadata API Key
 
@@ -74,16 +74,33 @@ YouTube Digest 需要你在自己的服务账号中准备两个 Key：
 
 当前账号和接口说明请查看 [DeepSeek 官方 API 文档](https://api-docs.deepseek.com/)。
 
+### 获取 MiniMax API Key（国内版）
+
+1. 打开 [MiniMax 开放平台](https://platform.minimaxi.com)，登录或注册账号。
+2. 在账号设置中创建 API Key。
+3. 复制 Key，粘贴到 YouTube Digest 设置中的 **MiniMax API key**。
+
+YouTube Digest 通过 MiniMax 的 OpenAI 兼容接口使用 MiniMax M3 模型。
+
+### 获取 OpenCode Go API Key
+
+1. 打开 [opencode.ai/auth](https://opencode.ai/auth) 并登录。
+2. 订阅 OpenCode Go，然后复制你的 API Key。
+3. 粘贴到 YouTube Digest 设置中的 **OpenCode Go API key**。
+
+OpenCode Go 是包含 DeepSeek V4 Flash 等多种开源编程模型的低价订阅服务。YouTube Digest 使用其中的 DeepSeek V4 Flash 模型。
+
 在侧边栏中打开 **Settings**。你也可以在 `chrome://extensions` 的 YouTube Digest 卡片中打开扩展选项。Key 只能粘贴到这些设置输入框中。不要把 Key 发送到 AI 对话、项目文件、截图或公开消息中。
 
-发布版本只支持 DeepSeek V4 Flash：
+发布版本支持三个 AI 服务，接口地址和模型在设置中固定，不需要手动配置：
 
 ```text
-Base URL: https://api.deepseek.com
-Model: deepseek-v4-flash
+DeepSeek:    Base URL https://api.deepseek.com          Model deepseek-v4-flash
+MiniMax:     Base URL https://api.minimaxi.com/v1       Model MiniMax-M3
+OpenCode Go: Base URL https://opencode.ai/zen/go/v1     Model deepseek-v4-flash
 ```
 
-YouTube Digest 会让所有 DeepSeek 请求使用非思考模式，以获得更快、更稳定的交互。设置中的接口地址和模型固定，只需要填写 DeepSeek API Key。如果想使用其他服务或模型，请在设置中复制安全的自定义 prompt，让编程 Agent 修改你自己的本地副本。不要把任何 API Key 放进 prompt 或对话。
+三个服务的 Key 可以同时保存，随时在设置中切换使用哪个服务，只有当前选中的服务会收到请求。DeepSeek 请求使用非思考模式以获得更快、更稳定的交互；其他服务使用各自的请求行为。如果想使用列表之外的服务或模型，请在设置中复制安全的自定义 prompt，让编程 Agent 修改你自己的本地副本。不要把任何 API Key 放进 prompt 或对话。
 
 API Key 和设置保存在你设备上的 Chrome 扩展本地存储中。发布包不会包含或使用 `config.js`。
 
@@ -104,7 +121,7 @@ API Key 和设置保存在你设备上的 Chrome 扩展本地存储中。发布�
 - 原文、简体中文和双语对照字幕。
 - AI 概览、选中文本讲解、翻译和自动润色笔记。
 - 本地笔记，以及最近字幕、概览和翻译的本地缓存。
-- 发布版本的所有 AI 功能都使用 DeepSeek V4 Flash。其他服务需要修改本地代码，不属于发布版本的支持范围。
+- 发布版本的所有 AI 功能都使用 DeepSeek V4 Flash、MiniMax M3 或 OpenCode Go 的 DeepSeek V4 Flash。其他服务需要修改本地代码，不属于发布版本的支持范围。
 
 Shorts、直播、私密视频、受访问限制的视频，以及没有原生字幕的视频可能无法使用。目前没有测试 Firefox、Safari、移动浏览器或其他 Chromium 浏览器。
 
@@ -163,11 +180,11 @@ YouTube Digest 使用原生 HTML、CSS 和 JavaScript，没有构建步骤，很
 YouTube Digest 会直接从扩展向服务商发送请求：
 
 1. 把标准化的 YouTube 视频地址发送给 Supadata，用于获取原生字幕。
-2. 当你使用 AI 功能时，把字幕和相关视频信息发送给 DeepSeek。
+2. 当你使用 AI 功能时，把字幕和相关视频信息发送给你选择的 AI 服务。
 3. 翻译或讲解等功能只发送当前需要的内容，例如选中的文本和上下文，或少量字幕分段。
 4. API Key、设置、笔记和最近缓存保存在 Chrome 本地。
 
-YouTube Digest 没有账号系统、广告、分析统计或行为追踪。Supadata 和 DeepSeek 仍会按照各自的条款和隐私政策处理数据。详情请查看 [PRIVACY.md](PRIVACY.md)。
+YouTube Digest 没有账号系统、广告、分析统计或行为追踪。Supadata 和你选择的 AI 服务仍会按照各自的条款和隐私政策处理数据。详情请查看 [PRIVACY.md](PRIVACY.md)。
 
 ## 常见问题
 
@@ -188,9 +205,9 @@ YouTube Digest 没有账号系统、广告、分析统计或行为追踪。Supad
 
 ### YouTube Digest 提示需要设置
 
-- 打开 **Settings**，保存 Supadata Key 和 DeepSeek Key。
-- 发布版本固定使用 DeepSeek V4 Flash，没有需要填写的 Base URL 或 Model 字段。
-- 如果设置提示旧的自定义服务已移除，请重新填写 DeepSeek Key。旧 AI Key 已安全清除，避免被错误用于 DeepSeek。
+- 打开 **Settings**，保存 Supadata Key 和你所选 AI 服务的 Key。
+- 从支持的三个服务中选择：DeepSeek V4 Flash、MiniMax M3 或 OpenCode Go。接口地址和模型固定，没有需要填写的 Base URL 或 Model 字段。
+- 如果设置提示旧的自定义服务已移除，请重新填写你所选服务的 Key。旧 AI Key 已安全清除，避免被错误用于其他服务。
 
 ### 找不到字幕
 
@@ -202,9 +219,9 @@ YouTube Digest 不会自动改用 AI 生成字幕。
 
 ### AI 请求失败
 
-- `401` 或 `403` 通常表示 DeepSeek Key 或账号权限有问题。
-- `429` 通常表示达到了 DeepSeek 服务限速或消费上限。
-- 确认 Key 来自上方链接的 DeepSeek 开放平台账号，并且账号有可用额度。
+- `401` 或 `403` 通常表示所选服务的 Key 或账号权限有问题。
+- `429` 通常表示达到了所选服务的限速或消费上限。OpenCode Go 订阅套餐也有用量上限。
+- 确认 Key 来自设置中所选服务对应的账号，并且账号有可用额度。
 - 如果你把本地副本改成了其他模型，请再次使用设置中的自定义 prompt，让编程 Agent 检查本地实现。
 
 不要在对话、截图或日志中分享 API Key、私密字幕或个人笔记。

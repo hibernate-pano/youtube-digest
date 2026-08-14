@@ -22,7 +22,7 @@ You do not need to understand the code or use the command line. Send this messag
 Your agent should:
 
 1. Ask where you want to keep the project, download or clone it there, and tell you the exact full path. If you want a suggestion, it can offer `~/Documents/youtube-digest` on macOS or Linux, or `%USERPROFILE%\Documents\youtube-digest` on Windows.
-2. Open the official Supadata and DeepSeek pages below and help you create your own accounts.
+2. Open the official Supadata page below and the pages of your chosen AI provider below, and help create accounts.
 3. Walk you through selecting the exact project folder you chose in Chrome with **Load unpacked**.
 4. Show you where to enter your API keys in the extension's **Settings** page.
 5. Open a YouTube video with captions and confirm the transcript and translation work.
@@ -48,10 +48,10 @@ Because this is an unpacked extension, it does not update automatically. After d
 
 ## Set up your API keys
 
-YouTube Digest needs two keys under your own provider accounts:
+YouTube Digest needs a Supadata key and one API key from your chosen AI provider:
 
 1. A **Supadata API key** to retrieve YouTube transcripts.
-2. A **DeepSeek API key** for overviews, explanations, translation, and automatic note polishing.
+2. An **AI provider key** from DeepSeek, MiniMax (China), or OpenCode Go, for overviews, explanations, translation, and automatic note polishing.
 
 ### Get a Supadata API key
 
@@ -74,16 +74,33 @@ See the [official Supadata documentation](https://docs.supadata.ai/) if the dash
 
 See the [official DeepSeek API documentation](https://api-docs.deepseek.com/) for current account and API details.
 
+### Get a MiniMax API key (China)
+
+1. Open the [MiniMax platform](https://platform.minimaxi.com) and sign in or create an account.
+2. Create an API key in your account settings.
+3. Copy the key and paste it into **MiniMax API key** in YouTube Digest Settings.
+
+YouTube Digest uses the MiniMax M3 model through MiniMax's OpenAI-compatible endpoint.
+
+### Get an OpenCode Go API key
+
+1. Open [opencode.ai/auth](https://opencode.ai/auth) and sign in.
+2. Subscribe to OpenCode Go and copy your API key.
+3. Paste it into **OpenCode Go API key** in YouTube Digest Settings.
+
+OpenCode Go is a low-cost subscription that includes DeepSeek V4 Flash and other open coding models. YouTube Digest uses its DeepSeek V4 Flash model.
+
 Open **Settings** from the side panel. You can also open the YouTube Digest **Options** page from its card at `chrome://extensions` or by right-clicking its toolbar icon. Paste keys only into these Settings fields. Never paste a key into an AI chat, repository file, screenshot, or public message.
 
-The published version supports DeepSeek V4 Flash as its only AI provider:
+The published version supports three AI providers, fixed in Settings so you never configure endpoints by hand:
 
 ```text
-Base URL: https://api.deepseek.com
-Model: deepseek-v4-flash
+DeepSeek:    Base URL https://api.deepseek.com          Model deepseek-v4-flash
+MiniMax:     Base URL https://api.minimaxi.com/v1       Model MiniMax-M3
+OpenCode Go: Base URL https://opencode.ai/zen/go/v1     Model deepseek-v4-flash
 ```
 
-YouTube Digest sends every DeepSeek request in non-thinking mode for responsive, predictable interactions. The endpoint and model are fixed in Settings, so the only AI credential you enter is your DeepSeek API key. To use another provider or model, copy the safe customization prompt in Settings and give it to a coding agent for your local copy. Never add an API key to that prompt or chat.
+Keys for all three providers can be saved at once and you switch providers from Settings at any time. Only the selected provider receives requests. DeepSeek requests use non-thinking mode for responsive, predictable interactions; the other providers have their own request behavior. To use a provider or model outside this list, copy the safe customization prompt in Settings and give it to a coding agent for your local copy. Never add an API key to that prompt or chat.
 
 Keys and settings are stored in Chrome's local extension storage on your device. Release builds do not include or use `config.js`.
 
@@ -104,7 +121,7 @@ Keys and settings are stored in Chrome's local extension storage on your device.
 - Original, Simplified Chinese, and aligned bilingual transcript views.
 - AI overviews, selected-text explanations, translation, and automatic note polishing.
 - Local notes and a local cache for recent transcript and digest results.
-- DeepSeek V4 Flash for all published AI features. Other providers require a local code adaptation and are not supported by this published version.
+- DeepSeek V4 Flash, MiniMax M3, and OpenCode Go's DeepSeek V4 Flash for all published AI features. Other providers require a local code adaptation and are not supported by this published version.
 
 Shorts, live streams, private or access-restricted videos, and videos without an available native transcript may not work. Firefox, Safari, mobile browsers, and other Chromium browsers are not currently tested or supported.
 
@@ -163,11 +180,11 @@ If you want another AI provider or model, first open the exact YouTube Digest pr
 YouTube Digest makes provider requests directly from the extension:
 
 1. It sends a canonical YouTube watch URL to Supadata to request the native transcript.
-2. It sends the transcript and relevant video metadata to DeepSeek when you request AI features.
+2. It sends the transcript and relevant video metadata to your chosen AI provider when you request AI features.
 3. Focused features send only the content they need, such as selected text with context or small transcript batches for translation.
 4. It stores keys, settings, notes, and recent cache entries locally in Chrome.
 
-There is no YouTube Digest account system, advertising, analytics, or telemetry. Supadata and DeepSeek still receive data under their own terms and privacy policies. See [PRIVACY.md](PRIVACY.md) for details.
+There is no YouTube Digest account system, advertising, analytics, or telemetry. Supadata and your chosen AI provider still receive data under their own terms and privacy policies. See [PRIVACY.md](PRIVACY.md) for details.
 
 ## Troubleshooting
 
@@ -188,9 +205,9 @@ There is no YouTube Digest account system, advertising, analytics, or telemetry.
 
 ### YouTube Digest asks for setup
 
-- Open **Settings** and save both a Supadata key and a DeepSeek key.
-- This published version uses the fixed DeepSeek V4 Flash endpoint and model. There are no Base URL or Model fields to configure.
-- If Settings says a legacy custom provider was removed, enter a DeepSeek key. The old AI key was cleared so it could not be reused with the wrong service.
+- Open **Settings** and save a Supadata key and the API key of your chosen AI provider.
+- Choose one of the supported providers: DeepSeek V4 Flash, MiniMax M3, or OpenCode Go. Endpoints and models are fixed, so there are no Base URL or Model fields to configure.
+- If Settings says a legacy custom provider was removed, enter the API key of your chosen provider. The old AI key was cleared so it could not be reused with the wrong service.
 
 ### No transcript is found
 
@@ -202,9 +219,9 @@ YouTube Digest will not fall back to generated transcription.
 
 ### AI requests fail
 
-- A `401` or `403` usually means the DeepSeek key or account access is invalid.
-- A `429` usually means a DeepSeek rate or spending limit was reached.
-- Confirm the key was created in the DeepSeek Platform account linked above and that the account has available credit.
+- A `401` or `403` usually means the selected provider's key or account access is invalid.
+- A `429` usually means the selected provider reached a rate or spending limit. OpenCode Go subscription plans also have usage limits.
+- Confirm the key was created in the account linked to the provider selected in Settings, and that the account has available credit.
 - If you adapted a local copy for another model, use the Settings customization prompt again and ask your coding agent to inspect that local implementation.
 
 Never share API keys, private transcripts, or personal notes in chats, screenshots, or logs.

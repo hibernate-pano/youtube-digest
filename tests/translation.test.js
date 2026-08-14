@@ -103,7 +103,47 @@ function loadBackgroundHelpers({
     YTD_SETTINGS: {
       STORAGE_KEY: "ytd_settings",
       normalize: (value) => value,
-      chatCompletionsUrl: (baseUrl) => `${baseUrl}/chat/completions`,
+      getProvider: (id) => ({
+        deepseek: {
+          name: "DeepSeek V4 Flash",
+          baseUrl: "https://api.deepseek.com",
+          model: "deepseek-v4-flash",
+          apiKeyField: "aiApiKey",
+          usesThinkingDisabled: true,
+          supportsJsonMode: true,
+        },
+        minimax: {
+          name: "MiniMax M3",
+          baseUrl: "https://api.minimaxi.com/v1",
+          model: "MiniMax-M3",
+          apiKeyField: "minimaxApiKey",
+          usesThinkingDisabled: false,
+          supportsJsonMode: true,
+        },
+        "opencode-go": {
+          name: "OpenCode Go · DeepSeek V4 Flash",
+          baseUrl: "https://opencode.ai/zen/go/v1",
+          model: "deepseek-v4-flash",
+          apiKeyField: "opencodeGoApiKey",
+          usesThinkingDisabled: false,
+          supportsJsonMode: true,
+        },
+      })[id] || {
+        name: "AI provider",
+        baseUrl: "https://api.deepseek.com",
+        model: "deepseek-v4-flash",
+        apiKeyField: "aiApiKey",
+        usesThinkingDisabled: false,
+        supportsJsonMode: false,
+      },
+      chatCompletionsUrl: (providerId) => {
+        const baseUrl = {
+          deepseek: "https://api.deepseek.com",
+          minimax: "https://api.minimaxi.com/v1",
+          "opencode-go": "https://opencode.ai/zen/go/v1",
+        }[providerId] || "https://api.deepseek.com";
+        return `${baseUrl}/chat/completions`;
+      },
     },
   };
   sandbox.globalThis = sandbox;
@@ -528,6 +568,95 @@ test("DeepSeek retries one empty transcript JSON response without response_forma
   assert.deepEqual(requests[0].response_format, { type: "json_object" });
   assert.equal(Object.hasOwn(requests[1], "response_format"), false);
   assert.equal(requests[0].max_tokens, 1536);
+});
+
+test("active provider sends only its own key and skips unsupported fields", async () => {
+  const requests = [];
+  const helpers = loadBackgroundHelpers({
+    settings: {
+      provider: "minimax",
+      aiApiKey: "deepseek-secret",
+      minimaxApiKey: "minimax-secret",
+      opencodeGoApiKey: "opencode-secret",
+      aiBaseUrl: "https://api.minimaxi.com/v1",
+      aiModel: "MiniMax-M3",
+    },
+    fetchImpl: async (url, options) => {
+      requests.push({
+        url,
+        auth: options.headers.Authorization,
+        body: JSON.parse(options.body),
+      });
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: "ok" } }],
+        }),
+      };
+    },
+  });
+
+  const result = await helpers.requestAiCompletion({
+    maxTokens: 64,
+    responseFormat: { type: "json_object" },
+    messages: [{ role: "user", content: "Hello." }],
+  });
+  assert.equal(result.text, "ok");
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, "https://api.minimaxi.com/v1/chat/completions");
+  // The DeepSeek key stored side by side must never leave the device.
+  assert.equal(requests[0].auth, "Bearer minimax-secret");
+  assert.equal(requests[0].body.model, "MiniMax-M3");
+  assert.deepEqual(requests[0].body.response_format, { type: "json_object" });
+  assert.equal(Object.hasOwn(requests[0].body, "thinking"), false);
+});
+
+test("provider rejecting response_format with HTTP 400 retries once without it", async () => {
+  const requests = [];
+  const helpers = loadBackgroundHelpers({
+    fetchImpl: async (_url, options) => {
+      requests.push(JSON.parse(options.body));
+      if (requests.length === 1) {
+        return {
+          ok: false,
+          status: 400,
+          text: async () => "Bad Request: response_format is not supported",
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: "ok" } }],
+        }),
+      };
+    },
+  });
+
+  const result = await helpers.callAiTranslation("Translate.", "Hello.", {
+    responseFormat: { type: "json_object" },
+  });
+  assert.equal(result.success, true);
+  assert.equal(result.text, "ok");
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[0].response_format, { type: "json_object" });
+  assert.equal(Object.hasOwn(requests[1], "response_format"), false);
+  // DeepSeek's non-thinking flag survives the retry.
+  assert.deepEqual(requests[1].thinking, { type: "disabled" });
+});
+
+test("provider HTTP 400 surfaces an actionable message after the retry", async () => {
+  const helpers = loadBackgroundHelpers({
+    fetchImpl: async () => ({
+      ok: false,
+      status: 400,
+      json: async () => ({ error: { message: "Model Not Exist" } }),
+    }),
+  });
+
+  const result = await helpers.callAiTranslation("Translate.", "Hello.");
+  assert.equal(result.success, false);
+  assert.match(result.error, /Model Not Exist.*HTTP 400/);
+  assert.match(result.error, /DeepSeek V4 Flash/);
 });
 
 test("translation message watchdog rejects, clears its timer, and ignores late replies", async () => {

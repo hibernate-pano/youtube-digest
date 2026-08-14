@@ -36,6 +36,19 @@ async function getSettings() {
   return YTD_SETTINGS.normalize(stored[YTD_SETTINGS.STORAGE_KEY]);
 }
 
+/**
+ * Returns the API key of the currently active AI provider. Keys for inactive
+ * providers are kept in storage but never sent on requests.
+ */
+function getActiveAiKey(settings) {
+  const provider = YTD_SETTINGS.getProvider(settings.provider);
+  return settings[provider.apiKeyField] || "";
+}
+
+function getActiveProvider(settings) {
+  return YTD_SETTINGS.getProvider(settings.provider);
+}
+
 const promptFileCache = new Map();
 
 async function loadPromptSection(fileName, heading, variables = {}) {
@@ -79,24 +92,28 @@ async function requestAiCompletion({
   responseFormat,
 }) {
   const settings = await getSettings();
-  if (!settings.aiApiKey) {
+  const provider = getActiveProvider(settings);
+  if (!getActiveAiKey(settings)) {
     const error = new Error(
-      "DeepSeek API key not configured. Open YouTube Digest Settings.",
+      `${provider.name} API key not configured. Open YouTube Digest Settings.`,
     );
     error.code = "NO_AI_KEY";
     throw error;
   }
   const body = {
-    model: settings.aiModel,
+    model: provider.model,
     max_tokens: maxTokens,
     messages,
   };
   if (typeof temperature === "number") body.temperature = temperature;
-  if (responseFormat) {
+  // Capability flags live in the provider registry so request behavior stays
+  // data-driven instead of provider-specific branches.
+  if (provider.supportsJsonMode && responseFormat) {
     body.response_format = responseFormat;
   }
-  // Product features need bounded, predictable latency rather than reasoning traces.
-  body.thinking = { type: "disabled" };
+  if (provider.usesThinkingDisabled) {
+    body.thinking = { type: "disabled" };
+  }
 
   const controller = new AbortController();
   let timeoutKind = "";
@@ -120,38 +137,72 @@ async function requestAiCompletion({
     AI_PROVIDER_HARD_TIMEOUT_MS,
   );
   resetIdleTimeout();
+  let sentResponseFormat = !!body.response_format;
   try {
-    const response = await fetch(
-      YTD_SETTINGS.chatCompletionsUrl(),
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${settings.aiApiKey}`,
+    let response;
+    let data;
+    for (let attempt = 0; ; attempt++) {
+      response = await fetch(
+        YTD_SETTINGS.chatCompletionsUrl(settings.provider),
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            // Always the active provider's own key: keys for inactive
+            // providers are stored side by side but must never be sent.
+            Authorization: `Bearer ${getActiveAiKey(settings)}`,
+          },
+          body: JSON.stringify(body),
+          signal: controller.signal,
         },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      },
-    );
-    // Receiving headers proves DeepSeek is still making progress. DeepSeek
-    // may then send blank-line body chunks while a non-streaming request queues.
-    resetIdleTimeout();
+      );
+      // Receiving headers proves the provider is still making progress. The
+      // provider may then send blank-line body chunks while a non-streaming
+      // request queues.
+      resetIdleTimeout();
 
-    const data = await readBoundedAiResponse(response, resetIdleTimeout);
+      try {
+        data = await readBoundedAiResponse(response, resetIdleTimeout);
+      } catch (readError) {
+        // An error body that is not JSON (e.g. a plain-text 400) must still
+        // reach the status handling below so the request can be retried or
+        // reported with the provider's status instead of a parse error.
+        data = null;
+        if (response.ok) throw readError;
+      }
+      // Safety net for endpoints that reject `response_format` with HTTP 400
+      // despite the registry declaring JSON mode support: retry once without
+      // the field before surfacing the error. The loose JSON parser tolerates
+      // fences and stray prose, so prompt-only JSON still works.
+      if (
+        response.ok ||
+        !(response.status === 400 && sentResponseFormat && attempt === 0)
+      ) {
+        break;
+      }
+      delete body.response_format;
+      sentResponseFormat = false;
+    }
+
     if (!response.ok) {
       const errorData = data && typeof data === "object" ? data : {};
-      const error = new Error(
+      let message =
         errorData.error?.message ||
-          errorData.message ||
-          `DeepSeek error: ${response.status}`,
-      );
+        errorData.message ||
+        `AI provider error: ${response.status}`;
+      if (response.status === 400) {
+        message =
+          `${message} (HTTP 400). The ${provider.name} model or request ` +
+          "format may no longer be supported by this provider.";
+      }
+      const error = new Error(message);
       error.status = response.status;
       throw error;
     }
 
     const text = data.choices?.[0]?.message?.content;
     if (typeof text !== "string" || !text.trim()) {
-      const error = new Error("DeepSeek returned an empty response.");
+      const error = new Error("AI provider returned an empty response.");
       error.code = "EMPTY_AI_RESPONSE";
       throw error;
     }
@@ -160,14 +211,14 @@ async function requestAiCompletion({
   } catch (error) {
     if (timeoutKind === "idle") {
       const timeoutError = new Error(
-        "DeepSeek request was inactive for 50 seconds. Please Retry.",
+        "AI provider request was inactive for 50 seconds. Please Retry.",
       );
       timeoutError.code = "AI_IDLE_TIMEOUT";
       throw timeoutError;
     }
     if (timeoutKind === "hard") {
       const timeoutError = new Error(
-        "DeepSeek request exceeded the 120-second limit. Please Retry.",
+        "AI provider request exceeded the 120-second limit. Please Retry.",
       );
       timeoutError.code = "AI_HARD_TIMEOUT";
       throw timeoutError;
@@ -194,7 +245,7 @@ async function readBoundedAiResponse(response, onActivity) {
       responseBytes += byteLength;
       if (responseBytes > AI_PROVIDER_MAX_RESPONSE_BYTES) {
         await reader.cancel?.().catch(() => {});
-        const error = new Error("DeepSeek response exceeded the 2 MiB limit.");
+        const error = new Error("AI provider response exceeded the 2 MiB limit.");
         error.code = "AI_RESPONSE_TOO_LARGE";
         throw error;
       }
@@ -211,7 +262,7 @@ async function readBoundedAiResponse(response, onActivity) {
     onActivity();
     const byteLength = new TextEncoder().encode(responseText).byteLength;
     if (byteLength > AI_PROVIDER_MAX_RESPONSE_BYTES) {
-      const error = new Error("DeepSeek response exceeded the 2 MiB limit.");
+      const error = new Error("AI provider response exceeded the 2 MiB limit.");
       error.code = "AI_RESPONSE_TOO_LARGE";
       throw error;
     }
@@ -388,7 +439,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .then((settings) =>
         sendResponse({
           hasSupadataKey: !!settings.supadataApiKey,
-          hasAiKey: !!settings.aiApiKey,
+          hasAiKey: !!getActiveAiKey(settings),
         }),
       )
       .catch((error) => sendResponse({ error: error.message }));
@@ -867,11 +918,11 @@ async function handleAnalyzeTranscript(
 ) {
   try {
     const settings = await getSettings();
-    if (!settings.aiApiKey) {
+    if (!getActiveAiKey(settings)) {
       return {
         success: false,
         error: "NO_AI_KEY",
-        message: "DeepSeek API key not configured. Open YouTube Digest Settings.",
+        message: `${getActiveProvider(settings).name} API key not configured. Open YouTube Digest Settings.`,
       };
     }
 
@@ -925,7 +976,10 @@ async function handleAnalyzeTranscript(
       promptVariables,
     );
 
-    debugLog("[YouTube Digest] Requesting video analysis", settings.aiModel);
+    debugLog(
+      "[YouTube Digest] Requesting video analysis",
+      YTD_SETTINGS.getProvider(settings.provider).model,
+    );
     const { text: responseText } = await requestAiCompletion({
       maxTokens: 8192,
       responseFormat: { type: "json_object" },
@@ -952,14 +1006,14 @@ async function handleAnalyzeTranscript(
       return {
         success: false,
         error: "INVALID_AI_KEY",
-        message: "DeepSeek rejected the API key.",
+        message: "The AI provider rejected the API key.",
       };
     }
     if (error.status === 429) {
       return {
         success: false,
         error: "RATE_LIMITED",
-        message: "DeepSeek rate-limited this request. Try again shortly.",
+        message: "The AI provider rate-limited this request. Try again shortly.",
       };
     }
     return {
@@ -1367,11 +1421,11 @@ async function handleExplainSelection(
 ) {
   try {
     const settings = await getSettings();
-    if (!settings.aiApiKey) {
+    if (!getActiveAiKey(settings)) {
       return {
         success: false,
         error: "NO_AI_KEY",
-        message: "DeepSeek API key not configured.",
+        message: `${getActiveProvider(settings).name} API key not configured.`,
       };
     }
 
@@ -1538,8 +1592,11 @@ async function handleTranslateContent(
     }
 
     const settings = await getSettings();
-    if (!settings.aiApiKey) {
-      return { success: false, error: "DeepSeek API key not configured" };
+    if (!getActiveAiKey(settings)) {
+      return {
+        success: false,
+        error: `${getActiveProvider(settings).name} API key not configured`,
+      };
     }
 
     const sourceSegments = validateTranscriptBatchRequest(content);

@@ -9,7 +9,7 @@ const YTD_OPTIONS = (() => {
       languageGroupLabel: "Interface language",
       heading: "Bring your own API keys",
       lede:
-        "Keys stay in this Chrome profile and are sent only to Supadata and DeepSeek. This open-source extension has no developer server or analytics.",
+        "Keys stay in this Chrome profile and are sent only to Supadata and your chosen AI provider. This open-source extension has no developer server or analytics.",
       transcriptProvider: "Transcript provider",
       supadataApiKeyLabel: "Supadata API key",
       supadataHelp: "Used to fetch timestamped YouTube subtitles. ",
@@ -17,15 +17,27 @@ const YTD_OPTIONS = (() => {
       supadataHelpSuffix:
         ". Supadata generates the key during onboarding.",
       aiProvider: "AI provider",
-      providerSummaryLabel: "Supported AI provider",
-      providerBadge: "Supported in this version",
       deepseekApiKeyLabel: "DeepSeek API key",
       deepseekHelp:
         "YouTube Digest uses DeepSeek V4 Flash for overviews, explanations, translation, and note polishing. ",
       deepseekLink: "Create a DeepSeek API key",
       deepseekHelpSuffix: ".",
-      privacyNote:
+      deepseekPrivacyNote:
         "When you use AI features, DeepSeek receives the video transcript and relevant video context. Review DeepSeek's terms and pricing before saving.",
+      minimaxApiKeyLabel: "MiniMax API key",
+      minimaxHelp:
+        "YouTube Digest uses MiniMax M3 for overviews, explanations, translation, and note polishing. ",
+      minimaxLink: "Create a MiniMax API key",
+      minimaxHelpSuffix: ".",
+      minimaxPrivacyNote:
+        "When you use AI features, MiniMax receives the video transcript and relevant video context. Review MiniMax's terms and pricing before saving.",
+      opencodeGoApiKeyLabel: "OpenCode Go API key",
+      opencodeGoHelp:
+        "OpenCode Go is a low-cost subscription that includes DeepSeek V4 Flash. YouTube Digest uses it for overviews, explanations, translation, and note polishing. ",
+      opencodeGoLink: "Create an OpenCode Go API key",
+      opencodeGoHelpSuffix: ".",
+      opencodeGoPrivacyNote:
+        "When you use AI features, the OpenCode Go service receives the video transcript and relevant video context. Review its terms and pricing before saving.",
       saveSettings: "Save settings",
       localRemix: "Local remix",
       customizationTitle: "Want to use another AI model?",
@@ -55,10 +67,10 @@ const YTD_OPTIONS = (() => {
       footer:
         'Read <a href="PRIVACY.md" target="_blank">PRIVACY.md</a> in the repository for the complete data-flow description.',
       migrationWarning:
-        "Custom provider settings were removed safely. Your Supadata key was kept, but the AI key was cleared. Enter a DeepSeek API key to continue.",
+        "Custom provider settings were removed safely. Your Supadata key was kept, but the AI key was cleared. Enter the API key of your chosen AI provider to continue.",
       saving: "Saving…",
       addSupadataKey: "Add a Supadata API key.",
-      addDeepseekKey: "Add a DeepSeek API key.",
+      addAiKey: "Add the API key of your chosen AI provider.",
       saved: "Saved. Reopen YouTube Digest to use these settings.",
       saveFailed: "Could not save settings. Please try again.",
       copying: "Copying…",
@@ -79,22 +91,34 @@ const YTD_OPTIONS = (() => {
       languageGroupLabel: "界面语言",
       heading: "使用你自己的 API 密钥",
       lede:
-        "密钥仅保存在当前 Chrome 个人资料中，只会发送给 Supadata 和 DeepSeek。本开源扩展没有开发者服务器，也不使用分析服务。",
+        "密钥仅保存在当前 Chrome 个人资料中，只会发送给 Supadata 和你选择的 AI 服务。本开源扩展没有开发者服务器，也不使用分析服务。",
       transcriptProvider: "字幕服务",
       supadataApiKeyLabel: "Supadata API 密钥",
       supadataHelp: "用于获取带时间戳的 YouTube 字幕。",
       supadataLink: "创建 Supadata 账号并获取密钥",
       supadataHelpSuffix: "。Supadata 会在引导流程中生成密钥。",
       aiProvider: "AI 服务",
-      providerSummaryLabel: "支持的 AI 服务",
-      providerBadge: "当前版本支持",
       deepseekApiKeyLabel: "DeepSeek API 密钥",
       deepseekHelp:
         "YouTube Digest 使用 DeepSeek V4 Flash 生成概览、解释内容、翻译字幕和润色笔记。",
       deepseekLink: "创建 DeepSeek API 密钥",
       deepseekHelpSuffix: "。",
-      privacyNote:
+      deepseekPrivacyNote:
         "使用 AI 功能时，DeepSeek 会收到视频字幕及相关视频上下文。保存前请查看 DeepSeek 的服务条款和价格。",
+      minimaxApiKeyLabel: "MiniMax API 密钥",
+      minimaxHelp:
+        "YouTube Digest 使用 MiniMax M3 生成概览、解释内容、翻译字幕和润色笔记。",
+      minimaxLink: "创建 MiniMax API 密钥",
+      minimaxHelpSuffix: "。",
+      minimaxPrivacyNote:
+        "使用 AI 功能时，MiniMax 会收到视频字幕及相关视频上下文。保存前请查看 MiniMax 的服务条款和价格。",
+      opencodeGoApiKeyLabel: "OpenCode Go API 密钥",
+      opencodeGoHelp:
+        "OpenCode Go 是包含 DeepSeek V4 Flash 的低价订阅服务。YouTube Digest 用它生成概览、解释内容、翻译字幕和润色笔记。",
+      opencodeGoLink: "创建 OpenCode Go API 密钥",
+      opencodeGoHelpSuffix: "。",
+      opencodeGoPrivacyNote:
+        "使用 AI 功能时，OpenCode Go 服务会收到视频字幕及相关视频上下文。保存前请查看其服务条款和价格。",
       saveSettings: "保存设置",
       localRemix: "本地改造",
       customizationTitle: "想使用其他 AI 模型？",
@@ -123,10 +147,10 @@ const YTD_OPTIONS = (() => {
       footer:
         '完整数据流说明请参阅仓库中的 <a href="PRIVACY.md" target="_blank">PRIVACY.md</a>。',
       migrationWarning:
-        "已安全移除自定义服务设置。Supadata 密钥已保留，AI 密钥已清除。请输入 DeepSeek API 密钥以继续使用。",
+        "已安全移除自定义服务设置。Supadata 密钥已保留，AI 密钥已清除。请输入你所选 AI 服务的 API 密钥以继续使用。",
       saving: "正在保存…",
       addSupadataKey: "请添加 Supadata API 密钥。",
-      addDeepseekKey: "请添加 DeepSeek API 密钥。",
+      addAiKey: "请添加你所选 AI 服务的 API 密钥。",
       saved: "已保存。请重新打开 YouTube Digest 以使用这些设置。",
       saveFailed: "无法保存设置，请重试。",
       copying: "正在复制…",
@@ -348,7 +372,15 @@ const YTD_OPTIONS = (() => {
       getSafeLocalStorage(root),
     );
     const form = doc.getElementById("settingsForm");
+    const providerRadios = [
+      ...doc.querySelectorAll('input[name="aiProviderChoice"]'),
+    ];
+    const providerFields = [
+      ...doc.querySelectorAll("[data-provider-field]"),
+    ];
     const aiApiKeyInput = doc.getElementById("aiApiKey");
+    const minimaxApiKeyInput = doc.getElementById("minimaxApiKey");
+    const opencodeGoApiKeyInput = doc.getElementById("opencodeGoApiKey");
     const supadataApiKeyInput = doc.getElementById("supadataApiKey");
     const customizationPrompt = doc.getElementById("customizationPrompt");
     const copyCustomizationPromptBtn = doc.getElementById(
@@ -361,6 +393,22 @@ const YTD_OPTIONS = (() => {
     const statusStates = new Map();
     const promptDrafts = createPromptDrafts();
     let currentLanguage = "en";
+
+    function selectedProviderId() {
+      const checked = providerRadios.find((radio) => radio.checked);
+      return checked ? checked.value : "deepseek";
+    }
+
+    function selectedProviderKey(settings) {
+      return settings[settingsApi.getProvider(selectedProviderId()).apiKeyField];
+    }
+
+    function syncProviderFields() {
+      const providerId = selectedProviderId();
+      for (const field of providerFields) {
+        field.hidden = field.dataset.providerField !== providerId;
+      }
+    }
 
     function renderStatus(element) {
       const state = statusStates.get(element);
@@ -421,7 +469,13 @@ const YTD_OPTIONS = (() => {
         const settings = migration.settings;
 
         aiApiKeyInput.value = settings.aiApiKey;
+        minimaxApiKeyInput.value = settings.minimaxApiKey;
+        opencodeGoApiKeyInput.value = settings.opencodeGoApiKey;
         supadataApiKeyInput.value = settings.supadataApiKey;
+        for (const radio of providerRadios) {
+          radio.checked = radio.value === settings.provider;
+        }
+        syncProviderFields();
         if (migration.migrated) {
           await storage.set({ [settingsApi.STORAGE_KEY]: settings });
           setStatus(saveStatus, "migrationWarning");
@@ -445,7 +499,10 @@ const YTD_OPTIONS = (() => {
       setStatus(saveStatus, "saving");
 
       const settings = settingsApi.normalize({
+        provider: selectedProviderId(),
         aiApiKey: aiApiKeyInput.value,
+        minimaxApiKey: minimaxApiKeyInput.value,
+        opencodeGoApiKey: opencodeGoApiKeyInput.value,
         supadataApiKey: supadataApiKeyInput.value,
       });
 
@@ -453,8 +510,8 @@ const YTD_OPTIONS = (() => {
         setStatus(saveStatus, "addSupadataKey");
         return;
       }
-      if (!settings.aiApiKey) {
-        setStatus(saveStatus, "addDeepseekKey");
+      if (!selectedProviderKey(settings)) {
+        setStatus(saveStatus, "addAiKey");
         return;
       }
 
@@ -504,6 +561,9 @@ const YTD_OPTIONS = (() => {
     }
 
     form.addEventListener("submit", saveSettings);
+    for (const radio of providerRadios) {
+      radio.addEventListener("change", syncProviderFields);
+    }
     copyCustomizationPromptBtn.addEventListener(
       "click",
       copyCustomizationPrompt,
