@@ -294,8 +294,8 @@
     renderVocabulary(STATE.vocabulary);
   }
 
-  async function loadAll() {
-    statusLine("Loading your data…");
+  async function loadAll(silent) {
+    if (!silent) statusLine("Loading your data…");
     try {
       const [notesData, vocabData] = await Promise.all([
         api("/api/notes"),
@@ -304,9 +304,9 @@
       STATE.notes = notesData.notes || [];
       STATE.vocabulary = vocabData.vocabulary || [];
       renderAll();
-      statusLine("");
+      if (!silent) statusLine("");
     } catch (error) {
-      statusLine(error.message, true);
+      if (!silent) statusLine(error.message, true);
     }
   }
 
@@ -349,7 +349,13 @@
     $("favoritesPanel").hidden = tab !== "favorites";
     $("vocabularyPanel").hidden = tab !== "vocabulary";
     $("reviewPanel").hidden = tab !== "review";
-    if (tab === "review") void loadDueReviews();
+    // Refresh the visible data when switching tabs so edits made elsewhere
+    // (e.g. in the extension) show up without a manual reload.
+    if (tab === "review") {
+      void loadDueReviews();
+    } else {
+      void loadAll(true);
+    }
   }
 
   async function boot() {
@@ -376,6 +382,16 @@
   }
 
   document.addEventListener("DOMContentLoaded", () => {
+    $("refreshBtn").addEventListener("click", () => {
+      void loadAll();
+      void loadDueReviews();
+      statusLine("Refreshed.");
+      setTimeout(() => statusLine(""), 1200);
+    });
+    // Coming back to this tab refreshes data from the cloud.
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden && STATE.token) void loadAll(true);
+    });
     $("logoutBtn").addEventListener("click", () => {
       signOut();
       statusLine("Signed out. Your data stays in your account.");
