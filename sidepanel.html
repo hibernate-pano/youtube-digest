@@ -48,7 +48,6 @@
         <button class="tab active" data-tab="transcript">Transcript</button>
         <button class="tab" data-tab="overview">Overview</button>
         <button class="tab" data-tab="notes">Notes</button>
-        <button class="tab" data-tab="words">Words</button>
       </div>
     </div>
 
@@ -209,58 +208,17 @@
           </div>
         </div>
 
-        <!-- TAB: Words -->
-        <div class="tab-panel" data-panel="words">
-          <div class="section">
-            <div class="section-header">
-              <div class="section-title">My Words</div>
-              <button class="enhance-btn" id="reviewBtn" type="button">
-                Review <span id="reviewCount" class="review-count">0</span>
-              </button>
-            </div>
-            <p class="notes-intro" id="wordsIntro">
-              Open a video's transcript and click the ＋ Word button next to a
-              line to save the key words of that sentence to your vocabulary.
-            </p>
-            <div id="wordsList" class="words-list"></div>
-          </div>
-
-          <div id="reviewMode" class="review-mode" hidden>
-            <div class="section-header">
-              <div class="section-title">Review due words</div>
-              <button class="enhance-btn" id="reviewExitBtn" type="button">
-                ✕ Exit
-              </button>
-            </div>
-            <div class="review-card" id="reviewCard">
-              <div class="review-front">
-                <div class="review-term" id="reviewTerm"></div>
-                <div class="review-sentence" id="reviewSentence"></div>
-              </div>
-              <div class="review-back" id="reviewBack" hidden>
-                <div class="review-translation" id="reviewTranslation"></div>
-                <div class="review-explanation" id="reviewExplanation"></div>
-              </div>
-            </div>
-            <div class="review-actions" id="reviewActions">
-              <button class="grade-btn grade-again" data-grade="1" type="button">Again</button>
-              <button class="grade-btn grade-hard" data-grade="2" type="button">Hard</button>
-              <button class="grade-btn grade-good" data-grade="3" type="button">Good</button>
-              <button class="grade-btn grade-easy" data-grade="5" type="button">Easy</button>
-            </div>
-            <div id="reviewProgress" class="review-progress"></div>
-          </div>
-
-          <!-- Vocabulary extraction confirmation -->
-          <div id="vocabExtractModal" class="vocab-modal" hidden>
-            <div class="vocab-modal-box">
-              <div class="vocab-modal-title">Add to vocabulary</div>
-              <div class="vocab-modal-hint" id="vocabExtractHint"></div>
-              <div id="vocabCandidates"></div>
-              <div class="vocab-modal-actions">
-                <button class="enhance-btn" id="vocabCancelBtn" type="button">Cancel</button>
-                <button class="primary-btn" id="vocabSaveBtn" type="button">Save words</button>
-              </div>
+        <!-- Vocabulary extraction confirmation (triggered by the ＋ Word
+             button on transcript lines; saved words appear on the web
+             dashboard's Vocabulary and Review tabs) -->
+        <div id="vocabExtractModal" class="vocab-modal" hidden>
+          <div class="vocab-modal-box">
+            <div class="vocab-modal-title">Add to vocabulary</div>
+            <div class="vocab-modal-hint" id="vocabExtractHint"></div>
+            <div id="vocabCandidates"></div>
+            <div class="vocab-modal-actions">
+              <button class="enhance-btn" id="vocabCancelBtn" type="button">Cancel</button>
+              <button class="primary-btn" id="vocabSaveBtn" type="button">Save words</button>
             </div>
           </div>
         </div>

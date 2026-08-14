@@ -252,7 +252,6 @@ document.addEventListener("DOMContentLoaded", async () => {
         .getElementById("notesFilterAll")
         ?.classList.contains("active");
       loadNotes(filterAll ? null : currentVideoId);
-      void loadWords();
     })
     .catch(() => {});
   await checkCurrentTab();
@@ -287,7 +286,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .getElementById("notesFilterAll")
       ?.classList.contains("active");
     loadNotes(filterAll ? null : currentVideoId);
-    void loadWords();
     sendResponse({ success: true });
   }
   return false;
@@ -420,23 +418,7 @@ function setupEventListeners() {
     chrome.runtime.sendMessage({ action: "openOptions" });
   });
 
-  // Words: review flow + extraction modal
-  document.getElementById("reviewBtn")?.addEventListener("click", () => {
-    void startReview();
-  });
-  document.getElementById("reviewExitBtn")?.addEventListener("click", () => {
-    finishReview();
-  });
-  document.getElementById("reviewCard")?.addEventListener("click", () => {
-    if (reviewRevealed) return;
-    reviewRevealed = true;
-    document.getElementById("reviewBack").hidden = false;
-  });
-  document.querySelectorAll(".grade-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      void submitReviewGrade(Number(btn.dataset.grade));
-    });
-  });
+  // Vocabulary extraction modal (triggered by the ＋ Word button)
   document.getElementById("vocabCancelBtn")?.addEventListener("click", () => {
     document.getElementById("vocabExtractModal").hidden = true;
     extractCandidates = [];
@@ -1066,257 +1048,9 @@ function switchTab(tabName) {
   }
 
   // Lazy-load vocabulary list when the user opens the Words tab
-  if (tabName === "words") {
-    void loadWords();
-  }
 }
 
 // ============================================================
-// WORDS (vocabulary + review)
-// ============================================================
-
-let reviewQueue = [];
-let reviewIndex = 0;
-let reviewRevealed = false;
-
-
-/**
- * Inline edit for a word's translation. Reuses the idempotent
- * saveVocabulary path (same term + sentence updates, never duplicates),
- * which mirrors locally and to the cloud.
- */
-async function editWordTranslation(item, el) {
-  if (el.dataset.editing === "true") return;
-  el.dataset.editing = "true";
-  const input = document.createElement("input");
-  input.type = "text";
-  input.className = "word-translation-input";
-  input.value = item.translation || "";
-  el.replaceWith(input);
-  input.focus();
-  input.select();
-
-  const commit = async (save) => {
-    if (save) {
-      const next = input.value.trim().slice(0, 500);
-      const result = await chrome.runtime.sendMessage({
-        action: "saveVocabulary",
-        entry: {
-          term: item.term,
-          translation: next,
-          explanation: item.explanation,
-          sentence: item.sentence,
-          videoId: item.videoId,
-          videoTitle: item.videoTitle,
-          timestampSeconds: item.timestampSeconds,
-        },
-      }).catch(() => null);
-      if (result && result.success) {
-        item.translation = next;
-      }
-    }
-    const replacement = document.createElement("span");
-    replacement.className = "word-translation";
-    replacement.title = "Click to edit translation";
-    replacement.textContent = item.translation || "";
-    replacement.addEventListener("click", (event) => {
-      event.stopPropagation();
-      editWordTranslation(item, replacement);
-    });
-    input.replaceWith(replacement);
-  };
-
-  input.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      void commit(true);
-    } else if (event.key === "Escape") {
-      void commit(false);
-    }
-  });
-  input.addEventListener("blur", () => {
-    void commit(true);
-  });
-}
-async function loadWords() {
-  try {
-    const result = await chrome.runtime.sendMessage({
-      action: "getVocabulary",
-    });
-    if (result && result.success) {
-      renderWords(result.items || []);
-      await refreshReviewCount();
-    }
-  } catch (error) {
-    console.error("[YouTube Digest Panel] Load words error:", error);
-  }
-}
-
-function renderWords(items) {
-  const list = document.getElementById("wordsList");
-  const intro = document.getElementById("wordsIntro");
-  if (!list) return;
-  list.innerHTML = "";
-  if (!items || items.length === 0) {
-    intro.style.display = "block";
-    return;
-  }
-  intro.style.display = "none";
-  for (const item of items) {
-    const el = document.createElement("div");
-    el.className = "word-item";
-    const head = document.createElement("div");
-    head.className = "word-item-head";
-    const term = document.createElement("span");
-    term.className = "word-term";
-    term.textContent = item.term;
-    const translation = document.createElement("span");
-    translation.className = "word-translation";
-    translation.title = "Click to edit translation";
-    translation.textContent = item.translation || "";
-    translation.addEventListener("click", (event) => {
-      event.stopPropagation();
-      editWordTranslation(item, translation);
-    });
-    const status = document.createElement("span");
-    status.className = "word-status " + (item.status || "learning");
-    status.textContent = item.status || "learning";
-    const del = document.createElement("button");
-    del.type = "button";
-    del.className = "word-delete-btn";
-    del.textContent = "Delete";
-    del.addEventListener("click", async () => {
-      await chrome.runtime.sendMessage({
-        action: "deleteVocabulary",
-        vocabId: item.id,
-      });
-      void loadWords();
-    });
-    head.append(term, translation, status, del);
-    const sentence = document.createElement("div");
-    sentence.className = "word-sentence";
-    sentence.textContent = item.sentence || "";
-    const meta = document.createElement("div");
-    meta.className = "word-meta";
-    if (item.videoTitle) {
-      const link = document.createElement("a");
-      link.href = item.videoId
-        ? "https://www.youtube.com/watch?v=" + encodeURIComponent(item.videoId) + "&t=" + (Number(item.timestampSeconds) || 0) + "s"
-        : "#";
-      link.target = "_blank";
-      link.rel = "noreferrer";
-      link.textContent = item.videoTitle;
-      meta.appendChild(link);
-    }
-    const saved = document.createElement("span");
-    saved.textContent = "saved " + new Date(item.createdAt).toLocaleDateString();
-    meta.appendChild(saved);
-    el.append(head, sentence, meta);
-    list.appendChild(el);
-  }
-}
-
-async function refreshReviewCount() {
-  const result = await chrome.runtime.sendMessage({
-    action: "getDueReviews",
-  }).catch(() => null);
-  const countEl = document.getElementById("reviewCount");
-  const reviewBtn = document.getElementById("reviewBtn");
-  if (!countEl || !reviewBtn) return;
-  const wordsTab = document.querySelector('.tab[data-tab="words"]');
-  const setWordsTabBadge = (count) => {
-    if (!wordsTab) return;
-    const badge = wordsTab.querySelector(".tab-badge");
-    if (count > 0) {
-      if (!badge) {
-        const el = document.createElement("span");
-        el.className = "tab-badge";
-        wordsTab.appendChild(el);
-      }
-      wordsTab.querySelector(".tab-badge").textContent = String(count);
-    } else if (badge) {
-      badge.remove();
-    }
-  };
-  if (result && result.success) {
-    const count = result.reviews.length;
-    countEl.textContent = String(count);
-    reviewBtn.disabled = count === 0;
-    setWordsTabBadge(count);
-  } else if (result && result.error === "NO_SESSION") {
-    countEl.textContent = "–";
-    reviewBtn.disabled = true;
-    reviewBtn.title = "Sign in to review your vocabulary";
-    setWordsTabBadge(0);
-  } else {
-    countEl.textContent = "–";
-    reviewBtn.disabled = true;
-    setWordsTabBadge(0);
-  }
-}
-
-async function startReview() {
-  const result = await chrome.runtime.sendMessage({
-    action: "getDueReviews",
-  }).catch(() => null);
-  if (!result || !result.success) {
-    alert(result && result.message ? result.message : "Could not load reviews.");
-    return;
-  }
-  reviewQueue = result.reviews || [];
-  reviewIndex = 0;
-  reviewRevealed = false;
-  if (reviewQueue.length === 0) {
-    alert("Nothing due right now. Come back later!");
-    return;
-  }
-  document.getElementById("reviewMode").hidden = false;
-  document.getElementById("wordsList").hidden = true;
-  document.getElementById("wordsIntro").style.display = "none";
-  renderReviewCard();
-}
-
-function renderReviewCard() {
-  const review = reviewQueue[reviewIndex];
-  if (!review) {
-    finishReview();
-    return;
-  }
-  reviewRevealed = false;
-  document.getElementById("reviewBack").hidden = true;
-  document.getElementById("reviewTerm").textContent = review.vocabulary.term;
-  document.getElementById("reviewSentence").textContent = review.vocabulary.sentence || "";
-  document.getElementById("reviewTranslation").textContent = review.vocabulary.translation || "";
-  document.getElementById("reviewExplanation").textContent = review.vocabulary.sentenceTranslation || "";
-  document.getElementById("reviewProgress").textContent =
-    "Card " + (reviewIndex + 1) + " of " + reviewQueue.length;
-}
-
-function finishReview() {
-  document.getElementById("reviewMode").hidden = true;
-  document.getElementById("wordsList").hidden = false;
-  document.getElementById("wordsIntro").style.display = "block";
-  reviewQueue = [];
-  void loadWords();
-}
-
-async function submitReviewGrade(grade) {
-  const review = reviewQueue[reviewIndex];
-  if (!review) return;
-  const result = await chrome.runtime.sendMessage({
-    action: "submitReview",
-    vocabId: review.vocabulary.id,
-    grade: grade,
-  }).catch(() => null);
-  if (result && result.success) {
-    reviewIndex += 1;
-    reviewRevealed = false;
-    renderReviewCard();
-  } else {
-    alert(result && result.message ? result.message : "Could not save your review.");
-  }
-}
-
 // --- extraction modal ---
 
 let extractCandidates = [];
@@ -1428,10 +1162,6 @@ async function saveExtractCandidates() {
   document.getElementById("vocabExtractModal").hidden = true;
   extractCandidates = [];
   extractSegment = null;
-  if (saved > 0) {
-    void loadWords();
-    void refreshReviewCount();
-  }
 }
 
 /**
