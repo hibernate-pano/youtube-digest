@@ -26,3 +26,10 @@ server/.dev.vars
 .env.*
 *.pem
 *.key
+
+# Wrangler local dev state and bundle artifacts
+server/.wrangler/
+server/dist-worker/
+
+# pnpm lockfile (project uses npm)
+pnpm-lock.yaml
