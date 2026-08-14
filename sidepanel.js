@@ -297,7 +297,7 @@ async function refreshGithubSyncStatus() {
     if (session) {
       syncBtn.hidden = true;
       syncAccount.hidden = false;
-      syncAccount.textContent = "👤 " + session.login;
+      syncAccount.textContent = session.login;
       syncAccount.title = "Signed in as " + session.login + ". Click to sign out.";
     } else {
       syncBtn.hidden = false;
