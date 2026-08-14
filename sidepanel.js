@@ -275,6 +275,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .getElementById("notesFilterAll")
       ?.classList.contains("active");
     loadNotes(filterAll ? null : currentVideoId);
+    void loadWords();
     sendResponse({ success: true });
   }
   return false;
@@ -405,6 +406,32 @@ function setupEventListeners() {
 
   document.getElementById("settingsBtn")?.addEventListener("click", () => {
     chrome.runtime.sendMessage({ action: "openOptions" });
+  });
+
+  // Words: review flow + extraction modal
+  document.getElementById("reviewBtn")?.addEventListener("click", () => {
+    void startReview();
+  });
+  document.getElementById("reviewExitBtn")?.addEventListener("click", () => {
+    finishReview();
+  });
+  document.getElementById("reviewCard")?.addEventListener("click", () => {
+    if (reviewRevealed) return;
+    reviewRevealed = true;
+    document.getElementById("reviewBack").hidden = false;
+  });
+  document.querySelectorAll(".grade-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      void submitReviewGrade(Number(btn.dataset.grade));
+    });
+  });
+  document.getElementById("vocabCancelBtn")?.addEventListener("click", () => {
+    document.getElementById("vocabExtractModal").hidden = true;
+    extractCandidates = [];
+    extractSegment = null;
+  });
+  document.getElementById("vocabSaveBtn")?.addEventListener("click", () => {
+    void saveExtractCandidates();
   });
 
   // GitHub sync: sign-in opens the OAuth flow; the account button signs out.
@@ -1024,6 +1051,288 @@ function switchTab(tabName) {
   // Lazy-load LLM analysis when user switches to Overview tab
   if (tabName === "overview" && !currentAnalysis && !isAnalysisLoading) {
     triggerAnalysis();
+  }
+
+  // Lazy-load vocabulary list when the user opens the Words tab
+  if (tabName === "words") {
+    void loadWords();
+  }
+}
+
+// ============================================================
+// WORDS (vocabulary + review)
+// ============================================================
+
+let reviewQueue = [];
+let reviewIndex = 0;
+let reviewRevealed = false;
+
+async function loadWords() {
+  try {
+    const result = await chrome.runtime.sendMessage({
+      action: "getVocabulary",
+    });
+    if (result && result.success) {
+      renderWords(result.items || []);
+      await refreshReviewCount();
+    }
+  } catch (error) {
+    console.error("[YouTube Digest Panel] Load words error:", error);
+  }
+}
+
+function renderWords(items) {
+  const list = document.getElementById("wordsList");
+  const intro = document.getElementById("wordsIntro");
+  if (!list) return;
+  list.innerHTML = "";
+  if (!items || items.length === 0) {
+    intro.style.display = "block";
+    return;
+  }
+  intro.style.display = "none";
+  for (const item of items) {
+    const el = document.createElement("div");
+    el.className = "word-item";
+    const head = document.createElement("div");
+    head.className = "word-item-head";
+    const term = document.createElement("span");
+    term.className = "word-term";
+    term.textContent = item.term;
+    const translation = document.createElement("span");
+    translation.className = "word-translation";
+    translation.textContent = item.translation || "";
+    const status = document.createElement("span");
+    status.className = "word-status " + (item.status || "learning");
+    status.textContent = item.status || "learning";
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "word-delete-btn";
+    del.textContent = "Delete";
+    del.addEventListener("click", async () => {
+      await chrome.runtime.sendMessage({
+        action: "deleteVocabulary",
+        vocabId: item.id,
+      });
+      void loadWords();
+    });
+    head.append(term, translation, status, del);
+    const sentence = document.createElement("div");
+    sentence.className = "word-sentence";
+    sentence.textContent = item.sentence || "";
+    const meta = document.createElement("div");
+    meta.className = "word-meta";
+    if (item.videoTitle) {
+      const link = document.createElement("a");
+      link.href = item.videoId
+        ? "https://www.youtube.com/watch?v=" + encodeURIComponent(item.videoId) + "&t=" + (Number(item.timestampSeconds) || 0) + "s"
+        : "#";
+      link.target = "_blank";
+      link.rel = "noreferrer";
+      link.textContent = item.videoTitle;
+      meta.appendChild(link);
+    }
+    const saved = document.createElement("span");
+    saved.textContent = "saved " + new Date(item.createdAt).toLocaleDateString();
+    meta.appendChild(saved);
+    el.append(head, sentence, meta);
+    list.appendChild(el);
+  }
+}
+
+async function refreshReviewCount() {
+  const result = await chrome.runtime.sendMessage({
+    action: "getDueReviews",
+  }).catch(() => null);
+  const countEl = document.getElementById("reviewCount");
+  const reviewBtn = document.getElementById("reviewBtn");
+  if (!countEl || !reviewBtn) return;
+  if (result && result.success) {
+    const count = result.reviews.length;
+    countEl.textContent = String(count);
+    reviewBtn.disabled = count === 0;
+  } else if (result && result.error === "NO_SESSION") {
+    countEl.textContent = "–";
+    reviewBtn.disabled = true;
+    reviewBtn.title = "Sign in to review your vocabulary";
+  } else {
+    countEl.textContent = "–";
+    reviewBtn.disabled = true;
+  }
+}
+
+async function startReview() {
+  const result = await chrome.runtime.sendMessage({
+    action: "getDueReviews",
+  }).catch(() => null);
+  if (!result || !result.success) {
+    alert(result && result.message ? result.message : "Could not load reviews.");
+    return;
+  }
+  reviewQueue = result.reviews || [];
+  reviewIndex = 0;
+  reviewRevealed = false;
+  if (reviewQueue.length === 0) {
+    alert("Nothing due right now. Come back later!");
+    return;
+  }
+  document.getElementById("reviewMode").hidden = false;
+  document.getElementById("wordsList").hidden = true;
+  document.getElementById("wordsIntro").style.display = "none";
+  renderReviewCard();
+}
+
+function renderReviewCard() {
+  const review = reviewQueue[reviewIndex];
+  if (!review) {
+    finishReview();
+    return;
+  }
+  reviewRevealed = false;
+  document.getElementById("reviewBack").hidden = true;
+  document.getElementById("reviewTerm").textContent = review.vocabulary.term;
+  document.getElementById("reviewSentence").textContent = review.vocabulary.sentence || "";
+  document.getElementById("reviewTranslation").textContent = review.vocabulary.translation || "";
+  document.getElementById("reviewExplanation").textContent = review.vocabulary.sentenceTranslation || "";
+  document.getElementById("reviewProgress").textContent =
+    "Card " + (reviewIndex + 1) + " of " + reviewQueue.length;
+}
+
+function finishReview() {
+  document.getElementById("reviewMode").hidden = true;
+  document.getElementById("wordsList").hidden = false;
+  document.getElementById("wordsIntro").style.display = "block";
+  reviewQueue = [];
+  void loadWords();
+}
+
+async function submitReviewGrade(grade) {
+  const review = reviewQueue[reviewIndex];
+  if (!review) return;
+  const result = await chrome.runtime.sendMessage({
+    action: "submitReview",
+    vocabId: review.vocabulary.id,
+    grade: grade,
+  }).catch(() => null);
+  if (result && result.success) {
+    reviewIndex += 1;
+    reviewRevealed = false;
+    renderReviewCard();
+  } else {
+    alert(result && result.message ? result.message : "Could not save your review.");
+  }
+}
+
+// --- extraction modal ---
+
+let extractCandidates = [];
+let extractSegment = null;
+
+async function addWordForSegment(segment) {
+  if (!segment || !segment.text) return;
+  extractSegment = segment;
+  const hint = document.getElementById("vocabExtractHint");
+  const modal = document.getElementById("vocabExtractModal");
+  hint.textContent = "Extracting from: " + segment.text.slice(0, 120) + "…";
+  modal.hidden = false;
+  document.getElementById("vocabCandidates").innerHTML =
+    '<div class="word-sentence">Analyzing…</div>';
+  try {
+    const result = await chrome.runtime.sendMessage({
+      action: "extractVocabulary",
+      sentence: segment.text,
+    });
+    if (!result || !result.success) {
+      document.getElementById("vocabCandidates").innerHTML =
+        '<div class="word-sentence">' +
+        escapeHtml((result && result.message) || (result && result.error) || "Extraction failed") +
+        "</div>";
+      extractCandidates = [];
+      return;
+    }
+    extractCandidates = result.words || [];
+    renderExtractCandidates();
+  } catch (error) {
+    document.getElementById("vocabCandidates").innerHTML =
+      '<div class="word-sentence">' + escapeHtml(error.message || "Extraction failed") + "</div>";
+    extractCandidates = [];
+  }
+}
+
+function renderExtractCandidates() {
+  const container = document.getElementById("vocabCandidates");
+  container.innerHTML = "";
+  if (extractCandidates.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "word-sentence";
+    empty.textContent = "No new words found in this sentence.";
+    container.appendChild(empty);
+    return;
+  }
+  extractCandidates.forEach((candidate, index) => {
+    const box = document.createElement("div");
+    box.className = "vocab-candidate";
+    const termInput = document.createElement("input");
+    termInput.type = "text";
+    termInput.value = candidate.term;
+    termInput.setAttribute("aria-label", "Word " + (index + 1));
+    termInput.addEventListener("input", () => {
+      candidate.term = termInput.value;
+    });
+    const translationInput = document.createElement("input");
+    translationInput.type = "text";
+    translationInput.value = candidate.translation;
+    translationInput.setAttribute("aria-label", "Translation " + (index + 1));
+    translationInput.addEventListener("input", () => {
+      candidate.translation = translationInput.value;
+    });
+    const explanationInput = document.createElement("input");
+    explanationInput.type = "text";
+    explanationInput.value = candidate.explanation;
+    explanationInput.setAttribute("aria-label", "Explanation " + (index + 1));
+    explanationInput.addEventListener("input", () => {
+      candidate.explanation = explanationInput.value;
+    });
+    const row1 = document.createElement("div");
+    row1.className = "vocab-candidate-row";
+    row1.appendChild(termInput);
+    const row2 = document.createElement("div");
+    row2.className = "vocab-candidate-row";
+    row2.appendChild(translationInput);
+    const row3 = document.createElement("div");
+    row3.className = "vocab-candidate-row";
+    row3.appendChild(explanationInput);
+    box.append(row1, row2, row3);
+    container.appendChild(box);
+  });
+}
+
+async function saveExtractCandidates() {
+  if (!extractSegment) return;
+  let saved = 0;
+  for (const candidate of extractCandidates) {
+    const term = (candidate.term || "").trim();
+    if (!term) continue;
+    const result = await chrome.runtime.sendMessage({
+      action: "saveVocabulary",
+      entry: {
+        term,
+        translation: candidate.translation,
+        explanation: candidate.explanation,
+        sentence: extractSegment.text,
+        videoId: currentVideoId,
+        videoTitle: currentVideoTitle,
+        timestampSeconds: extractSegment.start,
+      },
+    });
+    if (result && result.success) saved += 1;
+  }
+  document.getElementById("vocabExtractModal").hidden = true;
+  extractCandidates = [];
+  extractSegment = null;
+  if (saved > 0) {
+    void loadWords();
+    void refreshReviewCount();
   }
 }
 
@@ -1879,13 +2188,18 @@ function renderTranscriptModeRows(segments, mode) {
     const minutes = Math.floor(segment.start / 60);
     const seconds = Math.floor(segment.start % 60);
     const timestamp = `${minutes}:${String(seconds).padStart(2, "0")}`;
-    div.innerHTML = `
-      <span class="transcript-time">${timestamp}</span>
-      ${renderTranscriptSegmentContent(segment, mode, cached, "")}
-    `;
+    div.innerHTML = 
+      '<span class="transcript-time">' + timestamp + '</span>' +
+      renderTranscriptSegmentContent(segment, mode, cached, "") +
+      '<button class="word-add-btn" type="button" title="Add key words of this sentence to your vocabulary">＋ Word</button>';
     div.addEventListener("click", (event) =>
       seekFromTranscriptEntryClick(event, segment.start),
     );
+    div.querySelector(".word-add-btn").addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      addWordForSegment(segment);
+    });
     transcriptList.appendChild(div);
     rows.push(div);
   });

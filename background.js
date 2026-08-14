@@ -442,6 +442,55 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.action === "extractVocabulary") {
+    handleExtractVocabulary(message.sentence)
+      .then(sendResponse)
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (message.action === "saveVocabulary") {
+    handleSaveVocabulary(message.entry)
+      .then(sendResponse)
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (message.action === "getVocabulary") {
+    handleGetVocabulary()
+      .then(sendResponse)
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (message.action === "deleteVocabulary") {
+    handleDeleteVocabulary(message.vocabId)
+      .then(sendResponse)
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (message.action === "syncVocabulary") {
+    fullSyncVocabulary()
+      .then(sendResponse)
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (message.action === "getDueReviews") {
+    handleGetDueReviews()
+      .then(sendResponse)
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (message.action === "submitReview") {
+    handleSubmitReview(message.vocabId, message.grade)
+      .then(sendResponse)
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
   if (message.action === "getVideoInfo") {
     handleGetVideoInfo(message.tabId)
       .then(sendResponse)
@@ -1680,6 +1729,287 @@ async function handleLogoutGithub() {
   await chrome.storage.local.remove(YTD_SETTINGS.GITHUB_SESSION_KEY);
   return { success: true };
 }
+// ============================================================
+// VOCABULARY + REVIEWS
+// ============================================================
+
+async function vocabularyNamespace() {
+  const session = await getGithubSession();
+  return session ? "ytd_vocabulary_" + session.githubId : "ytd_vocabulary";
+}
+
+async function readLocalVocabulary(namespace) {
+  const result = await chrome.storage.local.get(namespace);
+  return result[namespace] || [];
+}
+
+async function writeLocalVocabulary(namespace, items) {
+  await chrome.storage.local.set({ [namespace]: items });
+}
+
+function localVocabToCloudPayload(item) {
+  return {
+    term: String(item.term || "").slice(0, 200),
+    translation: String(item.translation || "").slice(0, 500),
+    sentence: String(item.sentence || "").slice(0, 4000),
+    sentenceTranslation: String(item.explanation || "").slice(0, 500),
+    videoId: String(item.videoId || ""),
+    videoTitle: String(item.videoTitle || ""),
+    timestampSeconds: Number(item.timestampSeconds) || 0,
+    status: item.status || "learning",
+  };
+}
+
+function cloudVocabToLocal(cloud) {
+  return {
+    id: "vocab_" + cloud.id,
+    term: String(cloud.term || ""),
+    translation: String(cloud.translation || ""),
+    explanation: String(cloud.sentenceTranslation || ""),
+    sentence: String(cloud.sentence || ""),
+    videoId: String(cloud.videoId || ""),
+    videoTitle: String(cloud.videoTitle || ""),
+    timestampSeconds: Number(cloud.timestampSeconds) || 0,
+    status: cloud.status || "learning",
+    createdAt: new Date(cloud.createdAt).getTime() || Date.now(),
+    updatedAt: new Date(cloud.updatedAt).getTime() || Date.now(),
+    cloudId: String(cloud.id || ""),
+  };
+}
+
+function vocabKey(item) {
+  return String(item.term || "") + "|" + String(item.sentence || "");
+}
+
+/**
+ * Pure merge for vocabulary, mirroring the notes strategy: cloud is the
+ * source of truth, brand-new local items (no cloudId) are pushed, and
+ * previously synced items missing from the cloud are dropped locally.
+ */
+function mergeVocabularyForSync(localItems, cloudItems) {
+  const cloudByKey = new Map();
+  for (const cloud of cloudItems || []) {
+    if (cloud && cloud.term) cloudByKey.set(vocabKey(cloud), cloud);
+  }
+  const merged = new Map();
+  for (const local of localItems || []) {
+    if (!local || !local.term) continue;
+    const key = vocabKey(local);
+    const cloud = cloudByKey.get(key);
+    if (cloud) {
+      merged.set(key, cloudVocabToLocal(cloud));
+    } else if (!local.cloudId) {
+      merged.set(key, local);
+    }
+  }
+  for (const cloud of cloudByKey.values()) {
+    if (!merged.has(vocabKey(cloud))) {
+      merged.set(vocabKey(cloud), cloudVocabToLocal(cloud));
+    }
+  }
+  const localResult = [];
+  const toPush = [];
+  for (const entry of merged.values()) {
+    localResult.push(entry);
+    if (!entry.cloudId) toPush.push(entry);
+  }
+  return { mergedItems: localResult, toPush };
+}
+
+async function fullSyncVocabulary() {
+  const session = await getGithubSession();
+  if (!session) return { success: true, synced: false, reason: "not signed in" };
+  const namespace = "ytd_vocabulary_" + session.githubId;
+  const local = await readLocalVocabulary(namespace);
+  let cloud = [];
+  try {
+    const data = await cloudFetch("/api/vocabulary", { token: session.token });
+    cloud = data && data.vocabulary ? data.vocabulary : [];
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+  const { mergedItems, toPush } = mergeVocabularyForSync(local, cloud);
+  for (const item of toPush) {
+    try {
+      const pushed = await cloudFetch("/api/vocabulary", {
+        method: "POST",
+        token: session.token,
+        body: localVocabToCloudPayload(item),
+      });
+      const cloudId = pushed && pushed.vocabulary && pushed.vocabulary.id;
+      if (cloudId) {
+        const target = mergedItems.find((candidate) => vocabKey(candidate) === vocabKey(item));
+        if (target) target.cloudId = cloudId;
+      }
+    } catch (error) {
+      console.warn("[YouTube Digest] Vocabulary push failed (kept locally):", error.message);
+    }
+  }
+  await writeLocalVocabulary(namespace, mergedItems);
+  return { success: true, synced: true, count: mergedItems.length };
+}
+
+/**
+ * Extracts 1-2 study-worthy words from a sentence using the active AI provider.
+ */
+async function handleExtractVocabulary(sentence) {
+  try {
+    const settings = await getSettings();
+    if (!getActiveAiKey(settings)) {
+      return { success: false, error: "NO_AI_KEY", message: "AI key not configured. Open Settings." };
+    }
+    const cleanSentence = String(sentence || "").trim().slice(0, 4000);
+    if (!cleanSentence) return { success: false, error: "EMPTY_SENTENCE" };
+    const systemPrompt = await loadPromptSection("vocabulary.md", "System prompt");
+    const userPrompt = await loadPromptSection("vocabulary.md", "User prompt", {
+      sentence: cleanSentence,
+    });
+    const { text } = await requestAiCompletion({
+      maxTokens: 512,
+      responseFormat: { type: "json_object" },
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+    });
+    const parsed = parseLooseJson(text);
+    const words = Array.isArray(parsed && parsed.words) ? parsed.words : [];
+    const cleaned = words
+      .filter((word) => word && typeof word.term === "string" && word.term.trim())
+      .slice(0, 3)
+      .map((word) => ({
+        term: word.term.trim().slice(0, 200),
+        translation: String(word.translation || "").trim().slice(0, 500),
+        explanation: String(word.explanation || "").trim().slice(0, 500),
+      }));
+    return { success: true, words: cleaned };
+  } catch (error) {
+    return { success: false, error: error.message || "Vocabulary extraction failed" };
+  }
+}
+
+/**
+ * Saves a vocabulary entry locally (account-namespaced) and mirrors it to
+ * the cloud when signed in. Deduped locally by (term, sentence).
+ */
+async function handleSaveVocabulary(entry) {
+  try {
+    const term = String(entry && entry.term || "").trim().slice(0, 200);
+    const sentence = String(entry && entry.sentence || "").trim().slice(0, 4000);
+    if (!term) return { success: false, error: "EMPTY_TERM" };
+    const namespace = await vocabularyNamespace();
+    const items = await readLocalVocabulary(namespace);
+    const existingIndex = items.findIndex(
+      (item) => vocabKey(item) === term + "|" + sentence,
+    );
+    const now = Date.now();
+    const item = {
+      id: "vocab_" + now + "_" + Math.floor(Math.random() * 1000),
+      term,
+      translation: String(entry.translation || "").trim().slice(0, 500),
+      explanation: String(entry.explanation || "").trim().slice(0, 500),
+      sentence,
+      videoId: String(entry.videoId || ""),
+      videoTitle: String(entry.videoTitle || ""),
+      timestampSeconds: Number(entry.timestampSeconds) || 0,
+      status: "learning",
+      createdAt: now,
+      updatedAt: now,
+      cloudId: "",
+    };
+    if (existingIndex >= 0) {
+      const existing = items[existingIndex];
+      item.id = existing.id;
+      item.cloudId = existing.cloudId || "";
+      item.createdAt = existing.createdAt || now;
+      item.status = existing.status || "learning";
+      items[existingIndex] = item;
+    } else {
+      items.unshift(item);
+    }
+    if (items.length > 500) items.splice(500);
+    await writeLocalVocabulary(namespace, items);
+    const session = await getGithubSession();
+    if (session) {
+      try {
+        const pushed = await cloudFetch("/api/vocabulary", {
+          method: "POST",
+          token: session.token,
+          body: localVocabToCloudPayload(item),
+        });
+        item.cloudId = (pushed && pushed.vocabulary && pushed.vocabulary.id) || item.cloudId;
+        await writeLocalVocabulary(namespace, items);
+      } catch (error) {
+        console.warn("[YouTube Digest] Vocabulary cloud save failed:", error.message);
+      }
+    }
+    return { success: true, item };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
+async function handleGetVocabulary() {
+  try {
+    const namespace = await vocabularyNamespace();
+    const items = await readLocalVocabulary(namespace);
+    return { success: true, items };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
+async function handleDeleteVocabulary(id) {
+  try {
+    const namespace = await vocabularyNamespace();
+    const items = await readLocalVocabulary(namespace);
+    const target = items.find((item) => item.id === id);
+    const remaining = items.filter((item) => item.id !== id);
+    await writeLocalVocabulary(namespace, remaining);
+    const session = await getGithubSession();
+    if (session && target && target.cloudId) {
+      await cloudFetch("/api/vocabulary/" + encodeURIComponent(target.cloudId), {
+        method: "DELETE",
+        token: session.token,
+      }).catch((error) => {
+        console.warn("[YouTube Digest] Vocabulary cloud delete failed:", error.message);
+      });
+    }
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Review requires the cloud (scheduling lives server-side).
+ */
+async function handleGetDueReviews() {
+  const session = await getGithubSession();
+  if (!session) return { success: false, error: "NO_SESSION", message: "Sign in to review your vocabulary." };
+  try {
+    const data = await cloudFetch("/api/reviews/due", { token: session.token });
+    return { success: true, reviews: data && data.reviews ? data.reviews : [] };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
+async function handleSubmitReview(vocabId, grade) {
+  const session = await getGithubSession();
+  if (!session) return { success: false, error: "NO_SESSION", message: "Sign in to review your vocabulary." };
+  try {
+    const data = await cloudFetch("/api/reviews/" + encodeURIComponent(vocabId), {
+      method: "POST",
+      token: session.token,
+      body: { grade: Number(grade) },
+    });
+    return { success: true, review: data.review };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
 
 /**
  * One-time migration of the signed-out local notes into the account's
@@ -2049,6 +2379,14 @@ globalThis.__YTD_TRANSLATION_TESTING__ = {
   handleGetNotes,
   handleDeleteNote,
   migrateLegacyLocalNotes,
+  mergeVocabularyForSync,
+  handleExtractVocabulary,
+  handleSaveVocabulary,
+  handleGetVocabulary,
+  handleDeleteVocabulary,
+  fullSyncVocabulary,
+  handleGetDueReviews,
+  handleSubmitReview,
 };
 
 // Persistent OAuth completion listener. The service worker may be suspended

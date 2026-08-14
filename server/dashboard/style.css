@@ -170,6 +170,36 @@ select.status-select {
 .status-line { margin-top: 18px; color: var(--muted); font-size: 13px; min-height: 20px; }
 .status-line.error { color: #c0392b; }
 
+/* dashboard review */
+.review-card {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface);
+  padding: 26px 20px;
+  min-height: 170px;
+  display: grid;
+  gap: 12px;
+  text-align: center;
+  cursor: pointer;
+  align-content: center;
+}
+.review-term { font-size: 24px; font-weight: 800; }
+.review-sentence { color: var(--muted); font-style: italic; font-size: 14px; }
+.review-translation { color: var(--accent); font-weight: 700; font-size: 18px; }
+.review-explanation { color: var(--muted); font-size: 13px; }
+.review-actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 14px; }
+.review-progress { text-align: center; color: var(--muted); font-size: 13px; margin-top: 12px; }
+.grade-btn {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: 999px;
+  padding: 8px 18px;
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 13px;
+}
+.grade-btn:hover { border-color: var(--accent); }
+
 [hidden] { display: none !important; }
 
 @media (max-width: 560px) {

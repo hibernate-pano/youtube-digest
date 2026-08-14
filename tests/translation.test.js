@@ -442,7 +442,7 @@ test("all AI product requests use DeepSeek non-thinking and JSON behavior", asyn
   const backgroundSource = read("background.js");
   assert.equal(
     (backgroundSource.match(/await requestAiCompletion\(\{/g) || []).length,
-    4,
+    5,
   );
   assert.doesNotMatch(backgroundSource, /disableThinking/);
   for (const callPath of [
@@ -450,6 +450,7 @@ test("all AI product requests use DeepSeek non-thinking and JSON behavior", asyn
     "cleanupNoteText",
     "handleExplainSelection",
     "callAiTranslation",
+    "handleExtractVocabulary",
   ]) {
     assert.match(
       backgroundSource,
@@ -1001,5 +1002,118 @@ test("login migrates signed-out notes into the account namespace once", async ()
   // Second login does not import again.
   const again = await helpers.migrateLegacyLocalNotes(1001);
   assert.equal(again, 0);
+});
+
+
+// ============================================================
+// VOCABULARY + REVIEW TESTS
+// ============================================================
+
+test("mergeVocabularyForSync pulls, pushes, and propagates deletion", () => {
+  const helpers = loadBackgroundHelpers();
+  const local = [
+    { term: "serendipity", sentence: "A happy accident.", createdAt: 1000 },
+    { term: "ephemeral", sentence: "Fleeting.", cloudId: "uuid-gone", createdAt: 2000 },
+  ];
+  const cloud = [
+    { id: "uuid-c", term: "ephemeral", sentence: "Fleeting.", translation: "短暂的", sentenceTranslation: "", videoId: "", videoTitle: "", timestampSeconds: 0, status: "learning", createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z" },
+    { id: "uuid-d", term: "resilient", sentence: "Stay strong.", translation: "有韧性的", sentenceTranslation: "", videoId: "", videoTitle: "", timestampSeconds: 0, status: "learning", createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z" },
+  ];
+  const { mergedItems, toPush } = helpers.mergeVocabularyForSync(local, cloud);
+  // serendipity (new local) + ephemeral (cloud copy) + resilient (cloud only)
+  assert.equal(mergedItems.length, 3);
+  assert.equal(toPush.length, 1);
+  assert.equal(toPush[0].term, "serendipity");
+  const ephemeral = mergedItems.find((item) => item.term === "ephemeral");
+  assert.equal(ephemeral.cloudId, "uuid-c");
+  assert.equal(ephemeral.translation, "短暂的");
+});
+
+test("vocabulary save is local-only when signed out and namespaced when signed in", async () => {
+  const storageMock = createStorageMock();
+  const helpers = loadBackgroundHelpers({
+    fetchImpl: async (url, options) => {
+      throw new Error("no network expected");
+    },
+    storageMock,
+  });
+  const saved = await helpers.handleSaveVocabulary({
+    term: "insight",
+    translation: "洞察",
+    sentence: "She shared a deep insight.",
+    videoId: "abc123xyz",
+  });
+  assert.equal(saved.success, true);
+  const raw = await storageMock.get(null);
+  assert.equal(raw.ytd_vocabulary.length, 1);
+  assert.equal(raw.ytd_vocabulary[0].term, "insight");
+  assert.equal(raw.ytd_vocabulary[0].status, "learning");
+});
+
+test("vocabulary save mirrors to the cloud and records cloudId", async () => {
+  const requests = [];
+  const storageMock = createStorageMock();
+  await storageMock.set({
+    ytd_github_session: { token: "jwt-token", login: "alice", githubId: 1001, savedAt: Date.now() },
+  });
+  const helpers = loadBackgroundHelpers({
+    fetchImpl: async (url, options) => {
+      requests.push({ url, auth: options.headers.Authorization, body: JSON.parse(options.body) });
+      return { ok: true, json: async () => ({ vocabulary: { id: "uuid-v1" } }) };
+    },
+    storageMock,
+  });
+  const saved = await helpers.handleSaveVocabulary({
+    term: "resilient",
+    translation: "有韧性的",
+    sentence: "Be resilient.",
+    videoId: "abc123xyz",
+  });
+  assert.equal(saved.success, true);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, "https://sync.test/api/vocabulary");
+  assert.equal(requests[0].auth, "Bearer jwt-token");
+  assert.equal(requests[0].body.term, "resilient");
+  const raw = await storageMock.get(null);
+  assert.equal(raw.ytd_vocabulary_1001[0].cloudId, "uuid-v1");
+});
+
+test("reviews require a session and submit grades to the cloud", async () => {
+  const storageMock = createStorageMock();
+  const helpers = loadBackgroundHelpers({ storageMock });
+  const unsigned = await helpers.handleGetDueReviews();
+  assert.equal(unsigned.success, false);
+  assert.equal(unsigned.error, "NO_SESSION");
+
+  const requests = [];
+  await storageMock.set({
+    ytd_github_session: { token: "jwt-token", login: "alice", githubId: 1001, savedAt: Date.now() },
+  });
+  const signedIn = loadBackgroundHelpers({
+    fetchImpl: async (url, options) => {
+      requests.push({ url, method: options.method, body: options.body ? JSON.parse(options.body) : null });
+      if (options.method === "GET") {
+        return {
+          ok: true,
+          json: async () => ({
+            reviews: [{ review: { dueAt: "2026-01-01T00:00:00Z", intervalDays: 0, ease: 2.5, reps: 0 }, vocabulary: { id: "uuid-v1", term: "resilient", translation: "有韧性的", sentence: "Be resilient." } }],
+          }),
+        };
+      }
+      return { ok: true, json: async () => ({ review: { intervalDays: 2, reps: 1 } }) };
+    },
+    storageMock,
+  });
+  const due = await signedIn.handleGetDueReviews();
+  assert.equal(due.success, true);
+  assert.equal(due.reviews.length, 1);
+  assert.equal(due.reviews[0].vocabulary.term, "resilient");
+
+  const graded = await signedIn.handleSubmitReview("uuid-v1", 4);
+  assert.equal(graded.success, true);
+  assert.equal(graded.review.intervalDays, 2);
+  assert.equal(requests[1].url, "https://sync.test/api/reviews/uuid-v1");
+  assert.equal(requests[1].method, "POST");
+  assert.equal(requests[1].body.grade, 4);
 });
 

@@ -190,6 +190,63 @@
     }
   }
 
+  const dashReviewState = { queue: [], index: 0, revealed: false };
+
+  async function loadDueReviews() {
+    const countEl = $("reviewCount");
+    const empty = $("reviewEmpty");
+    const card = $("reviewCard");
+    const actions = $("dashReviewActions");
+    try {
+      const data = await api("/api/reviews/due");
+      dashReviewState.queue = data.reviews || [];
+      dashReviewState.index = 0;
+      dashReviewState.revealed = false;
+      countEl.textContent = dashReviewState.queue.length
+        ? String(dashReviewState.queue.length) + " due"
+        : "";
+      empty.hidden = dashReviewState.queue.length > 0;
+      card.hidden = dashReviewState.queue.length === 0;
+      actions.hidden = dashReviewState.queue.length === 0;
+      $("dashReviewProgress").textContent = "";
+      if (dashReviewState.queue.length) renderDashReviewCard();
+    } catch (error) {
+      statusLine(error.message, true);
+    }
+  }
+
+  function renderDashReviewCard() {
+    const review = dashReviewState.queue[dashReviewState.index];
+    if (!review) {
+      void loadDueReviews();
+      return;
+    }
+    dashReviewState.revealed = false;
+    $("dashReviewTerm").textContent = review.vocabulary.term;
+    $("dashReviewSentence").textContent = review.vocabulary.sentence || "";
+    $("dashReviewTranslation").textContent = review.vocabulary.translation || "";
+    $("dashReviewExplanation").textContent = review.vocabulary.sentenceTranslation || "";
+    $("dashReviewTranslation").hidden = true;
+    $("dashReviewExplanation").hidden = true;
+    $("dashReviewProgress").textContent =
+      "Card " + (dashReviewState.index + 1) + " of " + dashReviewState.queue.length;
+  }
+
+  async function submitDashReview(grade) {
+    const review = dashReviewState.queue[dashReviewState.index];
+    if (!review) return;
+    try {
+      await api("/api/reviews/" + review.vocabulary.id, {
+        method: "POST",
+        body: { grade },
+      });
+      dashReviewState.index += 1;
+      renderDashReviewCard();
+    } catch (error) {
+      statusLine(error.message, true);
+    }
+  }
+
   function renderAll() {
     const favorites = STATE.notes.filter((note) => note.starred);
     renderNotes(STATE.notes, "notesList", "notesEmpty", "notesCount");
@@ -222,6 +279,8 @@
     $("notesPanel").hidden = false;
     $("favoritesPanel").hidden = false;
     $("vocabularyPanel").hidden = false;
+    $("reviewPanel").hidden = false;
+    void loadDueReviews();
   }
 
   function showSignedOut() {
@@ -232,6 +291,7 @@
     $("notesPanel").hidden = true;
     $("favoritesPanel").hidden = true;
     $("vocabularyPanel").hidden = true;
+    $("reviewPanel").hidden = true;
   }
 
   function signOut() {
@@ -248,6 +308,8 @@
     $("notesPanel").hidden = tab !== "notes";
     $("favoritesPanel").hidden = tab !== "favorites";
     $("vocabularyPanel").hidden = tab !== "vocabulary";
+    $("reviewPanel").hidden = tab !== "review";
+    if (tab === "review") void loadDueReviews();
   }
 
   async function boot() {
@@ -280,6 +342,17 @@
     });
     document.querySelectorAll(".tab").forEach((button) => {
       button.addEventListener("click", () => switchTab(button.dataset.tab));
+    });
+    $("reviewCard").addEventListener("click", () => {
+      if (dashReviewState.revealed) return;
+      dashReviewState.revealed = true;
+      $("dashReviewTranslation").hidden = false;
+      $("dashReviewExplanation").hidden = false;
+    });
+    document.querySelectorAll("#dashReviewActions .grade-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        void submitDashReview(Number(btn.dataset.grade));
+      });
     });
     void boot();
   });

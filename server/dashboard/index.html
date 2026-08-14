@@ -24,6 +24,7 @@
         <button class="tab active" data-tab="notes">Notes</button>
         <button class="tab" data-tab="favorites">★ Favorites</button>
         <button class="tab" data-tab="vocabulary">Vocabulary</button>
+        <button class="tab" data-tab="review">Review</button>
       </nav>
 
       <section id="signedOut" class="signed-out" hidden>
@@ -61,6 +62,27 @@
         </div>
         <div class="empty" id="vocabularyEmpty" hidden>No saved words yet. The extension will let you capture them soon.</div>
         <div id="vocabularyList" class="cards"></div>
+      </section>
+
+      <section id="reviewPanel" hidden>
+        <div class="list-head">
+          <h2>Review due words</h2>
+          <span class="count" id="reviewCount"></span>
+        </div>
+        <div class="empty" id="reviewEmpty" hidden>Nothing due right now. New words become due immediately after you add them.</div>
+        <div id="reviewCard" class="review-card" hidden>
+          <div class="review-term" id="dashReviewTerm"></div>
+          <div class="review-sentence" id="dashReviewSentence"></div>
+          <div class="review-translation" id="dashReviewTranslation" hidden></div>
+          <div class="review-explanation" id="dashReviewExplanation" hidden></div>
+        </div>
+        <div class="review-actions" id="dashReviewActions" hidden>
+          <button class="grade-btn" data-grade="1" type="button">Again</button>
+          <button class="grade-btn" data-grade="2" type="button">Hard</button>
+          <button class="grade-btn" data-grade="3" type="button">Good</button>
+          <button class="grade-btn" data-grade="5" type="button">Easy</button>
+        </div>
+        <div class="review-progress" id="dashReviewProgress"></div>
       </section>
 
       <div class="status-line" id="statusLine" role="status" aria-live="polite"></div>
