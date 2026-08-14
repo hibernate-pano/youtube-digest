@@ -74,7 +74,9 @@ async function handleLogin(ctx) {
     scope: "read:user",
   });
   const response = redirect(authorizeUrl);
-  response.headers.set(
+  // Two Set-Cookie headers must be appended, not set: set() would replace
+  // the first header with the second, silently dropping the CSRF state.
+  response.headers.append(
     "Set-Cookie",
     auth.setCookie(STATE_COOKIE, state, {
       httpOnly: true,
@@ -85,7 +87,7 @@ async function handleLogin(ctx) {
   );
   const postLoginPath = safeRedirectPath(url.searchParams.get("redirect"));
   if (postLoginPath) {
-    response.headers.set(
+    response.headers.append(
       "Set-Cookie",
       auth.setCookie(REDIRECT_COOKIE, postLoginPath, {
         httpOnly: true,
@@ -127,12 +129,12 @@ async function handleCallback(ctx) {
   const postLoginPath = safeRedirectPath(cookies[REDIRECT_COOKIE]);
   const completePath = postLoginPath || "/auth/complete";
   const response = redirect(origin + completePath + "#access_token=" + token);
-  response.headers.set(
+  response.headers.append(
     "Set-Cookie",
     auth.setCookie(STATE_COOKIE, "", { httpOnly: true, sameSite: "Lax", path: "/", maxAgeSeconds: 0 }),
   );
   if (postLoginPath) {
-    response.headers.set(
+    response.headers.append(
       "Set-Cookie",
       auth.setCookie(REDIRECT_COOKIE, "", { httpOnly: true, sameSite: "Lax", path: "/", maxAgeSeconds: 0 }),
     );

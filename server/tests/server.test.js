@@ -310,9 +310,16 @@ test("notes can be starred and unstarred by their owner only", async () => {
 test("OAuth login honors only same-origin redirect paths", async () => {
   const env = makeEnv();
   const login = await api(env, "GET", "/api/auth/login?redirect=/dashboard");
-  const cookies = login.response.headers.get("set-cookie") || "";
-  assert.match(cookies, /ytd_oauth_redirect=%2Fdashboard/);
-  assert.match(cookies, /HttpOnly/);
+  const setCookieHeaders = login.response.headers.getSetCookie
+    ? login.response.headers.getSetCookie()
+    : [login.response.headers.get("set-cookie") || ""];
+  const joined = setCookieHeaders.join("\n");
+  // Both cookies must survive: a single Set-Cookie header would have been
+  // overwritten by the second one (the bug that broke dashboard sign-in).
+  assert.equal(setCookieHeaders.length, 2, joined);
+  assert.match(joined, /ytd_oauth_state=/);
+  assert.match(joined, /ytd_oauth_redirect=%2Fdashboard/);
+  assert.match(joined, /HttpOnly/);
 
   const evil = await api(env, "GET", "/api/auth/login?redirect=https://evil.example");
   const evilCookies = evil.response.headers.get("set-cookie") || "";
