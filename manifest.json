@@ -12,7 +12,7 @@
     "https://api.minimaxi.com/*",
     "https://opencode.ai/zen/go/*",
     "http://localhost:8787/*",
-    "https://youtube-digest-server.panbo362472407.workers.dev/*"
+    "https://ytd.panbo.space/*"
   ],
   "action": {
     "default_title": "Open YouTube Digest",

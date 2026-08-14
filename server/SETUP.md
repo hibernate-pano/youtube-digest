@@ -90,7 +90,7 @@ package`) and reload it in Chrome.
 ## User dashboard
 
 The same Worker also serves a personal dashboard at
-`https://youtube-digest-server.panbo362472407.workers.dev/` (static assets
+`https://ytd.panbo.space/` (static assets
 from `server/dashboard/` via the Workers Assets binding, same origin as the
 API). Any extension user can sign in with GitHub there and see their own
 notes, favorites (starred notes), and vocabulary. Login uses

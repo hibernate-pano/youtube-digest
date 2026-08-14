@@ -23,7 +23,7 @@ Depending on the feature you use, YouTube Digest handles:
 ### GitHub sync (optional)
 
 If you sign in with GitHub, your saved notes are mirrored to the YouTube Digest sync
-service at `https://youtube-digest-server.panbo362472407.workers.dev` (a Cloudflare
+service at `https://ytd.panbo.space` (a Cloudflare
 Worker backed by a Neon PostgreSQL database). Sign-in uses the GitHub OAuth web
 flow: GitHub sends the OAuth code only to that Worker, which exchanges it with
 GitHub using the client secret and then issues a short-lived token the extension
