@@ -3,13 +3,6 @@ main = "src/entry.mjs"
 compatibility_date = "2026-08-01"
 
 # Account id is read from wrangler login / CLOUDFLARE_ACCOUNT_ID at deploy time.
-# vars are NOT secrets; put GITHUB_CLIENT_SECRET and DATABASE_URL in .dev.vars
-# locally and as Worker secrets in production.
-[vars]
-GITHUB_CLIENT_ID = ""
-APP_BASE_URL = "http://localhost:8787"
-
-# Production secrets (set with: wrangler secret put GITHUB_CLIENT_SECRET ...):
-#   GITHUB_CLIENT_SECRET
-#   JWT_SECRET
-#   DATABASE_URL (Neon connection string; omit to run the in-memory dev store)
+# No [vars] here: OAuth client id/secret and the database URL are configured
+# as Worker secrets (wrangler secret put) so they never enter git. For local
+# development, copy server/.dev.vars.example to server/.dev.vars and fill it in.
