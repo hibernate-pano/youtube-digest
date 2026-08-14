@@ -406,7 +406,6 @@ const YTD_OPTIONS = (() => {
     const saveStatus = doc.getElementById("saveStatus");
     const dataStatus = doc.getElementById("dataStatus");
     const githubAccount = doc.getElementById("githubAccount");
-    const githubAvatar = doc.getElementById("githubAvatar");
     const githubLoginName = doc.getElementById("githubLoginName");
     const githubLoginBtn = doc.getElementById("githubLoginBtn");
     const githubLogoutBtn = doc.getElementById("githubLogoutBtn");

@@ -2,18 +2,16 @@ name = "youtube-digest-server"
 main = "src/entry.mjs"
 compatibility_date = "2026-08-01"
 
+# Custom domain is managed via the Cloudflare dashboard / API
+# (CNAME ytd.panbo.space -> youtube-digest-server.panbo362472407.workers.dev
+# plus a zone worker route). No routes block here on purpose.
+
 # User dashboard: static assets served from the same origin as the API.
 # /api/* runs the Worker first; everything else is served from Assets.
 [assets]
 directory = "./dashboard"
 binding = "ASSETS"
 run_worker_first = ["/api/*"]
-
-# Custom domain: ytd.panbo.space (created on deploy when the zone is on the
-# same Cloudflare account).
-routes = [
-  { pattern = "ytd.panbo.space", custom_domain = true },
-]
 
 # Account id is read from wrangler login / CLOUDFLARE_ACCOUNT_ID at deploy time.
 # No [vars] here: OAuth client id/secret and the database URL are configured

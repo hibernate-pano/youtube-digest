@@ -58,7 +58,6 @@ body {
   font-weight: 700;
   font-size: 14px;
 }
-.user-chip img { border-radius: 50%; border: 1px solid var(--border); }
 .ghost-btn {
   border: 1px solid var(--border);
   background: transparent;

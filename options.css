@@ -408,13 +408,6 @@ button.danger {
   display: none;
 }
 
-.github-avatar {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  border: 1px solid var(--border);
-}
-
 .github-login {
   font-weight: 800;
   flex: 1;
