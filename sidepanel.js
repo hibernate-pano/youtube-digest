@@ -418,16 +418,6 @@ function setupEventListeners() {
     chrome.runtime.sendMessage({ action: "openOptions" });
   });
 
-  // Vocabulary extraction modal (triggered by the ＋ Word button)
-  document.getElementById("vocabCancelBtn")?.addEventListener("click", () => {
-    document.getElementById("vocabExtractModal").hidden = true;
-    extractCandidates = [];
-    extractSegment = null;
-  });
-  document.getElementById("vocabSaveBtn")?.addEventListener("click", () => {
-    void saveExtractCandidates();
-  });
-
   // GitHub sync: sign-in opens the OAuth flow; the account button signs out.
   document.getElementById("syncBtn")?.addEventListener("click", () => {
     chrome.runtime.sendMessage({ action: "startGithubLogin" });
@@ -1047,121 +1037,6 @@ function switchTab(tabName) {
     triggerAnalysis();
   }
 
-  // Lazy-load vocabulary list when the user opens the Words tab
-}
-
-// ============================================================
-// --- extraction modal ---
-
-let extractCandidates = [];
-let extractSegment = null;
-
-async function addWordForSegment(segment) {
-  if (!segment || !segment.text) return;
-  extractSegment = segment;
-  const hint = document.getElementById("vocabExtractHint");
-  const modal = document.getElementById("vocabExtractModal");
-  const saveBtn = document.getElementById("vocabSaveBtn");
-  hint.textContent = "Extracting from: " + segment.text.slice(0, 120) + "…";
-  modal.hidden = false;
-  saveBtn.disabled = true;
-  document.getElementById("vocabCandidates").innerHTML =
-    '<div class="word-sentence">Analyzing…</div>';
-  try {
-    const result = await chrome.runtime.sendMessage({
-      action: "extractVocabulary",
-      sentence: segment.text,
-    });
-    if (!result || !result.success) {
-      document.getElementById("vocabCandidates").innerHTML =
-        '<div class="word-sentence">' +
-        escapeHtml((result && result.message) || (result && result.error) || "Extraction failed") +
-        "</div>";
-      extractCandidates = [];
-      return;
-    }
-    extractCandidates = result.words || [];
-    renderExtractCandidates();
-    saveBtn.disabled = extractCandidates.length === 0;
-  } catch (error) {
-    document.getElementById("vocabCandidates").innerHTML =
-      '<div class="word-sentence">' + escapeHtml(error.message || "Extraction failed") + "</div>";
-    extractCandidates = [];
-    saveBtn.disabled = true;
-  }
-}
-
-function renderExtractCandidates() {
-  const container = document.getElementById("vocabCandidates");
-  container.innerHTML = "";
-  if (extractCandidates.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "word-sentence";
-    empty.textContent = "No new words found in this sentence.";
-    container.appendChild(empty);
-    return;
-  }
-  extractCandidates.forEach((candidate, index) => {
-    const box = document.createElement("div");
-    box.className = "vocab-candidate";
-    const termInput = document.createElement("input");
-    termInput.type = "text";
-    termInput.value = candidate.term;
-    termInput.setAttribute("aria-label", "Word " + (index + 1));
-    termInput.addEventListener("input", () => {
-      candidate.term = termInput.value;
-    });
-    const translationInput = document.createElement("input");
-    translationInput.type = "text";
-    translationInput.value = candidate.translation;
-    translationInput.setAttribute("aria-label", "Translation " + (index + 1));
-    translationInput.addEventListener("input", () => {
-      candidate.translation = translationInput.value;
-    });
-    const explanationInput = document.createElement("input");
-    explanationInput.type = "text";
-    explanationInput.value = candidate.explanation;
-    explanationInput.setAttribute("aria-label", "Explanation " + (index + 1));
-    explanationInput.addEventListener("input", () => {
-      candidate.explanation = explanationInput.value;
-    });
-    const row1 = document.createElement("div");
-    row1.className = "vocab-candidate-row";
-    row1.appendChild(termInput);
-    const row2 = document.createElement("div");
-    row2.className = "vocab-candidate-row";
-    row2.appendChild(translationInput);
-    const row3 = document.createElement("div");
-    row3.className = "vocab-candidate-row";
-    row3.appendChild(explanationInput);
-    box.append(row1, row2, row3);
-    container.appendChild(box);
-  });
-}
-
-async function saveExtractCandidates() {
-  if (!extractSegment) return;
-  let saved = 0;
-  for (const candidate of extractCandidates) {
-    const term = (candidate.term || "").trim();
-    if (!term) continue;
-    const result = await chrome.runtime.sendMessage({
-      action: "saveVocabulary",
-      entry: {
-        term,
-        translation: candidate.translation,
-        explanation: candidate.explanation,
-        sentence: extractSegment.text,
-        videoId: currentVideoId,
-        videoTitle: currentVideoTitle,
-        timestampSeconds: extractSegment.start,
-      },
-    });
-    if (result && result.success) saved += 1;
-  }
-  document.getElementById("vocabExtractModal").hidden = true;
-  extractCandidates = [];
-  extractSegment = null;
 }
 
 /**
@@ -2099,15 +1974,9 @@ function renderTranscriptModeRows(segments, mode) {
     div.innerHTML = 
       '<span class="transcript-time">' + timestamp + '</span>' +
       renderTranscriptSegmentContent(segment, mode, cached, "") +
-      '<button class="word-add-btn" type="button" title="Add key words of this sentence to your vocabulary">＋ Word</button>';
     div.addEventListener("click", (event) =>
       seekFromTranscriptEntryClick(event, segment.start),
     );
-    div.querySelector(".word-add-btn").addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      addWordForSegment(segment);
-    });
     transcriptList.appendChild(div);
     rows.push(div);
   });

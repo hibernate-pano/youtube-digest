@@ -1342,73 +1342,8 @@ body {
   background: var(--accent-dim);
 }
 /* extraction modal */
-.vocab-modal {
-  position: fixed;
-  inset: 0;
-  background: rgba(20, 14, 10, 0.45);
-  display: grid;
-  place-items: center;
-  z-index: 50;
-  padding: 16px;
-}
-.vocab-modal[hidden] { display: none; }
-.vocab-modal-box {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: 18px;
-  width: 100%;
-  max-width: 440px;
-  display: grid;
-  gap: 12px;
-  max-height: 80vh;
-  overflow-y: auto;
-}
-.vocab-modal-title { font-weight: 800; font-size: 15px; }
-.vocab-modal-hint { color: var(--text-muted); font-size: 12px; }
-.vocab-candidate {
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 10px 12px;
-  display: grid;
-  gap: 6px;
-}
-.vocab-candidate input {
-  width: 100%;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 6px 8px;
-  font: inherit;
-  font-size: 13px;
-  background: var(--surface);
-  color: var(--text);
-}
-.vocab-candidate-row { display: flex; gap: 8px; }
-.vocab-modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.primary-btn {
-  border-radius: 999px;
-  padding: 8px 18px;
-  border: 1px solid var(--accent);
-  background: var(--accent);
-  color: #fff;
-  font-weight: 700;
-  cursor: pointer;
-  font-size: 13px;
-}
 
 /* floating add-word button on transcript rows */
-.word-add-btn {
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--surface);
-  color: var(--text-muted);
-  cursor: pointer;
-  font-size: 11px;
-  padding: 1px 8px;
-  margin-left: 6px;
-  flex-shrink: 0;
-}
-.word-add-btn:hover { color: var(--accent); border-color: var(--accent); }
 
 
 /* note editing */
