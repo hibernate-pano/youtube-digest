@@ -40,12 +40,19 @@ Chrome extension (options page)                          Cloudflare Worker
 
 1. Create a project at https://neon.tech (free tier is fine).
 2. Copy the pooled connection string from the dashboard.
-3. Apply the schema (from this directory):
+3. Put it in the repo root `.env` as `NEON_URL=...` (already gitignored).
+   Important: Neon URLs contain `&` (e.g. `?sslmode=require&channel_binding=require`).
+   In a shell, `&` is a command separator, so a bare `source .env` would not
+   set the variable. Either quote the value in `.env`
+   (`NEON_URL="postgresql://...&channel_binding=require"`) or export it with:
+   `export NEON_URL=$(grep '^NEON_URL=' .env | cut -d= -f2- | tr -d '"')`.
+4. Apply the schema (from this directory):
 
 ```bash
 cd server
 npm install
-DATABASE_URL='postgres://...' npm run db:migrate
+export NEON_URL=$(grep '^NEON_URL=' ../.env | cut -d= -f2- | tr -d '"')
+npm run db:migrate
 ```
 
 ## 3. Configure and run locally
