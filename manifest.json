@@ -10,7 +10,9 @@
     "https://api.supadata.ai/*",
     "https://api.deepseek.com/*",
     "https://api.minimaxi.com/*",
-    "https://opencode.ai/zen/go/*"
+    "https://opencode.ai/zen/go/*",
+    "http://localhost:8787/*",
+    "https://ytd-api.panbo.workers.dev/*"
   ],
   "action": {
     "default_title": "Open YouTube Digest",

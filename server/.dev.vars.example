@@ -1,0 +1,8 @@
+# Copy to .dev.vars and fill in. .dev.vars is gitignored.
+GITHUB_CLIENT_ID=Ov23li-example
+GITHUB_CLIENT_SECRET=example-secret
+# Generate with: openssl rand -hex 32
+JWT_SECRET=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+# Neon serverless Postgres connection string (pooled). Omit to use the
+# in-memory dev store for local experiments.
+DATABASE_URL=postgres://user:password@ep-example-123456-pooler.us-east-1.aws.neon.tech/neondb?sslmode=require

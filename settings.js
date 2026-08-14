@@ -8,6 +8,16 @@ var YTD_SETTINGS = (() => {
   const STORAGE_KEY = "ytd_settings";
 
   /**
+   * Cloud sync backend (GitHub account sync for notes, vocabulary, and
+   * review progress). This is the Cloudflare Worker URL; the extension never
+   * holds OAuth secrets — it only stores the bearer token issued after login.
+   * Local development: set this to "http://localhost:8787" and run
+   * "npm run dev" inside server/.
+   */
+  const SERVER_BASE_URL = "https://ytd-api.panbo.workers.dev";
+  const GITHUB_SESSION_KEY = "ytd_github_session";
+
+  /**
    * Registry of supported AI providers. Base URLs and models are fixed for
    * each provider so users never configure them by hand. API key fields are
    * stored side by side so users can switch providers without re-entering keys.
@@ -117,6 +127,8 @@ var YTD_SETTINGS = (() => {
 
   return {
     STORAGE_KEY,
+    SERVER_BASE_URL,
+    GITHUB_SESSION_KEY,
     PROVIDERS,
     KEY_FIELDS,
     getProvider,

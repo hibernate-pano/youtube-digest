@@ -397,6 +397,42 @@ button.danger {
   color: var(--danger);
 }
 
+#githubAccount {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+#githubAccount[hidden] {
+  display: none;
+}
+
+.github-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+}
+
+.github-login {
+  font-weight: 800;
+  flex: 1;
+}
+
+#githubLoginBtn {
+  display: inline-block;
+}
+
+#githubLoginBtn[hidden] {
+  display: none;
+}
+
+#githubStatus {
+  color: var(--muted);
+  margin-left: 10px;
+}
+
 #saveStatus,
 #dataStatus,
 #copyStatus {

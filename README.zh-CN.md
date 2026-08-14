@@ -104,6 +104,10 @@ OpenCode Go: Base URL https://opencode.ai/zen/go/v1     Model deepseek-v4-flash
 
 API Key 和设置保存在你设备上的 Chrome 扩展本地存储中。发布包不会包含或使用 `config.js`。
 
+## 可选的 GitHub 同步(开发中)
+
+在设置中使用 GitHub 登录,可以把你的笔记、生词和复习进度备份到自己的 GitHub 账户。每个账户的数据在服务端相互隔离,换一个账户登录即可切换学习者档案。同步是可选的:不登录时,所有数据仍只保存在本机,与之前完全一致;AI 和字幕请求也完全不经过同步服务。
+
 ## 使用 YouTube Digest
 
 1. 打开一个有字幕的普通 YouTube 视频页面。

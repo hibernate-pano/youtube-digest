@@ -18,6 +18,9 @@ skills-lock.json
 node_modules/
 dist/
 
+# Server secrets (GitHub OAuth client secret, JWT secret, Neon URL)
+server/.dev.vars
+
 # Environment
 .env
 .env.*

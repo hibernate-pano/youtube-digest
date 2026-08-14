@@ -104,6 +104,10 @@ Keys for all three providers can be saved at once and you switch providers from 
 
 Keys and settings are stored in Chrome's local extension storage on your device. Release builds do not include or use `config.js`.
 
+## Optional GitHub sync (under development)
+
+Sign in with GitHub from Settings to back up your notes, vocabulary, and review progress to your own GitHub account. Every account's data is isolated server-side, and signing in with a different account switches learner profiles. Sync is optional: without signing in, everything stays on this device exactly as before, and AI/transcript requests never involve the sync service.
+
 ## Use YouTube Digest
 
 1. Open a standard YouTube watch page with captions.

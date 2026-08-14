@@ -229,6 +229,42 @@
           </div>
         </section>
 
+        <section class="card">
+          <h2 data-i18n="githubSync">GitHub sync</h2>
+          <p class="help" data-i18n="githubSyncIntro">
+            Sign in with GitHub to back up your notes, vocabulary, and review
+            progress. Every GitHub account has its own isolated data. Sign in
+            with a different account to switch learner profiles.
+          </p>
+          <div id="githubAccount" hidden>
+            <img
+              id="githubAvatar"
+              alt=""
+              width="32"
+              height="32"
+              class="github-avatar"
+            />
+            <span id="githubLoginName" class="github-login"></span>
+            <button
+              id="githubLogoutBtn"
+              class="secondary"
+              type="button"
+              data-i18n="githubLogout"
+            >
+              Sign out
+            </button>
+          </div>
+          <button
+            id="githubLoginBtn"
+            class="primary"
+            type="button"
+            data-i18n="githubLogin"
+          >
+            Sign in with GitHub
+          </button>
+          <span id="githubStatus" role="status" aria-live="polite"></span>
+        </section>
+
         <div class="form-actions">
           <button class="primary" type="submit" data-i18n="saveSettings">
             Save settings

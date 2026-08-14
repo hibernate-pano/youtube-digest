@@ -39,6 +39,14 @@ const YTD_OPTIONS = (() => {
       opencodeGoPrivacyNote:
         "When you use AI features, the OpenCode Go service receives the video transcript and relevant video context. Review its terms and pricing before saving.",
       saveSettings: "Save settings",
+      githubSync: "GitHub sync",
+      githubSyncIntro:
+        "Sign in with GitHub to back up your notes, vocabulary, and review progress. Every GitHub account has its own isolated data. Sign in with a different account to switch learner profiles.",
+      githubLogin: "Sign in with GitHub",
+      githubLogout: "Sign out",
+      githubLoginFailed: "GitHub sign-in failed. Please try again.",
+      githubSessionExpired: "Your session expired. Sign in again.",
+      githubSignedOut: "Signed out. Your local data stays on this device.",
       localRemix: "Local remix",
       customizationTitle: "Want to use another AI model?",
       customizationPurpose: "Edit and copy a safe prompt for your coding agent",
@@ -120,6 +128,14 @@ const YTD_OPTIONS = (() => {
       opencodeGoPrivacyNote:
         "使用 AI 功能时，OpenCode Go 服务会收到视频字幕及相关视频上下文。保存前请查看其服务条款和价格。",
       saveSettings: "保存设置",
+      githubSync: "GitHub 同步",
+      githubSyncIntro:
+        "使用 GitHub 登录,备份你的笔记、生词和复习进度。每个 GitHub 账户的数据相互隔离,换一个账户登录即可切换学习者档案。",
+      githubLogin: "使用 GitHub 登录",
+      githubLogout: "退出登录",
+      githubLoginFailed: "GitHub 登录失败,请重试。",
+      githubSessionExpired: "登录已过期,请重新登录。",
+      githubSignedOut: "已退出登录。本地数据仍保留在这台设备上。",
       localRemix: "本地改造",
       customizationTitle: "想使用其他 AI 模型？",
       customizationPurpose: "编辑并复制一段可安全交给编程 Agent 的提示词",
@@ -389,6 +405,12 @@ const YTD_OPTIONS = (() => {
     const copyStatus = doc.getElementById("copyStatus");
     const saveStatus = doc.getElementById("saveStatus");
     const dataStatus = doc.getElementById("dataStatus");
+    const githubAccount = doc.getElementById("githubAccount");
+    const githubAvatar = doc.getElementById("githubAvatar");
+    const githubLoginName = doc.getElementById("githubLoginName");
+    const githubLoginBtn = doc.getElementById("githubLoginBtn");
+    const githubLogoutBtn = doc.getElementById("githubLogoutBtn");
+    const githubStatus = doc.getElementById("githubStatus");
     const languageButtons = [...doc.querySelectorAll("[data-language]")];
     const statusStates = new Map();
     const promptDrafts = createPromptDrafts();
@@ -408,6 +430,103 @@ const YTD_OPTIONS = (() => {
       for (const field of providerFields) {
         field.hidden = field.dataset.providerField !== providerId;
       }
+    }
+
+    async function fetchGithubProfile(token) {
+      const response = await root.fetch(
+        settingsApi.SERVER_BASE_URL + "/api/me",
+        { headers: { Authorization: "Bearer " + token } },
+      );
+      if (!response.ok) return null;
+      const data = await response.json();
+      return data && data.user ? data.user : null;
+    }
+
+    function renderGithubSignedIn(login) {
+      githubAccount.hidden = false;
+      githubLoginBtn.hidden = true;
+      githubLoginName.textContent = login;
+    }
+
+    function renderGithubSignedOut() {
+      githubAccount.hidden = true;
+      githubLoginBtn.hidden = false;
+      githubLoginName.textContent = "";
+    }
+
+    async function loadGithubAccount() {
+      const stored = await storage.get(settingsApi.GITHUB_SESSION_KEY);
+      const session = stored[settingsApi.GITHUB_SESSION_KEY];
+      if (!session || !session.token) {
+        renderGithubSignedOut();
+        return;
+      }
+      renderGithubSignedIn(session.login || "GitHub");
+      try {
+        const profile = await fetchGithubProfile(session.token);
+        if (profile) {
+          await storage.set({
+            [settingsApi.GITHUB_SESSION_KEY]: {
+              ...session,
+              login: profile.login,
+              githubId: profile.githubId,
+            },
+          });
+          renderGithubSignedIn(profile.login);
+        } else {
+          // The server rejected the token: treat the session as expired.
+          await storage.remove(settingsApi.GITHUB_SESSION_KEY);
+          renderGithubSignedOut();
+          setStatus(githubStatus, "githubSessionExpired");
+        }
+      } catch (_error) {
+        // Server unreachable: keep the cached identity and stay signed in.
+      }
+    }
+
+    async function finalizeGithubLogin(token, tabId) {
+      try {
+        const profile = await fetchGithubProfile(token);
+        if (!profile) throw new Error("Profile unavailable");
+        await storage.set({
+          [settingsApi.GITHUB_SESSION_KEY]: {
+            token,
+            login: profile.login,
+            githubId: profile.githubId,
+            savedAt: Date.now(),
+          },
+        });
+        renderGithubSignedIn(profile.login);
+        try {
+          await root.chrome?.tabs?.remove?.(tabId);
+        } catch (_error) {
+          // The tab may already be closed by the user.
+        }
+      } catch (_error) {
+        setStatus(githubStatus, "githubLoginFailed");
+      }
+    }
+
+    async function startGithubLogin() {
+      const loginUrl = settingsApi.SERVER_BASE_URL + "/api/auth/login";
+      const tab = await root.chrome.tabs.create({ url: loginUrl });
+      const marker = settingsApi.SERVER_BASE_URL + "/auth/complete#access_token=";
+      const onUpdated = (tabId, changeInfo, updatedTab) => {
+        const url =
+          (updatedTab && updatedTab.url) ||
+          (changeInfo && changeInfo.url) ||
+          "";
+        if (tabId !== tab.id || !url.startsWith(marker)) return;
+        root.chrome.tabs.onUpdated.removeListener(onUpdated);
+        finalizeGithubLogin(url.slice(marker.length), tabId);
+      };
+      root.chrome.tabs.onUpdated.addListener(onUpdated);
+    }
+
+    async function logoutGithub() {
+      await storage.remove(settingsApi.GITHUB_SESSION_KEY);
+      renderGithubSignedOut();
+      setStatus(githubStatus, "githubSignedOut");
     }
 
     function renderStatus(element) {
@@ -486,6 +605,7 @@ const YTD_OPTIONS = (() => {
     }
 
     async function loadOptions() {
+      void loadGithubAccount();
       try {
         applyLanguage(await readPreferredLanguage(storage));
       } catch (_error) {
@@ -559,6 +679,9 @@ const YTD_OPTIONS = (() => {
       await loadSettings();
       setStatus(dataStatus, "allDataDeleted");
     }
+
+    githubLoginBtn.addEventListener("click", startGithubLogin);
+    githubLogoutBtn.addEventListener("click", logoutGithub);
 
     form.addEventListener("submit", saveSettings);
     for (const radio of providerRadios) {
