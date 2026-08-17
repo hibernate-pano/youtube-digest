@@ -21,6 +21,9 @@ dist/
 # Server secrets (GitHub OAuth client secret, JWT secret, Neon URL)
 server/.dev.vars
 
+# Local database backups (contain user data — never commit)
+server/backups/
+
 # Environment
 .env
 .env.*

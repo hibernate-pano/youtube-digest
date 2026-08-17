@@ -189,6 +189,9 @@ const ROUTES = [
   { method: "GET", pattern: "/auth/complete", handler: handleComplete, public: true },
   { method: "GET", pattern: "/api/me", handler: meRoutes.me },
   { method: "GET", pattern: "/api/sync", handler: meRoutes.syncDelta },
+  { method: "GET", pattern: "/api/export", handler: meRoutes.exportData },
+  { method: "DELETE", pattern: "/api/account", handler: meRoutes.deleteAccount },
+  { method: "GET", pattern: "/api/status", handler: handleStatus, public: true },
   { method: "GET", pattern: "/api/notes", handler: notes.listNotes },
   { method: "POST", pattern: "/api/notes", handler: notes.createNote },
   { method: "PATCH", pattern: "/api/notes/:id", handler: notes.updateNote },
@@ -225,6 +228,37 @@ function matchRoute(method, pathname) {
   return null;
 }
 
+const STARTED_AT = Date.now();
+
+/**
+ * In-memory ring buffer of recent server errors so the service owner can
+ * see failures without log access (see /api/status). Messages are trimmed;
+ * no tokens or user content are stored.
+ */
+const recentErrors = [];
+
+function recordError(request, error) {
+  try {
+    const path = new URL(request.url).pathname;
+    recentErrors.push({
+      at: new Date().toISOString(),
+      path,
+      message: String((error && error.message) || error || "unknown error").slice(0, 300),
+    });
+    if (recentErrors.length > 50) recentErrors.shift();
+  } catch {
+    // Never let diagnostics break the error path.
+  }
+}
+
+async function handleStatus() {
+  return json({
+    ok: true,
+    uptimeSeconds: Math.floor((Date.now() - STARTED_AT) / 1000),
+    recentErrors: recentErrors.slice(-5),
+  });
+}
+
 async function handleRequest(request, env) {
   const url = new URL(request.url);
   // The dashboard is served by the Workers Assets binding, which takes
@@ -251,8 +285,31 @@ module.exports = {
       return await handleRequest(request, env);
     } catch (error) {
       const status = error instanceof HttpError ? error.status : 500;
+      recordError(request, error);
       if (status === 500) console.error("[youtube-digest-server]", error);
       return json({ error: error.message || "Internal server error." }, status);
+    }
+  },
+  async scheduled(event, env) {
+    // Health probe: /api/me answers 401 when the service is alive.
+    const probeBase = "https://ytd.panbo.space";
+    try {
+      const response = await fetch(probeBase + "/api/me", { method: "GET" });
+      if (response.status === 401) {
+        console.log("[probe] ok");
+        return;
+      }
+      const message = "Health probe failed: HTTP " + response.status;
+      console.error("[probe]", message);
+      if (env.PROBE_WEBHOOK_URL) {
+        await fetch(env.PROBE_WEBHOOK_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: "[YouTube Digest] " + message + " at " + new Date().toISOString() }),
+        }).catch(() => {});
+      }
+    } catch (error) {
+      console.error("[probe] fetch failed:", error.message);
     }
   },
 };

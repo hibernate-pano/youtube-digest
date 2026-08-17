@@ -199,6 +199,21 @@ select.status-select {
 }
 .grade-btn:hover { border-color: var(--accent); }
 
+.footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 40px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 13px;
+}
+.footer-sep { color: var(--border); }
+.danger-link { color: #c0392b; }
+.danger-link:hover { border-color: #c0392b; color: #c0392b; }
+
 [hidden] { display: none !important; }
 
 @media (max-width: 560px) {

@@ -320,6 +320,7 @@
     $("favoritesPanel").hidden = false;
     $("vocabularyPanel").hidden = false;
     $("reviewPanel").hidden = false;
+    $("footer").hidden = false;
     void loadDueReviews();
   }
 
@@ -332,6 +333,7 @@
     $("favoritesPanel").hidden = true;
     $("vocabularyPanel").hidden = true;
     $("reviewPanel").hidden = true;
+    $("footer").hidden = true;
   }
 
   function signOut() {
@@ -395,6 +397,37 @@
     $("logoutBtn").addEventListener("click", () => {
       signOut();
       statusLine("Signed out. Your data stays in your account.");
+    });
+    $("exportBtn").addEventListener("click", async () => {
+      try {
+        const data = await api("/api/export");
+        const blob = new Blob([JSON.stringify(data, null, 2)], {
+          type: "application/json",
+        });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = "youtube-digest-export-" + new Date().toISOString().slice(0, 10) + ".json";
+        link.click();
+        URL.revokeObjectURL(url);
+        statusLine("Export downloaded.");
+        setTimeout(() => statusLine(""), 2000);
+      } catch (error) {
+        statusLine(error.message, true);
+      }
+    });
+    $("deleteAccountBtn").addEventListener("click", async () => {
+      if (!confirm("Delete your account and ALL notes, words, and review progress? This cannot be undone.")) return;
+      if (!confirm("Really delete everything? This is permanent.")) return;
+      try {
+        await api("/api/account", { method: "DELETE" });
+        localStorage.removeItem(TOKEN_KEY);
+        STATE.token = "";
+        showSignedOut();
+        statusLine("Account deleted. Sorry to see you go.");
+      } catch (error) {
+        statusLine(error.message, true);
+      }
     });
     document.querySelectorAll(".tab").forEach((button) => {
       button.addEventListener("click", () => switchTab(button.dataset.tab));

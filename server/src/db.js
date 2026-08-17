@@ -237,6 +237,50 @@ class MemoryStore {
       .map(rowToVocabulary);
     return { notes, vocabulary };
   }
+
+  async getAllUserData(userId) {
+    const user = [...this.users.values()].find(
+      (row) => String(row.id) === String(userId),
+    );
+    const reviews = [...this.reviews.entries()]
+      .filter(([vocabId]) => {
+        const vocab = this.vocabulary.get(vocabId);
+        return vocab && vocab.userId === userId;
+      })
+      .map(([vocabId, review]) => ({
+        vocabularyId: vocabId,
+        dueAt: review.dueAt,
+        intervalDays: review.intervalDays,
+        ease: review.ease,
+        reps: review.reps,
+        lapses: review.lapses,
+      }));
+    return {
+      user: user
+        ? { id: user.id, githubId: user.githubId, login: user.login, avatarUrl: user.avatarUrl }
+        : null,
+      notes: await this.listNotes(userId),
+      vocabulary: await this.listVocabulary(userId),
+      reviews,
+    };
+  }
+
+  async deleteUserData(userId) {
+    const before = [...this.notes.values()].filter((row) => row.userId === userId).length;
+    for (const [key, row] of [...this.notes.entries()]) {
+      if (row.userId === userId) this.notes.delete(key);
+    }
+    for (const [key, row] of [...this.vocabulary.entries()]) {
+      if (row.userId === userId) {
+        this.vocabulary.delete(key);
+        this.reviews.delete(key);
+      }
+    }
+    for (const [key, row] of [...this.users.entries()]) {
+      if (String(row.id) === String(userId)) this.users.delete(key);
+    }
+    return before;
+  }
 }
 
 /**
@@ -459,6 +503,47 @@ class NeonStore {
       notes: notes.map(rowToNote),
       vocabulary: vocabulary.map(rowToVocabulary),
     };
+  }
+
+  async getAllUserData(userId) {
+    const users = await this.sql`
+      select id, github_id as "githubId", github_login as "login", avatar_url as "avatarUrl"
+      from users where id = ${userId}
+    `;
+    const notes = await this.listNotes(userId);
+    const vocabulary = await this.listVocabulary(userId);
+    const reviews = await this.sql`
+      select ri.vocabulary_id as "vocabularyId", ri.due_at as "dueAt",
+        ri.interval_days as "intervalDays", ri.ease, ri.reps, ri.lapses
+      from review_items ri
+      join vocabulary v on v.id = ri.vocabulary_id
+      where ri.user_id = ${userId}
+    `;
+    return {
+      user: users[0] || null,
+      notes,
+      vocabulary,
+      reviews,
+    };
+  }
+
+  async deleteUserData(userId) {
+    const result = await this.sql`
+      with deleted as (
+        delete from notes where user_id = ${userId} returning id
+      )
+      select count(*) as count from deleted
+    `;
+    await this.sql`
+      delete from review_items where user_id = ${userId}
+    `;
+    await this.sql`
+      delete from vocabulary where user_id = ${userId}
+    `;
+    await this.sql`
+      delete from users where id = ${userId}
+    `;
+    return Number(result[0].count) || 0;
   }
 }
 

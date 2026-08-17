@@ -2,6 +2,10 @@ name = "youtube-digest-server"
 main = "src/entry.mjs"
 compatibility_date = "2026-08-01"
 
+# Health probe every 5 minutes (scheduled handler in src/index.js).
+[triggers]
+crons = ["*/5 * * * *"]
+
 # Custom domain is managed via the Cloudflare dashboard / API
 # (CNAME ytd.panbo.space -> youtube-digest-server.panbo362472407.workers.dev
 # plus a zone worker route). No routes block here on purpose.

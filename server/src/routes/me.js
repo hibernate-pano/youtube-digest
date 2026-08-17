@@ -18,4 +18,18 @@ async function syncDelta(ctx) {
   return json(delta);
 }
 
-module.exports = { me, syncDelta };
+async function exportData(ctx) {
+  const data = await ctx.store.getAllUserData(ctx.user.id);
+  return json({
+    exportedAt: new Date().toISOString(),
+    format: "youtube-digest-export-v1",
+    ...data,
+  });
+}
+
+async function deleteAccount(ctx) {
+  const notesDeleted = await ctx.store.deleteUserData(ctx.user.id);
+  return json({ deleted: true, notesDeleted });
+}
+
+module.exports = { me, syncDelta, exportData, deleteAccount };

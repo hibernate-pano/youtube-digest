@@ -39,6 +39,11 @@ const YTD_OPTIONS = (() => {
       opencodeGoPrivacyNote:
         "When you use AI features, the OpenCode Go service receives the video transcript and relevant video context. Review its terms and pricing before saving.",
       saveSettings: "Save settings",
+      setupGuideTitle: "You are all set. Next steps:",
+      setupGuideStep1: "Open any YouTube video with captions.",
+      setupGuideStep2: "Click the YouTube Digest icon to open the side panel.",
+      setupGuideStep3:
+        'Read the bilingual transcript, open Overview for the AI digest, and press "n" on the video to save a note.',
       githubSync: "GitHub sync",
       githubSyncIntro:
         "Sign in with GitHub to back up your notes, vocabulary, and review progress. Every GitHub account has its own isolated data. Sign in with a different account to switch learner profiles.",
@@ -128,6 +133,10 @@ const YTD_OPTIONS = (() => {
       opencodeGoPrivacyNote:
         "使用 AI 功能时，OpenCode Go 服务会收到视频字幕及相关视频上下文。保存前请查看其服务条款和价格。",
       saveSettings: "保存设置",
+      setupGuideTitle: "配置完成!接下来:",
+      setupGuideStep1: "打开任意一个有字幕的 YouTube 视频。",
+      setupGuideStep2: "点击 YouTube Digest 扩展图标,打开侧边栏。",
+      setupGuideStep3: "阅读双语字幕;点 Overview 查看 AI 摘要;在视频上按 n 键保存笔记。",
       githubSync: "GitHub 同步",
       githubSyncIntro:
         "使用 GitHub 登录,备份你的笔记、生词和复习进度。每个 GitHub 账户的数据相互隔离,换一个账户登录即可切换学习者档案。",
@@ -637,6 +646,8 @@ const YTD_OPTIONS = (() => {
       try {
         await storage.set({ [settingsApi.STORAGE_KEY]: settings });
         setStatus(saveStatus, "saved");
+        const guide = doc.getElementById("setupGuide");
+        if (guide) guide.hidden = false;
       } catch (_error) {
         setStatus(saveStatus, "saveFailed");
       }

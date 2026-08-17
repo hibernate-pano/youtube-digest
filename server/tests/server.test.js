@@ -380,3 +380,51 @@ test("callback redirects to the stored same-origin path with the token", async (
   }
 });
 
+
+test("export returns only the caller's data and deletes the account cleanly", async () => {
+  const env = makeEnv();
+  const aliceToken = await signIn(env, 1001, "alice");
+  const bobToken = await signIn(env, 1002, "bob");
+  await api(env, "POST", "/api/notes", {
+    token: aliceToken,
+    body: { note: "alice note", videoId: "abc123xyz", clientId: "alice_1" },
+  });
+  await api(env, "POST", "/api/notes", {
+    token: bobToken,
+    body: { note: "bob note", videoId: "def456uvw", clientId: "bob_1" },
+  });
+  await api(env, "POST", "/api/vocabulary", {
+    token: aliceToken,
+    body: { term: "insight", sentence: "A deep insight." },
+  });
+
+  const exported = await api(env, "GET", "/api/export", { token: aliceToken });
+  assert.equal(exported.status, 200);
+  assert.equal(exported.data.user.login, "alice");
+  assert.equal(exported.data.notes.length, 1);
+  assert.equal(exported.data.notes[0].note, "alice note");
+  assert.equal(exported.data.vocabulary.length, 1);
+  assert.equal(exported.data.format, "youtube-digest-export-v1");
+
+  const deleted = await api(env, "DELETE", "/api/account", { token: aliceToken });
+  assert.equal(deleted.status, 200);
+  assert.equal(deleted.data.deleted, true);
+
+  const after = await api(env, "GET", "/api/export", { token: aliceToken });
+  assert.equal(after.status, 200);
+  assert.equal(after.data.notes.length, 0);
+  assert.equal(after.data.vocabulary.length, 0);
+
+  const bobExport = await api(env, "GET", "/api/export", { token: bobToken });
+  assert.equal(bobExport.data.notes.length, 1);
+});
+
+test("status endpoint is public and reports service health", async () => {
+  const env = makeEnv();
+  const result = await api(env, "GET", "/api/status");
+  assert.equal(result.status, 200);
+  assert.equal(result.data.ok, true);
+  assert.ok(typeof result.data.uptimeSeconds === "number");
+  assert.ok(Array.isArray(result.data.recentErrors));
+});
+
