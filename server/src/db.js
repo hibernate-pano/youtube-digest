@@ -120,7 +120,11 @@ class MemoryStore {
   async updateNote(userId, noteId, patch) {
     const row = this.notes.get(noteId);
     if (!row || row.userId !== userId) return null;
-    Object.assign(row, patch, { updatedAt: this.clock().toISOString() });
+    // Mirror the Neon tri-state rule: an absent `starred` leaves the stored
+    // flag alone, so the two stores agree on what a note update does.
+    const next = Object.assign({}, patch);
+    if (typeof patch.starred !== "boolean") delete next.starred;
+    Object.assign(row, next, { updatedAt: this.clock().toISOString() });
     return rowToNote(row);
   }
 
@@ -310,9 +314,18 @@ function applyGrade(review, grade, now) {
 }
 
 class NeonStore {
-  constructor(connectionString) {
-    const driver = require("@neondatabase/serverless");
-    this.sql = driver.neon(connectionString);
+  /**
+   * @param {string} connectionString Neon connection string.
+   * @param {(strings: TemplateStringsArray, ...values: unknown[]) => Promise<object[]>} [sql]
+   *   Pre-built tagged-template driver. Production always lets the constructor
+   *   call `neon(connectionString)`; the parameter exists so tests can inject a
+   *   fake and assert on the queries the store issues. It is never derived
+   *   from user input.
+   */
+  constructor(connectionString, sql) {
+    this.sql =
+      sql ||
+      require("@neondatabase/serverless").neon(connectionString);
   }
 
   async upsertUser(githubUser) {
@@ -338,14 +351,20 @@ class NeonStore {
   }
 
   async createNote(userId, note) {
+    // Tri-state `starred`: null means the client did not mention it. The
+    // insert falls back to the column default, and the conflict branch keeps
+    // whatever is already stored, so pushing note text from the extension can
+    // never clear a favorite the user set in the dashboard.
+    const starred = typeof note.starred === "boolean" ? note.starred : null;
     const rows = await this.sql`
-      insert into notes (user_id, client_id, video_id, video_title, channel_name, timestamp_seconds, quote, note)
+      insert into notes (user_id, client_id, video_id, video_title, channel_name, timestamp_seconds, quote, note, starred)
       values (${userId}, ${note.clientId}, ${note.videoId}, ${note.videoTitle}, ${note.channelName},
-        ${note.timestampSeconds}, ${note.quote}, ${note.note})
+        ${note.timestampSeconds}, ${note.quote}, ${note.note}, coalesce(${starred}, false))
       on conflict (user_id, client_id) do update set
         video_id = excluded.video_id, video_title = excluded.video_title,
         channel_name = excluded.channel_name, timestamp_seconds = excluded.timestamp_seconds,
-        quote = excluded.quote, note = excluded.note, updated_at = now()
+        quote = excluded.quote, note = excluded.note, updated_at = now(),
+        starred = coalesce(${starred}, notes.starred)
       returning id, client_id as "clientId", starred, video_id as "videoId", video_title as "videoTitle",
         channel_name as "channelName", timestamp_seconds as "timestampSeconds", quote, note,
         created_at as "createdAt", updated_at as "updatedAt"
@@ -373,14 +392,19 @@ class NeonStore {
   }
 
   async updateNote(userId, noteId, patch) {
+    // Same tri-state rule as createNote: only an explicit boolean moves the
+    // stored flag. `starred` is also selected back below, otherwise every
+    // PATCH response would report starred=false for a starred note.
+    const starred = typeof patch.starred === "boolean" ? patch.starred : null;
     const rows = await this.sql`
       update notes set
         video_title = ${patch.videoTitle}, channel_name = ${patch.channelName},
         timestamp_seconds = ${patch.timestampSeconds}, quote = ${patch.quote}, note = ${patch.note},
+        starred = coalesce(${starred}, starred),
         updated_at = now()
       where id = ${noteId} and user_id = ${userId}
-      returning id, video_id as "videoId", video_title as "videoTitle", channel_name as "channelName",
-        timestamp_seconds as "timestampSeconds", quote, note,
+      returning id, client_id as "clientId", starred, video_id as "videoId", video_title as "videoTitle",
+        channel_name as "channelName", timestamp_seconds as "timestampSeconds", quote, note,
         created_at as "createdAt", updated_at as "updatedAt"
     `;
     return rows.length ? rowToNote(rows[0]) : null;
@@ -420,8 +444,10 @@ class NeonStore {
     `;
     // A brand-new word is due for its first review immediately. Existing
     // entries keep their review schedule untouched.
+    // Both columns are populated: user_id must be the caller's id (a bigint
+    // that also drives every due-review query) and vocabulary_id the word's.
     await this.sql`
-      insert into review_items (user_id, vocabulary_id) values (${rows[0].id}, ${rows[0].id})
+      insert into review_items (user_id, vocabulary_id) values (${userId}, ${rows[0].id})
       on conflict (user_id, vocabulary_id) do nothing
     `;
     return rowToVocabulary(rows[0]);
@@ -453,7 +479,7 @@ class NeonStore {
         v.created_at as "createdAt", v.updated_at as "updatedAt"
       from review_items ri
       join vocabulary v on v.id = ri.vocabulary_id
-      where ri.user_id = ${userId} and ri.due_at <= now()
+      where ri.user_id = ${userId} and v.user_id = ${userId} and ri.due_at <= now()
       order by ri.due_at asc limit ${limit}
     `;
     return rows.map((row) => ({
@@ -467,6 +493,16 @@ class NeonStore {
   }
 
   async submitReview(userId, vocabId, grade) {
+    // Ownership gate. review_items has its own user_id, so a matching row is
+    // no proof that the caller owns the vocabulary: the same vocabulary_id can
+    // legally appear under a different user_id. Without this check any
+    // signed-in account could schedule reviews against another account's
+    // words and then read them back through listDueReviews.
+    const owned = await this.sql`
+      select id from vocabulary where id = ${vocabId} and user_id = ${userId}
+    `;
+    if (!owned.length) return null;
+
     const existing = await this.sql`
       select interval_days as "intervalDays", ease, reps, lapses
       from review_items where vocabulary_id = ${vocabId} and user_id = ${userId}
@@ -517,7 +553,7 @@ class NeonStore {
         ri.interval_days as "intervalDays", ri.ease, ri.reps, ri.lapses
       from review_items ri
       join vocabulary v on v.id = ri.vocabulary_id
-      where ri.user_id = ${userId}
+      where ri.user_id = ${userId} and v.user_id = ${userId}
     `;
     return {
       user: users[0] || null,

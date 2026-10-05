@@ -175,7 +175,7 @@ async function writeLocalNotes(namespace, notes) {
 }
 
 function localNoteToCloudPayload(note) {
-  return {
+  const payload = {
     clientId: String(note.id || ""),
     note: String(note.text || ""),
     videoId: String(note.videoId || ""),
@@ -184,6 +184,14 @@ function localNoteToCloudPayload(note) {
     timestampSeconds: Number(note.timestampSeconds) || 0,
     quote: String(note.text || "").slice(0, 3000),
   };
+  // Only send `starred` when the local note actually carries an explicit
+  // boolean. The server treats a missing flag as "leave the stored value
+  // alone", so sending a defaulted `false` here would silently clear every
+  // favorite the user set in the web dashboard on the next push.
+  if (typeof note.starred === "boolean") {
+    payload.starred = note.starred;
+  }
+  return payload;
 }
 
 function cloudToLocalNote(cloud) {
@@ -202,6 +210,9 @@ function cloudToLocalNote(cloud) {
       : "",
     text: String(cloud.note || ""),
     rawText: String(cloud.note || ""),
+    // The cloud is authoritative for the favorite flag: without this the
+    // merge below would overwrite the local copy and drop the star.
+    starred: cloud.starred === true,
     createdAt: Number.isFinite(createdMs) ? createdMs : Date.now(),
     updatedAt: Number.isFinite(updatedMs) ? updatedMs : Date.now(),
     cloudId: String(cloud.id || ""),

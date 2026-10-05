@@ -31,7 +31,7 @@ function parseNote(input) {
   const note = cleanString(input && input.note, MAX_NOTE_LENGTH);
   if (!note) return null;
   const clientId = cleanString(input && input.clientId, 128);
-  return {
+  const parsed = {
     note,
     clientId,
     videoId: cleanVideoId(input && input.videoId),
@@ -40,6 +40,13 @@ function parseNote(input) {
     timestampSeconds: cleanTimestampSeconds(input && input.timestampSeconds) ?? 0,
     quote: cleanString(input && input.quote, MAX_QUOTE_LENGTH),
   };
+  // `starred` is optional and tri-state: absent means "do not touch the
+  // stored flag", so a client pushing note text can never clear a favorite
+  // that was set from the dashboard. Only an explicit boolean is honored.
+  if (typeof (input && input.starred) === "boolean") {
+    parsed.starred = input.starred;
+  }
+  return parsed;
 }
 
 const VOCABULARY_STATUSES = new Set(["learning", "reviewing", "mastered"]);
