@@ -238,6 +238,7 @@ test("Digest button skips a hidden responsive toolbar", () => {
   assert.equal(visibleGroup.children[1], nativeButton);
   assert.match(visibleGroup.children[0].style.cssText, /flex:\s*0 0 auto/);
   assert.match(visibleGroup.children[0].style.cssText, /width:\s*max-content/);
+  assert.doesNotMatch(visibleGroup.children[0].style.cssText, /box-shadow/);
 });
 
 test("Digest button replaces stale instances and removes duplicates", () => {

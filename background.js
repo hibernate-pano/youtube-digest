@@ -287,6 +287,11 @@ async function readBoundedAiResponse(response, onActivity) {
  * Chrome's Side Panel API lets us show a persistent panel alongside the page.
  */
 chrome.action.onClicked.addListener((tab) => {
+  if (!(tab.url || "").startsWith("https://www.youtube.com")) {
+    void updatePanelForTab(tab.id, tab.url, tab.windowId);
+    return;
+  }
+
   // Re-enable + open without awaiting — preserves user gesture context
   chrome.sidePanel.setOptions({
     tabId: tab.id,
@@ -320,25 +325,68 @@ chrome.runtime.onInstalled.addListener(({ reason }) => {
  * The original code only handled onUpdated, which is why the panel stayed
  * visible when switching to an already-loaded non-YouTube tab.
  */
-function updatePanelForTab(tabId, url) {
+async function closePanelForTab(tabId, windowId) {
+  // Chrome 141 added an explicit close API. On older supported versions,
+  // disabling the tab-specific panel below remains the compatibility path.
+  if (typeof chrome.sidePanel.close !== "function") return;
+
+  try {
+    // This closes the tab-specific panel used by YouTube Digest.
+    await chrome.sidePanel.close({ tabId });
+    return;
+  } catch (error) {
+    // Chrome 145+ rejects tabId when the visible instance is global. Close
+    // that instance by window instead.
+  }
+
+  if (Number.isInteger(windowId)) {
+    await chrome.sidePanel.close({ windowId }).catch(() => {});
+  }
+}
+
+async function updatePanelForTab(tabId, url, windowId) {
   const isYouTube = (url || "").startsWith("https://www.youtube.com");
-  // setOptions can reject if the tab just closed — ignore that harmlessly.
-  chrome.sidePanel
-    .setOptions({ tabId, path: "sidepanel.html", enabled: isYouTube })
+  if (!isYouTube) {
+    // Close the visible instance first. Then disable this tab so Chrome cannot
+    // reopen the global default panel as navigation settles.
+    await closePanelForTab(tabId, windowId);
+    await chrome.sidePanel.setOptions({ tabId, enabled: false }).catch(() => {});
+    return;
+  }
+
+  // setOptions can reject if the tab just closed. Ignore that harmlessly.
+  await chrome.sidePanel
+    .setOptions({ tabId, path: "sidepanel.html", enabled: true })
     .catch(() => {});
 }
 
-// A tab navigated to a new URL.
-chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (!changeInfo.url) return; // ignore title/favicon-only updates
-  updatePanelForTab(tabId, changeInfo.url);
+/**
+ * Gets the best URL from a tab update that can change panel availability.
+ * Chrome can apply tab-specific side-panel state before a navigation commits,
+ * then reset it during the commit. Handling loading and complete gives the
+ * first non-YouTube navigation a reliable second reconciliation.
+ */
+function getNavigationUrl(changeInfo, tab) {
+  if (changeInfo.url) return changeInfo.url;
+  if (changeInfo.status !== "loading" && changeInfo.status !== "complete") {
+    return "";
+  }
+  return tab.pendingUrl || tab.url || "";
+}
+
+// A tab started or completed navigation. Reconcile at both stages because
+// Chrome can replace per-tab side-panel options while the page commits.
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  const url = getNavigationUrl(changeInfo, tab);
+  if (!url) return; // Ignore title and favicon-only updates.
+  void updatePanelForTab(tabId, url, tab.windowId);
 });
 
 // The user switched to a different tab (or opened a new one).
-chrome.tabs.onActivated.addListener(async ({ tabId }) => {
+chrome.tabs.onActivated.addListener(async ({ tabId, windowId }) => {
   try {
     const tab = await chrome.tabs.get(tabId);
-    updatePanelForTab(tabId, tab.url);
+    void updatePanelForTab(tabId, tab.url || tab.pendingUrl, windowId);
   } catch (e) {
     // Tab vanished before we could read it — nothing to do.
   }
@@ -388,12 +436,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.action === "saveNote") {
-    // Save a note at the current timestamp
+    // Save a note at the current timestamp, or save exact selected transcript
+    // text when the side panel supplies it.
     handleSaveNote(
       message.videoId,
       message.timestamp,
       message.videoTitle,
       message.channelName,
+      message.selectedText,
     )
       .then(sendResponse)
       .catch((err) => sendResponse({ success: false, error: err.message }));
@@ -1220,18 +1270,50 @@ async function handleGetVideoInfo(tabId) {
 // ============================================================
 
 /**
- * Saves a note at the current timestamp.
- * Fetches the transcript if needed, finds the relevant line, and cleans it up.
+ * Saves a note at a timestamp. Exact selected text is stored directly.
+ * Other note requests find the relevant transcript line and clean it up.
  */
 async function handleSaveNote(
   videoId,
   timestamp,
   videoTitle,
   channelName,
+  selectedText,
 ) {
   try {
     const canonicalVideoUrl = YTD_SETTINGS.canonicalYouTubeUrl(videoId);
     const safeTimestamp = Math.max(0, Math.floor(Number(timestamp) || 0));
+    const exactSelectedText =
+      typeof selectedText === "string"
+        ? selectedText.replace(/\s+/g, " ").trim().slice(0, 3000)
+        : "";
+
+    // A selected transcript note is already the exact text the user wants.
+    // Save it directly without a transcript fetch or an AI cleanup request.
+    if (exactSelectedText) {
+      const minutes = Math.floor(safeTimestamp / 60);
+      const seconds = safeTimestamp % 60;
+      const note = {
+        id: `note_${Date.now()}`,
+        videoId,
+        videoTitle:
+          typeof videoTitle === "string"
+            ? videoTitle.slice(0, 500)
+            : "Untitled Video",
+        channelName:
+          typeof channelName === "string" ? channelName.slice(0, 300) : "",
+        timestamp: `${minutes}:${String(seconds).padStart(2, "0")}`,
+        timestampSeconds: safeTimestamp,
+        timestampedUrl: `${canonicalVideoUrl}&t=${safeTimestamp}s`,
+        text: exactSelectedText,
+        rawText: exactSelectedText,
+        createdAt: Date.now(),
+      };
+
+      await saveNoteToStorage(note);
+      chrome.runtime.sendMessage({ action: "noteSaved", note }).catch(() => {});
+      return { success: true, note };
+    }
 
     // First, try to get the transcript from the digest cache. The side panel
     // saves digests to chrome.storage.LOCAL — this used to look in
@@ -1649,7 +1731,7 @@ function normalizeTranslatedSegmentBatch(parsed, sourceSegments) {
 /**
  * Translates content using DeepSeek.
  * @param {Object} content - JSON object containing semantic transcript segments
- * @param {string} contentType - Must be 'transcriptBatch'
+ * @param {string} contentType - 'transcriptBatch' or 'interfaceBatch'
  * @param {string} targetLanguage - 'zh' for Simplified Chinese
  * @param {string} videoTitle - The video title (for context)
  * @returns {Object} - { success, translatedContent } or { success: false, error }
@@ -1667,7 +1749,7 @@ async function handleTranslateContent(
         error: `Unsupported translation target: ${String(targetLanguage)}`,
       };
     }
-    if (contentType !== "transcriptBatch") {
+    if (!["transcriptBatch", "interfaceBatch"].includes(contentType)) {
       return {
         success: false,
         error: `Unsupported translation content type: ${String(contentType)}`,
@@ -1685,9 +1767,13 @@ async function handleTranslateContent(
     const sourceSegments = validateTranscriptBatchRequest(content);
     const langName = "Simplified Chinese";
     const baseRules = await getTranslationBaseRules(targetLanguage);
+    const promptSection =
+      contentType === "transcriptBatch"
+        ? "Transcript batch translation"
+        : "Interface content translation";
     const systemPrompt = await loadPromptSection(
       "translation.md",
-      "Transcript batch translation",
+      promptSection,
       {
         langName,
         videoTitle: videoTitle || "Unknown",
@@ -1774,6 +1860,7 @@ globalThis.__YTD_TRANSLATION_TESTING__ = {
   callAiTranslation,
   validateTranscriptBatchRequest,
   normalizeTranslatedSegmentBatch,
+  handleSaveNote,
   handleTranslateContent,
   mergeNotesForSync,
   cloudToLocalNote,
@@ -1798,6 +1885,8 @@ globalThis.__YTD_TRANSLATION_TESTING__ = {
   fullSyncVocabulary,
   handleGetDueReviews,
   handleSubmitReview,
+  closePanelForTab,
+  updatePanelForTab,
 };
 
 // Persistent OAuth completion listener. The service worker may be suspended

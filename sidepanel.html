@@ -17,30 +17,63 @@
           <div class="video-title" id="videoTitle"></div>
           <div class="video-channel" id="videoChannel"></div>
         </div>
-        <button
-          class="sync-btn"
-          id="syncBtn"
-          type="button"
-          title="Sign in with GitHub to back up your notes"
-        >
-          🔐 Sign in
-        </button>
-        <button
-          class="sync-account"
-          id="syncAccount"
-          type="button"
-          hidden
-          title="Signed in. Click to sign out."
-        ></button>
-        <button
-          class="settings-btn"
-          id="settingsBtn"
-          type="button"
-          title="Open YouTube Digest settings"
-          aria-label="Open YouTube Digest settings"
-        >
-          Settings
-        </button>
+        <div class="header-actions">
+          <button
+            class="sync-btn"
+            id="syncBtn"
+            type="button"
+            title="Sign in with GitHub to back up your notes"
+          >
+            Sign in
+          </button>
+          <button
+            class="sync-account"
+            id="syncAccount"
+            type="button"
+            hidden
+            title="Signed in. Click to sign out."
+          ></button>
+          <button
+            class="settings-btn"
+            id="settingsBtn"
+            type="button"
+            title="Open YouTube Digest settings"
+            aria-label="Open YouTube Digest settings"
+          >
+            Settings
+          </button>
+          <div
+            class="transcript-mode-control global-language-control"
+            id="transcriptModeControl"
+            role="group"
+            aria-label="Content language"
+            style="display: none"
+          >
+            <button
+              class="transcript-mode-btn active"
+              type="button"
+              data-transcript-mode="original"
+              aria-pressed="true"
+            >Original</button>
+            <button
+              class="transcript-mode-btn"
+              type="button"
+              data-transcript-mode="zh"
+              aria-pressed="false"
+            >中文</button>
+            <button
+              class="transcript-mode-btn"
+              type="button"
+              data-transcript-mode="bilingual"
+              aria-pressed="false"
+            >双语</button>
+            <span
+              class="translation-spinner"
+              id="langSpinner"
+              aria-label="Translating"
+            ></span>
+          </div>
+        </div>
       </div>
 
       <!-- Tab navigation -->
@@ -55,7 +88,7 @@
     <div class="content" id="contentArea">
       <!-- WELCOME STATE -->
       <div id="welcomeState" class="welcome-container">
-        <div class="welcome-icon">&#9655;</div>
+        <div class="welcome-icon" aria-hidden="true"></div>
         <div class="welcome-title">Ready to Digest</div>
         <div class="welcome-desc">
           Navigate to a YouTube video and click the extension icon to get an
@@ -77,7 +110,7 @@
       <!-- ERROR STATE -->
       <div id="errorState" style="display: none">
         <div class="error-container">
-          <div class="error-icon">&#9888;</div>
+          <div class="error-icon" aria-hidden="true">!</div>
           <div class="error-title" id="errorTitle">Error</div>
           <div class="error-message" id="errorMessage">
             Something went wrong.
@@ -92,45 +125,71 @@
         <div class="tab-panel active" data-panel="transcript">
           <div class="section">
             <div class="section-header transcript-section-header">
-              <div class="transcript-header-main">
-                <div class="section-title-wrap">
-                  <div class="section-title">Full Transcript</div>
-                </div>
-                <div
-                  class="transcript-mode-control"
-                  id="transcriptModeControl"
-                  role="group"
-                  aria-label="Transcript language"
-                >
-                  <button
-                    class="transcript-mode-btn active"
-                    type="button"
-                    data-transcript-mode="original"
-                    aria-pressed="true"
-                  >Original</button>
-                  <button
-                    class="transcript-mode-btn"
-                    type="button"
-                    data-transcript-mode="zh"
-                    aria-pressed="false"
-                  >中文</button>
-                  <button
-                    class="transcript-mode-btn"
-                    type="button"
-                    data-transcript-mode="bilingual"
-                    aria-pressed="false"
-                  >双语</button>
-                  <span
-                    class="translation-spinner"
-                    id="langSpinner"
-                    aria-label="Translating"
-                  ></span>
-                </div>
-              </div>
+              <div class="section-title">Full Transcript</div>
               <div class="transcript-actions">
                 <button class="enhance-btn" id="copyTranscriptBtn">Copy</button>
                 <button class="enhance-btn" id="exportTranscriptBtn">
                   Export
+                </button>
+              </div>
+            </div>
+            <!-- Search stays inside the Transcript tab and never changes playback. -->
+            <div class="transcript-search" role="search">
+              <svg
+                class="transcript-search-icon"
+                viewBox="0 0 20 20"
+                aria-hidden="true"
+              >
+                <circle cx="8.5" cy="8.5" r="5.5"></circle>
+                <path d="m12.5 12.5 4 4"></path>
+              </svg>
+              <input
+                class="transcript-search-input"
+                id="transcriptSearchInput"
+                type="search"
+                placeholder="Search words or phrases"
+                aria-label="Search transcript"
+                aria-controls="transcriptList"
+                autocomplete="off"
+                spellcheck="false"
+              />
+              <button
+                class="transcript-search-clear"
+                id="transcriptSearchClearBtn"
+                type="button"
+                aria-label="Clear transcript search"
+                title="Clear search"
+                hidden
+              >
+                &times;
+              </button>
+              <output
+                class="transcript-search-count"
+                id="transcriptSearchCount"
+                aria-live="polite"
+              ></output>
+              <div
+                class="transcript-search-nav"
+                role="group"
+                aria-label="Search results"
+              >
+                <button
+                  id="transcriptSearchPrevBtn"
+                  type="button"
+                  aria-label="Previous transcript match"
+                  title="Previous match (Shift + Enter)"
+                  disabled
+                >
+                  &#8593;
+                </button>
+                <button
+                  id="transcriptSearchNextBtn"
+                  type="button"
+                  aria-label="Next transcript match"
+                  title="Next match (Enter)"
+                  disabled
+                >
+                  &#8595;
                 </button>
               </div>
             </div>
@@ -200,9 +259,8 @@
               </div>
             </div>
             <p class="notes-intro" id="notesIntro">
-              Move your mouse over the video and click the 📝 Note button to
-              save timestamped notes, or press the "n" key while the video is
-              focused.
+              Move your mouse over the video and click Note to save a
+              timestamped note, or press the "n" key while the video is focused.
             </p>
             <div id="notesList"></div>
           </div>
