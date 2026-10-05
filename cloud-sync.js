@@ -23,6 +23,7 @@ async function saveNoteToStorage(note) {
   const session = await getGithubSession();
   if (session) {
     await pushNoteToCloud(session, note).catch((error) => {
+      reportSyncSessionExpired(error);
       console.warn("[YouTube Digest] Note cloud sync failed:", error.message);
     });
   }
@@ -66,6 +67,7 @@ async function handleUpdateNote(noteId, text) {
           }
         }
       } catch (error) {
+        reportSyncSessionExpired(error);
         console.warn("[YouTube Digest] Note update cloud sync failed:", error.message);
       }
     }
@@ -105,6 +107,7 @@ async function handleDeleteNote(noteId) {
     const session = await getGithubSession();
     if (session) {
       await deleteNoteFromCloud(session, noteId).catch((error) => {
+        reportSyncSessionExpired(error);
         console.warn("[YouTube Digest] Note cloud delete failed:", error.message);
       });
     }
@@ -155,9 +158,83 @@ async function cloudFetch(path, options) {
   if (!response.ok) {
     const error = new Error((data && data.error) || "Sync request failed: " + response.status);
     error.status = response.status;
+    if (response.status === 401) {
+      // The backend issues 30-day tokens with no refresh endpoint, so 401 is
+      // terminal: every later write would 401 too. Tag it so callers can
+      // surface a re-login prompt instead of logging and moving on.
+      error.code = YTD_SETTINGS.SYNC_SESSION_EXPIRED;
+    }
     throw error;
   }
   return data;
+}
+
+/**
+ * True when a sync failure means "the stored session is dead", i.e. the cloud
+ * mirror is no longer updating. Everything else (offline, 5xx, a malformed
+ * body) is transient and must stay quiet so a flaky network never nags the
+ * user into a pointless re-login.
+ */
+function isSyncSessionExpired(error) {
+  return !!error && error.code === YTD_SETTINGS.SYNC_SESSION_EXPIRED;
+}
+
+/**
+ * Records a session-expiry signal so the panel can show the re-login chip even
+ * when the failing call is a fire-and-forget mirror (note save, note delete,
+ * vocabulary write) whose caller only logs the error.
+ */
+function reportSyncSessionExpired(error) {
+  if (!isSyncSessionExpired(error)) return false;
+  void markSyncSessionExpired();
+  return true;
+}
+
+/**
+ * Synchronously flags the expiry and pings every open surface. The storage write
+ * is awaited by callers that can afford it; the broadcast is fire-and-forget so
+ * a closed panel never blocks the local save that called us.
+ */
+async function markSyncSessionExpired() {
+  try {
+    await chrome.storage.local.set({ [YTD_SETTINGS.SYNC_EXPIRED_KEY]: true });
+  } catch (error) {
+    // Storage full or unavailable: the broadcast below is still worth sending.
+  }
+  try {
+    chrome.runtime
+      .sendMessage({ action: "syncSessionExpired" })
+      .catch(() => {});
+  } catch (error) {
+    // No receiver yet (panel closed) or the worker is shutting down.
+  }
+}
+
+/**
+ * Clears the expiry latch after a request the server accepted. Without this the
+ * chip would stick after a re-login or any later successful pull.
+ */
+async function clearSyncSessionExpired() {
+  try {
+    const stored = await chrome.storage.local.get(YTD_SETTINGS.SYNC_EXPIRED_KEY);
+    if (!stored[YTD_SETTINGS.SYNC_EXPIRED_KEY]) return;
+    await chrome.storage.local.remove(YTD_SETTINGS.SYNC_EXPIRED_KEY);
+  } catch (error) {
+    // Nothing to clear.
+  }
+}
+
+/**
+ * Reports whether the account's stored token is known to be dead. Reads the
+ * persisted latch rather than the in-memory one so the answer survives service
+ * worker suspension. Always returns false when signed out: with no account
+ * there is nothing to re-authenticate.
+ */
+async function isSyncSessionExpiredForAccount() {
+  const session = await getGithubSession();
+  if (!session) return false;
+  const stored = await chrome.storage.local.get(YTD_SETTINGS.SYNC_EXPIRED_KEY);
+  return stored[YTD_SETTINGS.SYNC_EXPIRED_KEY] === true;
 }
 
 async function notesNamespace() {
@@ -316,9 +393,25 @@ async function runFullSync({
   let cloud = [];
   try {
     const data = await cloudFetch(fetchPath, { token: session.token });
+    // The server accepted our token, so any earlier expiry is stale.
+    await clearSyncSessionExpired();
     cloud = data && (data.notes || data.vocabulary) ? data.notes || data.vocabulary : [];
   } catch (error) {
-    return { success: false, error: error.message };
+    // The pull is the one step that decides whether syncing works at all, so
+    // its failure is returned with the reason code intact: the caller can tell
+    // a dead token (re-login prompt) from a transient failure (stay quiet).
+    // The latch is persisted here too, not only on the fire-and-forget mirror
+    // writes: the panel re-reads it from storage on the next open, so a signal
+    // that lived only in this return value would be lost by the time the user
+    // could act on it.
+    await reportSyncSessionExpired(error);
+    return {
+      success: false,
+      error: error.message,
+      status: error.status,
+      code: error.code,
+      expired: isSyncSessionExpired(error),
+    };
   }
   const { mergedItems, toPush } = mergeCollectionsForSync(local, cloud, {
     keyOfLocal,
@@ -340,6 +433,7 @@ async function runFullSync({
         if (target) target.cloudId = cloudId;
       }
     } catch (error) {
+      reportSyncSessionExpired(error);
       console.warn("[YouTube Digest] Sync push failed (kept locally):", error.message);
     }
   }
@@ -369,11 +463,14 @@ async function handleGetGithubSession() {
     session: session
       ? { login: session.login, githubId: session.githubId, savedAt: session.savedAt }
       : null,
+    expired: session ? await isSyncSessionExpiredForAccount() : false,
   };
 }
 
 async function handleLogoutGithub() {
   await chrome.storage.local.remove(YTD_SETTINGS.GITHUB_SESSION_KEY);
+  // Drop the latch too: a signed-out account has no expired session to report.
+  await chrome.storage.local.remove(YTD_SETTINGS.SYNC_EXPIRED_KEY);
   return { success: true };
 }
 // ============================================================
@@ -530,6 +627,7 @@ async function handleSaveVocabulary(entry) {
         item.cloudId = (pushed && pushed.vocabulary && pushed.vocabulary.id) || item.cloudId;
         await writeLocalVocabulary(namespace, items);
       } catch (error) {
+        reportSyncSessionExpired(error);
         console.warn("[YouTube Digest] Vocabulary cloud save failed:", error.message);
       }
     }
@@ -562,6 +660,7 @@ async function handleDeleteVocabulary(id) {
         method: "DELETE",
         token: session.token,
       }).catch((error) => {
+        reportSyncSessionExpired(error);
         console.warn("[YouTube Digest] Vocabulary cloud delete failed:", error.message);
       });
     }
@@ -653,13 +752,25 @@ async function migrateLegacyLocalNotes(githubId) {
 /**
  * Opens the OAuth login tab. The completion redirect is caught by the
  * persistent tabs.onUpdated listener registered at the bottom of this file.
+ *
+ * A dead token is dropped first: without this the "already signed in" shortcut
+ * below would swallow the click, and the re-login chip would be a silent
+ * no-op -- the exact failure this state exists to expose. The account's local
+ * notes are namespaced by GitHub id and untouched, so re-authenticating loses
+ * nothing.
  */
 async function handleStartGithubLogin() {
   const session = await getGithubSession();
-  if (session) return { success: true, alreadySignedIn: true };
+  if (session && !(await isSyncSessionExpiredForAccount())) {
+    return { success: true, alreadySignedIn: true };
+  }
+  if (session) {
+    await chrome.storage.local.remove(YTD_SETTINGS.GITHUB_SESSION_KEY);
+    await chrome.storage.local.remove(YTD_SETTINGS.SYNC_EXPIRED_KEY);
+  }
   const loginUrl = YTD_SETTINGS.SERVER_BASE_URL + "/api/auth/login";
   const tab = await chrome.tabs.create({ url: loginUrl });
-  return { success: true, tabId: tab.id };
+  return { success: true, tabId: tab.id, replacedExpiredSession: !!session };
 }
 
 /**
@@ -681,6 +792,9 @@ async function completeGithubLogin(token, tabId) {
       },
     });
     if (tabId) await chrome.tabs.remove(tabId).catch(() => {});
+    // A fresh token is live: drop the stale-expiry latch before the first sync
+    // so the panel does not briefly render the re-login chip.
+    await clearSyncSessionExpired();
     // Import notes saved before sign-in, then mirror everything to the cloud.
     // The signed-out copy is cleared only after the sync succeeded.
     const migrated = await migrateLegacyLocalNotes(user.githubId);

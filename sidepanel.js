@@ -267,19 +267,45 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   await refreshGithubSyncStatus();
-  // Pull cloud changes when the panel opens (no-op when signed out).
-  chrome.runtime
+  // Pull cloud changes when the panel opens (no-op when signed out). Both
+  // verdicts carry a reason code, so a dead token shows the re-login chip
+  // instead of resolving quietly: the old chain swallowed exactly the failure
+  // that silently ended the backup.
+  const notesSync = await chrome.runtime
     .sendMessage({ action: "syncNotes" })
-    .then(() => chrome.runtime.sendMessage({ action: "syncVocabulary" }))
-    .then(() => {
-      const filterAll = document
-        .getElementById("notesFilterAll")
-        ?.classList.contains("active");
-      loadNotes(filterAll ? null : currentVideoId);
-    })
-    .catch(() => {});
+    .catch(() => null);
+  const vocabularySync = await chrome.runtime
+    .sendMessage({ action: "syncVocabulary" })
+    .catch(() => null);
+  // Notes run first, so its verdict wins; vocabulary is the fallback when the
+  // notes request never produced one.
+  await applySyncSessionSignal(notesSync || vocabularySync);
+  const filterAll = document
+    .getElementById("notesFilterAll")
+    ?.classList.contains("active");
+  loadNotes(filterAll ? null : currentVideoId);
   await checkCurrentTab();
 });
+
+/**
+ * Turns a sync verdict into a visible header state. Only an explicit
+ * SYNC_SESSION_EXPIRED code re-renders the chip: a network blip or a 5xx must
+ * not push a signed-in user into a re-login prompt, or the prompt stops
+ * meaning anything.
+ */
+async function applySyncSessionSignal(result) {
+  if (!result || result.success !== false) return false;
+  const code =
+    result.code ||
+    (result.expired === true && typeof YTD_SETTINGS !== "undefined"
+      ? YTD_SETTINGS.SYNC_SESSION_EXPIRED
+      : "");
+  const expired =
+    typeof YTD_SETTINGS !== "undefined" &&
+    code === YTD_SETTINGS.SYNC_SESSION_EXPIRED;
+  if (expired) await refreshGithubSyncStatus();
+  return expired;
+}
 
 // Listen for messages from the Digest button on YouTube page
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -312,12 +338,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     loadNotes(filterAll ? null : currentVideoId);
     sendResponse({ success: true });
   }
+  if (message.action === "syncSessionExpired") {
+    // A background mirror write (note save, delete, vocabulary) hit a 401
+    // while this panel was open: show the re-login chip now rather than waiting
+    // for the next panel open.
+    refreshGithubSyncStatus();
+    sendResponse({ success: true });
+  }
   return false;
 });
 
 /**
- * Reflects the GitHub sign-in state in the panel header. Signed out shows
- * the sign-in button; signed in shows the account name (click to sign out).
+ * Reflects the GitHub sign-in state in the panel header. Three conditions share
+ * one control:
+ *   - signed out      -> the sign-in button
+ *   - signed in       -> the account name, click to sign out
+ *   - signed in but the
+ *     server rejected
+ *     our token (401) -> an explicit "Sync expired" chip whose click re-runs
+ *                        OAuth instead of signing out. The cloud mirror has
+ *                        stopped, so staying silent here is what let the backup
+ *                        die unnoticed.
  */
 async function refreshGithubSyncStatus() {
   const syncBtn = document.getElementById("syncBtn");
@@ -328,18 +369,75 @@ async function refreshGithubSyncStatus() {
       action: "getGithubSession",
     });
     const session = result && result.success ? result.session : null;
+    const copy = await loadSyncHeaderCopy();
     if (session) {
+      const expired = result.expired === true;
       syncBtn.hidden = true;
       syncAccount.hidden = false;
-      syncAccount.textContent = session.login;
-      syncAccount.title = "Signed in as " + session.login + ". Click to sign out.";
+      syncAccount.classList.toggle("sync-account-expired", expired);
+      // aria-label wins over title for assistive tech, so the actionable
+      // wording survives even where the tooltip is not reachable.
+      syncAccount.setAttribute(
+        "aria-label",
+        expired ? copy.expiredTitle : copy.signedInTitle({ login: session.login }),
+      );
+      syncAccount.textContent = expired
+        ? copy.expiredLabel
+        : session.login;
+      syncAccount.title = expired
+        ? copy.expiredTitle
+        : copy.signedInTitle({ login: session.login });
+      // The click handler branches on this, so the chip's meaning is stated
+      // once here rather than re-derived from the label text.
+      syncAccount.dataset.syncExpired = expired ? "true" : "false";
     } else {
       syncBtn.hidden = false;
       syncAccount.hidden = true;
+      syncAccount.classList.remove("sync-account-expired");
+      delete syncAccount.dataset.syncExpired;
+      syncAccount.removeAttribute("aria-label");
     }
   } catch (error) {
     console.error("[YouTube Digest Panel] Sync status error:", error);
   }
+}
+
+/**
+ * Reads the interface language the user picked on the settings page so the
+ * header speaks the same language. Falls back to English when unavailable; the
+ * expired state must still render, so this never throws.
+ */
+async function loadSyncHeaderCopy() {
+  let language = "en";
+  try {
+    const key =
+      typeof YTD_SETTINGS !== "undefined" && YTD_SETTINGS.UI_LANGUAGE_STORAGE_KEY
+        ? YTD_SETTINGS.UI_LANGUAGE_STORAGE_KEY
+        : "ytd_options_language";
+    const stored = await chrome.storage.local.get(key);
+    if (typeof YTD_SETTINGS !== "undefined" && YTD_SETTINGS.normalizeUiLanguage) {
+      language = YTD_SETTINGS.normalizeUiLanguage(stored[key]);
+    } else if (stored[key] === "zh-CN") {
+      language = "zh-CN";
+    }
+  } catch (error) {
+    // Keep the English default.
+  }
+  if (typeof YTD_SETTINGS !== "undefined" && YTD_SETTINGS.translateSyncCopy) {
+    return {
+      expiredLabel: YTD_SETTINGS.translateSyncCopy(language, "expiredLabel"),
+      expiredTitle: YTD_SETTINGS.translateSyncCopy(language, "expiredTitle"),
+      signedInTitle: (params) =>
+        YTD_SETTINGS.translateSyncCopy(language, "signedInTitle", params),
+    };
+  }
+  return {
+    expiredLabel: "Sync expired",
+    expiredTitle:
+      "Your notes are still saved on this device, but the cloud backup stopped because the GitHub session expired. Click to sign in again and resume syncing.",
+    signedInTitle: (params) =>
+      `Signed in as ${params.login}. Click to sign out.`,
+  };
 }
 
 // ============================================================
@@ -466,6 +564,15 @@ function setupEventListeners() {
     chrome.runtime.sendMessage({ action: "startGithubLogin" });
   });
   document.getElementById("syncAccount")?.addEventListener("click", async () => {
+    const syncAccount = document.getElementById("syncAccount");
+    // Expired sessions must re-authenticate. Signing out instead would throw
+    // away the only pointer to the dead token and quietly return the user to
+    // the signed-out state, hiding the very problem this state reports.
+    if (syncAccount?.dataset.syncExpired === "true") {
+      await chrome.runtime.sendMessage({ action: "startGithubLogin" });
+      await refreshGithubSyncStatus();
+      return;
+    }
     await chrome.runtime.sendMessage({ action: "logoutGithub" });
     await refreshGithubSyncStatus();
     const filterAll = document
@@ -3044,4 +3151,7 @@ globalThis.__YTD_TRANSCRIPT_TESTING__ = {
   getNavigationUrl,
   renderSubtitleInlineMarkup,
   renderTranscriptSegmentContent,
+  refreshGithubSyncStatus,
+  loadSyncHeaderCopy,
+  applySyncSessionSignal,
 };

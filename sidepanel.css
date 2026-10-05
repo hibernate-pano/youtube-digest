@@ -173,6 +173,29 @@ body {
   display: none;
 }
 
+/* Expired-session state: the token is dead, so the cloud mirror has stopped.
+   The chip switches to the project's warm highlight tone and keeps the exact
+   same pill geometry as the healthy states above, so this reads as the same
+   control in a different condition rather than a new component. */
+.sync-account.sync-account-expired {
+  border-color: var(--highlight);
+  background: var(--accent-dim);
+  color: var(--accent-hover);
+  font-weight: 700;
+}
+
+.sync-account.sync-account-expired:hover {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+  color: var(--accent-hover);
+}
+
+.sync-btn:focus-visible,
+.sync-account:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 /* ============================================================
    TAB NAVIGATION — pill tabs on the white header.
    No background "track": the header is white and the content below is cream,
