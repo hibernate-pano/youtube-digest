@@ -8,6 +8,9 @@
   --accent-hover: #b2573f;
   --accent-dim: #fbead9;
   --star: #e0a33c;
+  --danger: #c0392b;
+  --focus-ring: 0 0 0 3px var(--accent-dim);
+  --hit: 44px;
 }
 
 * { box-sizing: border-box; }
@@ -59,6 +62,11 @@ body {
   font-size: 14px;
 }
 .ghost-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: var(--hit);
   border: 1px solid var(--border);
   background: transparent;
   color: var(--muted);
@@ -66,6 +74,7 @@ body {
   padding: 4px 12px;
   cursor: pointer;
   font-size: 12px;
+  text-decoration: none;
 }
 .ghost-btn:hover { color: var(--accent); border-color: var(--accent); }
 
@@ -73,6 +82,11 @@ body {
 
 .tabs { display: flex; gap: 6px; margin-bottom: 20px; }
 .tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: var(--hit);
   padding: 8px 16px;
   border: 1px solid var(--border);
   background: var(--surface);
@@ -128,16 +142,42 @@ body {
 .ts-link:hover { text-decoration: underline; }
 
 .star-btn {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
   border: none;
   background: transparent;
   cursor: pointer;
-  font-size: 16px;
   color: var(--muted);
-  padding: 2px 6px;
+  padding: 0;
+  border-radius: 6px;
 }
+/* Keeps the dense card-head layout intact while lifting the pointer/touch
+   target to 44x44 without reflowing the row. */
+.star-btn::after {
+  content: "";
+  position: absolute;
+  inset: 50% auto auto 50%;
+  width: var(--hit);
+  height: var(--hit);
+  transform: translate(-50%, -50%);
+}
+.star-btn:hover { color: var(--star); }
+
+/* Filled vs outline is the state signal, so it survives greyscale and
+   forced-colours where the amber alone would not read. */
 .star-btn.on { color: var(--star); }
+.star-btn.on .icon { fill: currentColor; }
 
 .del-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
   border: 1px solid var(--border);
   background: transparent;
   color: var(--muted);
@@ -146,7 +186,17 @@ body {
   cursor: pointer;
   font-size: 12px;
 }
-.del-btn:hover { color: #c0392b; border-color: #c0392b; }
+/* +4px of bleed per side. The 10px card-head gap absorbs it, so adjacent
+   Copy/Delete targets never overlap. */
+.del-btn::after {
+  content: "";
+  position: absolute;
+  inset: 50% auto auto 50%;
+  width: var(--hit);
+  height: var(--hit);
+  transform: translate(-50%, -50%);
+}
+.del-btn:hover { color: var(--danger); border-color: var(--danger); }
 
 .card-body { color: var(--text); font-size: 14px; white-space: pre-wrap; word-break: break-word; }
 
@@ -167,7 +217,7 @@ select.status-select {
 }
 
 .status-line { margin-top: 18px; color: var(--muted); font-size: 13px; min-height: 20px; }
-.status-line.error { color: #c0392b; }
+.status-line.error { color: var(--danger); }
 
 /* dashboard review */
 .review-card {
@@ -211,12 +261,39 @@ select.status-select {
   font-size: 13px;
 }
 .footer-sep { color: var(--border); }
-.danger-link { color: #c0392b; }
-.danger-link:hover { border-color: #c0392b; color: #c0392b; }
+.danger-link { color: var(--danger); }
+.danger-link:hover { border-color: var(--danger); color: var(--danger); }
+
+.icon {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  display: inline-block;
+  vertical-align: -2px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Keyboard focus was previously invisible everywhere on this page: every
+   control signalled state with :hover only. This is a page-level safety net;
+   it uses :focus-visible so pointer users never see a ring on click. */
+:where(a, button, select, input, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
 
 [hidden] { display: none !important; }
 
 @media (max-width: 560px) {
   .brand-sub { display: none; }
   .shell { padding: 16px 12px 50px; }
+  .tabs { gap: 8px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
 }

@@ -13,7 +13,13 @@
         <a class="login-btn" id="loginBtn" href="/api/auth/login?redirect=/">Sign in with GitHub</a>
         <span class="user-chip" id="userChip" hidden>
           <span id="userName"></span>
-          <button id="refreshBtn" type="button" class="ghost-btn" title="Refresh your data">↻ Refresh</button>
+          <button id="refreshBtn" type="button" class="ghost-btn" title="Refresh your data">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"></path>
+              <path d="M21 3v5h-5"></path>
+            </svg>
+            Refresh
+          </button>
           <button id="logoutBtn" type="button" class="ghost-btn">Sign out</button>
         </span>
       </div>
@@ -22,7 +28,12 @@
     <main class="shell">
       <nav class="tabs" id="tabsNav" hidden>
         <button class="tab active" data-tab="notes">Notes</button>
-        <button class="tab" data-tab="favorites">★ Favorites</button>
+        <button class="tab" data-tab="favorites">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.12 2.12 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.12 2.12 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.12 2.12 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.12 2.12 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.12 2.12 0 0 0 1.597-1.16z"></path>
+          </svg>
+          Favorites
+        </button>
         <button class="tab" data-tab="vocabulary">Vocabulary</button>
         <button class="tab" data-tab="review">Review</button>
       </nav>
@@ -48,7 +59,7 @@
 
       <section id="favoritesPanel" hidden>
         <div class="list-head">
-          <h2>★ Favorites</h2>
+          <h2>Favorites</h2>
           <span class="count" id="favoritesCount"></span>
         </div>
         <div class="empty" id="favoritesEmpty" hidden>Nothing favorited yet. Star a note to pin it here.</div>

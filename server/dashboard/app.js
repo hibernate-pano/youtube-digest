@@ -10,6 +10,19 @@
 
   const $ = (id) => document.getElementById(id);
 
+  const STAR_PATH =
+    "M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.12 2.12 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.12 2.12 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.12 2.12 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.12 2.12 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.12 2.12 0 0 0 1.597-1.16z";
+
+  // Favouriting is a state, not a colour: the filled/outline difference is drawn
+  // by CSS off `.star-btn.on`, so it survives greyscale, forced-colours and low
+  // vision instead of relying on the amber hue alone.
+  function starIcon() {
+    return (
+      '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">' +
+      '<path d="' + STAR_PATH + '"></path></svg>'
+    );
+  }
+
   function escapeHtml(value) {
     return String(value ?? "")
       .replaceAll("&", "&amp;")
@@ -84,8 +97,10 @@
       const star = document.createElement("button");
       star.type = "button";
       star.className = "star-btn" + (note.starred ? " on" : "");
-      star.textContent = note.starred ? "★" : "☆";
+      star.innerHTML = starIcon();
       star.title = note.starred ? "Remove from favorites" : "Add to favorites";
+      star.setAttribute("aria-label", star.title);
+      star.setAttribute("aria-pressed", note.starred ? "true" : "false");
       star.addEventListener("click", () => toggleStar(note));
       const title = document.createElement("span");
       title.className = "card-title";
