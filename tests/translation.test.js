@@ -11,6 +11,8 @@ function loadSidepanelHelpers({
   sendMessage = () => Promise.resolve({}),
   setTimeoutImpl = () => 0,
   clearTimeoutImpl = () => {},
+  documentMock,
+  settingsApi,
 } = {}) {
   const listeners = { addListener() {} };
   const sessionStorage = {};
@@ -27,7 +29,7 @@ function loadSidepanelHelpers({
     IntersectionObserver: class {},
     CSS: { escape: (value) => value },
     window: { getSelection: () => null, close() {} },
-    document: {
+    document: documentMock || {
       addEventListener() {},
       querySelectorAll: () => [],
       querySelector: () => null,
@@ -63,7 +65,10 @@ function loadSidepanelHelpers({
       windows: { getCurrent: () => Promise.resolve({ id: 1 }) },
       tabs: { onUpdated: listeners, onActivated: listeners },
     },
-    YTD_SETTINGS: {},
+    // The panel loads the real settings.js in the browser, so mirror it here
+    // instead of an empty object: the sync-expiry reason code is defined
+    // there, and a stub without it would make every comparison fail open.
+    YTD_SETTINGS: settingsApi || require("../settings.js"),
   };
   sandbox.globalThis = sandbox;
   vm.runInNewContext(read("sidepanel.js"), sandbox);
@@ -107,6 +112,7 @@ function loadBackgroundHelpers({
   setTimeoutImpl = () => 0,
   clearTimeoutImpl = () => {},
   storageMock,
+  tabs = {},
   sidePanel = {
     setPanelBehavior() {},
     setOptions: () => Promise.resolve(),
@@ -115,6 +121,7 @@ function loadBackgroundHelpers({
 } = {}) {
   const listeners = { addListener() {} };
   const localStorage = { ytd_settings: settings };
+  const openedLoginTabs = [];
   const sandbox = {
     console,
     URL,
@@ -158,11 +165,41 @@ function loadBackgroundHelpers({
         getURL: (resourcePath) => `chrome-extension://test/${resourcePath}`,
         sendMessage: () => Promise.resolve({ success: true }),
       },
-      tabs: { onUpdated: listeners, onActivated: listeners },
+      tabs: {
+        onUpdated: listeners,
+        onActivated: listeners,
+        // Spread first so the recording create() below stays authoritative and
+        // every opened login URL can be asserted.
+        ...tabs,
+        create:
+          tabs.create ??
+          (async (options) => {
+            openedLoginTabs.push(options.url);
+            return { id: openedLoginTabs.length, url: options.url };
+          }),
+      },
     },
     YTD_SETTINGS: {
       STORAGE_KEY: "ytd_settings",
       GITHUB_SESSION_KEY: "ytd_github_session",
+      SYNC_SESSION_EXPIRED: "SYNC_SESSION_EXPIRED",
+      SYNC_EXPIRED_KEY: "ytd_sync_expired",
+      UI_LANGUAGE_STORAGE_KEY: "ytd_options_language",
+      normalizeUiLanguage: (language) =>
+        language === "zh-CN" ? "zh-CN" : "en",
+      translateSyncCopy: (language, key, params = {}) => {
+        const zh = language === "zh-CN";
+        const table = {
+          expiredLabel: zh ? "同步已过期" : "Sync expired",
+          expiredTitle: zh
+            ? "笔记仍保存在这台设备上，但 GitHub 登录已过期，云端备份已停止。点击重新登录以恢复同步。"
+            : "Your notes are still saved on this device, but the cloud backup stopped because the GitHub session expired. Click to sign in again and resume syncing.",
+          signedInTitle: zh
+            ? `已登录为 ${params.login}。点击退出登录。`
+            : `Signed in as ${params.login}. Click to sign out.`,
+        };
+        return table[key] ?? "";
+      },
       SERVER_BASE_URL: "https://sync.test",
       normalize: (value) => value,
       getProvider: (id) => ({
@@ -215,7 +252,9 @@ function loadBackgroundHelpers({
   // sandbox stubs importScripts, so load it explicitly first.
   vm.runInNewContext(read("cloud-sync.js"), sandbox);
   vm.runInNewContext(read("background.js"), sandbox);
-  return sandbox.__YTD_TRANSLATION_TESTING__;
+  const helpers = sandbox.__YTD_TRANSLATION_TESTING__;
+  helpers.openedLoginTabs = openedLoginTabs;
+  return helpers;
 }
 
 test("non-YouTube tabs explicitly close before their panel is disabled", async () => {
@@ -1297,4 +1336,367 @@ test("reviews require a session and submit grades to the cloud", async () => {
   assert.equal(requests[1].method, "POST");
   assert.equal(requests[1].body.grade, 4);
 });
+
+// ============================================================
+// SYNC SESSION EXPIRY (HTTP 401)
+// The backend issues 30-day tokens and has no refresh endpoint, so a 401 is
+// terminal: the cloud mirror stops and stays stopped. These tests pin the
+// signal that makes that visible instead of silent.
+// ============================================================
+
+/**
+ * Minimal stand-ins for the two header controls plus a document, so the panel's
+ * render path can be exercised without a browser.
+ */
+function createSyncHeaderDom() {
+  function createElement() {
+    const classes = new Set();
+    const attributes = {};
+    return {
+      hidden: false,
+      title: "",
+      textContent: "",
+      dataset: {},
+      classList: {
+        toggle: (name, on) => {
+          if (on) classes.add(name);
+          else classes.delete(name);
+        },
+        contains: (name) => classes.has(name),
+      },
+      setAttribute: (name, value) => {
+        attributes[name] = String(value);
+      },
+      removeAttribute: (name) => {
+        delete attributes[name];
+      },
+      getAttribute: (name) => attributes[name],
+    };
+  }
+  const syncBtn = createElement();
+  const syncAccount = createElement();
+  const elements = { syncBtn, syncAccount };
+  return {
+    elements,
+    documentMock: {
+      addEventListener() {},
+      querySelectorAll: () => [],
+      querySelector: () => null,
+      getElementById: (id) => elements[id] ?? null,
+      createElement,
+    },
+  };
+}
+
+function syncResponse(status, payload = { error: "Unauthorized" }) {
+  return {
+    ok: false,
+    status,
+    json: async () => payload,
+  };
+}
+
+test("a 401 sync pull reports session expiry instead of a bare message", async () => {
+  const storageMock = createStorageMock({
+    ytd_github_session: { token: "expired", login: "alice", githubId: 1001, savedAt: Date.now() },
+  });
+  const helpers = loadBackgroundHelpers({
+    fetchImpl: async () => syncResponse(401),
+    storageMock,
+  });
+
+  const result = await helpers.fullSyncNotes();
+  assert.equal(result.success, false);
+  assert.equal(result.expired, true);
+  assert.equal(result.status, 401);
+  assert.equal(result.code, "SYNC_SESSION_EXPIRED");
+  // The latch is what survives service worker suspension, so it must be set.
+  const raw = await storageMock.get(null);
+  assert.equal(raw.ytd_sync_expired, true);
+});
+test("transient sync failures never raise an expiry signal", async () => {
+  for (const status of [500, 502, 503]) {
+    const storageMock = createStorageMock({
+      ytd_github_session: { token: "valid", login: "alice", githubId: 1001, savedAt: Date.now() },
+    });
+    const helpers = loadBackgroundHelpers({
+      fetchImpl: async () => syncResponse(status),
+      storageMock,
+    });
+
+    const result = await helpers.fullSyncNotes();
+    assert.equal(result.success, false, `status ${status}`);
+    assert.equal(result.expired, false, `status ${status}`);
+    assert.equal(result.code, undefined, `status ${status}`);
+    const raw = await storageMock.get(null);
+    assert.equal(raw.ytd_sync_expired, undefined, `status ${status}`);
+  }
+});
+
+test("a network failure is not mistaken for an expired session", async () => {
+  const storageMock = createStorageMock({
+    ytd_github_session: { token: "valid", login: "alice", githubId: 1001, savedAt: Date.now() },
+  });
+  const helpers = loadBackgroundHelpers({
+    fetchImpl: async () => {
+      throw new TypeError("Failed to fetch");
+    },
+    storageMock,
+  });
+
+  const result = await helpers.fullSyncNotes();
+  assert.equal(result.success, false);
+  assert.equal(result.expired, false);
+  assert.equal(helpers.isSyncSessionExpired(new Error("Failed to fetch")), false);
+});
+
+test("a silent note mirror write still raises the expiry latch", async () => {
+  const storageMock = createStorageMock({
+    ytd_github_session: { token: "expired", login: "alice", githubId: 1001, savedAt: Date.now() },
+  });
+  const broadcasts = [];
+  const helpers = loadBackgroundHelpers({
+    fetchImpl: async () => syncResponse(401),
+    storageMock,
+  });
+  // saveNoteToStorage logs the failure but still resolves; the expiry signal
+  // has to travel on its own or the backup dies unnoticed again.
+  await helpers.saveNoteToStorage({
+    id: "note_1",
+    text: "kept locally",
+    videoId: "abc123xyz",
+    createdAt: Date.now(),
+  });
+
+  const raw = await storageMock.get(null);
+  assert.equal(raw.ytd_sync_expired, true);
+  // The local note is never lost to a failed mirror.
+  assert.equal(raw.ytd_notes_1001[0].id, "note_1");
+});
+
+test("a successful sync clears a previously latched expiry", async () => {
+  const storageMock = createStorageMock({
+    ytd_github_session: { token: "refreshed", login: "alice", githubId: 1001, savedAt: Date.now() },
+    ytd_sync_expired: true,
+  });
+  const helpers = loadBackgroundHelpers({
+    fetchImpl: async () => ({ ok: true, json: async () => ({ notes: [] }) }),
+    storageMock,
+  });
+
+  const result = await helpers.fullSyncNotes();
+  assert.equal(result.success, true);
+  const raw = await storageMock.get(null);
+  assert.equal(raw.ytd_sync_expired, undefined);
+  assert.equal(await helpers.isSyncSessionExpiredForAccount(), false);
+});
+
+test("the expiry latch never reports an expiry while signed out", async () => {
+  const storageMock = createStorageMock({ ytd_sync_expired: true });
+  const helpers = loadBackgroundHelpers({ storageMock });
+
+  assert.equal(await helpers.isSyncSessionExpiredForAccount(), false);
+  const session = await helpers.handleGetGithubSession();
+  assert.equal(session.session, null);
+  assert.equal(session.expired, false);
+});
+
+test("getGithubSession reports the latch only for a signed-in account", async () => {
+  const storageMock = createStorageMock({
+    ytd_github_session: { token: "expired", login: "alice", githubId: 1001, savedAt: Date.now() },
+    ytd_sync_expired: true,
+  });
+  const helpers = loadBackgroundHelpers({ storageMock });
+
+  const session = await helpers.handleGetGithubSession();
+  assert.equal(session.success, true);
+  assert.equal(session.session.login, "alice");
+  assert.equal(session.expired, true);
+  // The token itself must never reach the panel.
+  assert.equal(session.session.token, undefined);
+});
+
+test("re-login replaces a dead session instead of short-circuiting", async () => {
+  const storageMock = createStorageMock({
+    ytd_github_session: { token: "expired", login: "alice", githubId: 1001, savedAt: Date.now() },
+    ytd_sync_expired: true,
+    ytd_notes_1001: [{ id: "note_1", text: "kept", videoId: "abc123xyz", createdAt: 1 }],
+  });
+  const helpers = loadBackgroundHelpers({
+    fetchImpl: async () => syncResponse(401),
+    storageMock,
+  });
+
+  const started = await helpers.handleStartGithubLogin();
+  assert.equal(started.success, true);
+  // The "already signed in" shortcut must NOT fire for a dead token, or the
+  // re-login chip would be a silent no-op.
+  assert.equal(started.alreadySignedIn, undefined);
+  assert.equal(started.replacedExpiredSession, true);
+  assert.equal(typeof started.tabId, "number");
+  assert.equal(helpers.openedLoginTabs.length, 1);
+  assert.equal(
+    helpers.openedLoginTabs[0],
+    "https://sync.test/api/auth/login",
+  );
+  // The dead session is dropped so the OAuth redirect can install a fresh one,
+  // while the account's local notes survive untouched.
+  const raw = await storageMock.get(null);
+  assert.equal(raw.ytd_github_session, undefined);
+  assert.equal(raw.ytd_sync_expired, undefined);
+  assert.equal(raw.ytd_notes_1001[0].id, "note_1");
+});
+
+test("a live session still short-circuits the login shortcut", async () => {
+  const storageMock = createStorageMock({
+    ytd_github_session: { token: "valid", login: "alice", githubId: 1001, savedAt: Date.now() },
+  });
+  const helpers = loadBackgroundHelpers({ storageMock });
+
+  const started = await helpers.handleStartGithubLogin();
+  assert.equal(started.success, true);
+  assert.equal(started.alreadySignedIn, true);
+});
+
+test("signing out drops the expiry latch with the session", async () => {
+  const storageMock = createStorageMock({
+    ytd_github_session: { token: "expired", login: "alice", githubId: 1001, savedAt: Date.now() },
+    ytd_sync_expired: true,
+  });
+  const helpers = loadBackgroundHelpers({ storageMock });
+
+  await helpers.handleLogoutGithub();
+  const raw = await storageMock.get(null);
+  assert.equal(raw.ytd_github_session, undefined);
+  assert.equal(raw.ytd_sync_expired, undefined);
+});
+
+test("the panel shows an actionable expired chip and signs in again on click", async () => {
+  const { elements, documentMock } = createSyncHeaderDom();
+  const helpers = loadSidepanelHelpers({
+    documentMock,
+    sendMessage: async (message) => {
+      if (message.action === "getGithubSession") {
+        return {
+          success: true,
+          session: { login: "alice", githubId: 1001, savedAt: 1 },
+          expired: true,
+        };
+      }
+      return { success: true };
+    },
+  });
+
+  await helpers.refreshGithubSyncStatus();
+  assert.equal(elements.syncBtn.hidden, true);
+  assert.equal(elements.syncAccount.hidden, false);
+  assert.equal(elements.syncAccount.textContent, "Sync expired");
+  assert.equal(elements.syncAccount.classList.contains("sync-account-expired"), true);
+  assert.equal(elements.syncAccount.dataset.syncExpired, "true");
+  assert.match(elements.syncAccount.getAttribute("aria-label"), /cloud backup stopped/);
+  // No emoji or pictograph may appear in the rendered label.
+  assert.doesNotMatch(elements.syncAccount.textContent, /\p{Extended_Pictographic}/u);
+});
+
+test("the panel keeps the plain account name when the session is healthy", async () => {
+  const { elements, documentMock } = createSyncHeaderDom();
+  const helpers = loadSidepanelHelpers({
+    documentMock,
+    sendMessage: async (message) => {
+      if (message.action === "getGithubSession") {
+        return { success: true, session: { login: "alice" }, expired: false };
+      }
+      return { success: true };
+    },
+  });
+
+  await helpers.refreshGithubSyncStatus();
+  assert.equal(elements.syncAccount.textContent, "alice");
+  assert.equal(elements.syncAccount.classList.contains("sync-account-expired"), false);
+  assert.equal(elements.syncAccount.dataset.syncExpired, "false");
+  assert.match(elements.syncAccount.getAttribute("aria-label"), /Click to sign out/);
+});
+
+test("a signed-out panel never shows the expired chip", async () => {
+  const { elements, documentMock } = createSyncHeaderDom();
+  const helpers = loadSidepanelHelpers({
+    documentMock,
+    sendMessage: async () => ({ success: true, session: null, expired: true }),
+  });
+
+  await helpers.refreshGithubSyncStatus();
+  assert.equal(elements.syncBtn.hidden, false);
+  assert.equal(elements.syncAccount.hidden, true);
+  assert.equal(elements.syncAccount.classList.contains("sync-account-expired"), false);
+  assert.equal(elements.syncAccount.dataset.syncExpired, undefined);
+});
+
+test("only an expiry code re-renders the header; a 500 stays quiet", async () => {
+  const expiredCalls = [];
+  const helpers = loadSidepanelHelpers({
+    documentMock: createSyncHeaderDom().documentMock,
+    sendMessage: async (message) => {
+      if (message.action === "getGithubSession") expiredCalls.push(message);
+      return { success: true };
+    },
+  });
+
+  assert.equal(
+    await helpers.applySyncSessionSignal({
+      success: false,
+      error: "Sync request failed: 500",
+      status: 500,
+    }),
+    false,
+  );
+  assert.equal(expiredCalls.length, 0);
+
+  assert.equal(
+    await helpers.applySyncSessionSignal({
+      success: false,
+      error: "Unauthorized",
+      status: 401,
+      code: "SYNC_SESSION_EXPIRED",
+      expired: true,
+    }),
+    true,
+  );
+  assert.equal(expiredCalls.length, 1);
+
+  // A successful sync and an absent result are both no-ops.
+  assert.equal(await helpers.applySyncSessionSignal({ success: true }), false);
+  assert.equal(await helpers.applySyncSessionSignal(null), false);
+  assert.equal(expiredCalls.length, 1);
+});
+
+test("sync header copy is bilingual and free of pictographs", () => {
+  const settings = require("../settings.js");
+
+  assert.equal(
+    settings.translateSyncCopy("en", "expiredLabel"),
+    "Sync expired",
+  );
+  assert.equal(
+    settings.translateSyncCopy("zh-CN", "expiredLabel"),
+    "同步已过期",
+  );
+  assert.match(
+    settings.translateSyncCopy("en", "signedInTitle", { login: "alice" }),
+    /Signed in as alice/,
+  );
+  assert.match(
+    settings.translateSyncCopy("zh-CN", "signedInTitle", { login: "alice" }),
+    /已登录为 alice/,
+  );
+  // Both languages must explain the backup actually stopped.
+  assert.match(settings.translateSyncCopy("en", "expiredTitle"), /cloud backup stopped/);
+  assert.match(settings.translateSyncCopy("zh-CN", "expiredTitle"), /云端备份已停止/);
+  // Unknown language falls back to English instead of rendering nothing.
+  assert.equal(settings.translateSyncCopy("fr", "expiredLabel"), "Sync expired");
+  assert.doesNotMatch(
+    JSON.stringify(settings.SYNC_COPY),
+    /\p{Extended_Pictographic}|[✓✕⧉▶]/u,
+  );
+});
+
 

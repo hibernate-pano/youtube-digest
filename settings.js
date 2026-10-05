@@ -18,6 +18,64 @@ var YTD_SETTINGS = (() => {
   const GITHUB_SESSION_KEY = "ytd_github_session";
 
   /**
+   * Reason code attached to every sync result whose request the server
+   * rejected with 401. The backend issues 30-day session tokens and exposes no
+   * refresh endpoint, so a 401 is terminal rather than retryable: the cloud
+   * mirror stops silently unless a surface reads this code and asks the user to
+   * sign in again. Kept here because cloud-sync.js (service worker) and
+   * sidepanel.js (panel) both load this file and must agree on the literal.
+   */
+  const SYNC_SESSION_EXPIRED = "SYNC_SESSION_EXPIRED";
+
+  /**
+   * Persisted latch for the expired state. The MV3 service worker is suspended
+   * after ~30s idle and the panel may be closed when a background mirror write
+   * fails, so a runtime broadcast alone would drop the signal. The latch lives
+   * in chrome.storage.local and is cleared by the next successful sync or
+   * login.
+   */
+  const SYNC_EXPIRED_KEY = "ytd_sync_expired";
+
+  /**
+   * Interface language preference. The settings page owns the preference, but
+   * the side panel reads the same key so the shared GitHub sync header speaks
+   * the same language the user picked there.
+   */
+  const UI_LANGUAGE_STORAGE_KEY = "ytd_options_language";
+  const SUPPORTED_UI_LANGUAGES = new Set(["en", "zh-CN"]);
+
+  /**
+   * Copy for the GitHub sync chip in the panel header. The signed-in and
+   * signed-out labels already ship in the markup; these strings cover the
+   * tooltip, the accessible name, and the expired-session state.
+   */
+  const SYNC_COPY = {
+    en: {
+      signedInTitle: ({ login }) => `Signed in as ${login}. Click to sign out.`,
+      expiredLabel: "Sync expired",
+      expiredTitle:
+        "Your notes are still saved on this device, but the cloud backup stopped because the GitHub session expired. Click to sign in again and resume syncing.",
+    },
+    "zh-CN": {
+      signedInTitle: ({ login }) => `已登录为 ${login}。点击退出登录。`,
+      expiredLabel: "同步已过期",
+      expiredTitle:
+        "笔记仍保存在这台设备上，但 GitHub 登录已过期，云端备份已停止。点击重新登录以恢复同步。",
+    },
+  };
+
+  function normalizeUiLanguage(language) {
+    return SUPPORTED_UI_LANGUAGES.has(language) ? language : "en";
+  }
+
+  function translateSyncCopy(language, key, params = {}) {
+    const normalizedLanguage = normalizeUiLanguage(language);
+    const value =
+      SYNC_COPY[normalizedLanguage][key] ?? SYNC_COPY.en[key] ?? "";
+    return typeof value === "function" ? value(params) : value;
+  }
+
+  /**
    * Registry of supported AI providers. Base URLs and models are fixed for
    * each provider so users never configure them by hand. API key fields are
    * stored side by side so users can switch providers without re-entering keys.
@@ -129,6 +187,12 @@ var YTD_SETTINGS = (() => {
     STORAGE_KEY,
     SERVER_BASE_URL,
     GITHUB_SESSION_KEY,
+    SYNC_SESSION_EXPIRED,
+    SYNC_EXPIRED_KEY,
+    UI_LANGUAGE_STORAGE_KEY,
+    SYNC_COPY,
+    normalizeUiLanguage,
+    translateSyncCopy,
     PROVIDERS,
     KEY_FIELDS,
     getProvider,
