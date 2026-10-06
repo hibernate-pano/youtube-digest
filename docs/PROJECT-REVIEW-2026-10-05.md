@@ -86,13 +86,20 @@ Chrome 扩展 (MV3)
 
 **1. 前后端能力错配（最需要决策）**
 
-`2e6de5b` / `9d50357` 两个提交把 Words tab 和提取弹窗从 UI 删掉了，但：
+`2e6de5b` / `9d50357` 两个提交把 Words tab 和提取弹窗从 UI 删掉了，但整条链路仍在：
 
-- `cloud-sync.js` 仍保留完整词汇/复习链路（`handleExtractVocabulary`、`handleSaveVocabulary`、`handleGetDueReviews`、`handleSubmitReview`）
-- `server/src/routes/vocabulary.js`、`reviews.js` 仍在服务
-- sidepanel 启动时**仍在调用** `syncVocabulary`（`sidepanel.js:249`）
+| 层 | 状态 | 证据 |
+|----|------|------|
+| 扩展 UI | **无任何入口** | `grep -icE "vocab" sidepanel.html` = 0；`sidepanel.js` / `content.js` 无词汇 UI 代码 |
+| 扩展 启动逻辑 | **仍在执行** | `sidepanel.js:277-278` 每次打开面板都发 `syncVocabulary` |
+| 扩展 消息转发 | **完整保留** | `background.js:504,511,539,546` 转发 `extractVocabulary` / `saveVocabulary` / `getDueReviews` / `submitReview` |
+| 扩展 同步层 | **完整保留** | `cloud-sync.js` 有 `fullSyncVocabulary`、`handleSaveVocabulary`、`handleGetVocabulary`、`handleDeleteVocabulary`、`handleGetDueReviews`、`handleSubmitReview` |
+| 服务端 路由 | **仍在服务** | `server/src/routes/vocabulary.js`、`reviews.js` |
+| Dashboard | **只读，不能录入** | `app.js` 无任何 `POST /api/vocabulary`，用户看得到却加不了新词 |
 
-结果：云端存着词汇和复习数据，界面上找不到入口；每次打开面板还在跑一次无用的词汇同步。三端状态不一致。
+结果：云端可能存着词汇与复习数据，但用户在扩展里找不到入口、在 dashboard 里加不了新词，而扩展每次打开仍在花钱跑一次全量词汇同步。**commit `9d50357` 声称「词汇管理只在 web dashboard」，但 dashboard 并没有录入能力**，承诺与实现不符。
+
+这是三个问题里唯一需要产品决策的，另两个是纯工程债。
 
 **2. Dashboard 视觉与扩展脱节**
 
