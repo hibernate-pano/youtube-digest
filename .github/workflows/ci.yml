@@ -9,6 +9,32 @@ permissions:
   contents: read
 
 jobs:
+  test:
+    name: Run test suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+
+      # The extension suite guards product-UI regressions (emoji bans, provider
+      # key isolation, sync merge semantics). It previously only ran indirectly
+      # through `npm run package`, so a failing test could not fail the build.
+      - name: Test extension
+        run: npm test
+
+      # The server suite covers the Worker: auth, per-account isolation, the
+      # vocabulary ownership gate, and the MemoryStore/NeonStore contract.
+      - name: Test Worker backend
+        run: npm test
+        working-directory: server
+
   release-check:
     name: Validate public extension package
     runs-on: ubuntu-latest

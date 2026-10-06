@@ -138,11 +138,14 @@ Chrome 扩展 (MV3)
 | 级别 | 问题 | 位置 | 说明 |
 |-----|------|------|------|
 | 中 | CI 不跑测试 | `.github/workflows/ci.yml` | 只做 `npm run package`，没有任何 `npm test` 步骤 → 上游那条 emoji 守护测试在 CI 里不会拦住违规 |
-| 中 | Dashboard 入口指向不存在的页面 | `server/dashboard/index.html` | 目录只有 `index.html` / `privacy.html` / `app.js` / `style.css`，无 `review.html` → 死链 |
-| 中 | Dashboard 无焦点可见性、触摸目标过小 | `server/dashboard/style.css` | `grep -c focus` = 0；`.ghost-btn`/`.del-btn`/`.star-btn` 命中区均 < 44px |
 | 中 | 词汇/复习三端错配 | 见上节 | 前端无入口、后端在存、同步还在跑 |
 | 低 | 超长文件 | `sidepanel.js` 2225 行、`background.js` 1813 行、`sidepanel.css` 1380 行 | 远超 300 行规范，fork 继承的历史包袱 |
 | 低 | 硬编码生产域名 | `settings.js:17`、`server/src/index.js:295` | `https://ytd.panbo.space` 写死，无环境切换 |
+
+**已复核为误报（不作为待办）**：
+
+- 「Dashboard 存在指向 `review.html` 的死链」——**不成立**。审查时只看了 `server/dashboard/` 目录清单就推断有跳转死链，实际 4 个 tab（Notes / Favorites / Vocabulary / Review）都是**同页切换**：`index.html:30-38` 是 `<button data-tab="...">`，对应 `index.html:51-87` 有 `notesPanel` / `favoritesPanel` / `vocabularyPanel` / `reviewPanel` 四个 section，`app.js:365-371` 负责显隐切换。全部 `href` 只有 `/style.css`、`/privacy.html` 与两个 `/api/auth/login`，无失效链接。
+- 「Dashboard 无焦点可见性、触摸目标过小」——**已修复**（`a1845b6`）：`style.css` 补了全局 `:focus-visible` 兜底，`.ghost-btn` / `.tab` 提到 44px 高，`.star-btn` / `.del-btn` 用伪元素扩出 44×44 命中区，3 处 `★` 字符图标换成了内联 SVG。
 
 **emoji 精确归属**（用 `git diff d03e1f6 6c6e08e` 逐行比对确认）：
 
