@@ -260,6 +260,11 @@ for file in "${javascript_files[@]}"; do
   node --check "$file"
 done
 
+# The prompt files are parsed at runtime by a fenced-code-block reader. A file
+# whose fence is missing throws "Prompt section not found" and takes the whole
+# feature down, so the release gate parses them the same way the worker does.
+node "$script_dir/check-prompts.js" --root "$repo_root"
+
 if compgen -G "tests/*.test.js" >/dev/null; then
   # The test report belongs on stderr: stdout is the file list that
   # scripts/package-extension.sh reads, and TAP output there would corrupt it.
