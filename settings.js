@@ -86,6 +86,16 @@ var YTD_SETTINGS = (() => {
   const TRANSCRIPT_REQUEST_TIMEOUT_MS = 45_000;
 
   /**
+   * How long the local caption lookup may take.
+   *
+   * The local path reads the page's own caption tracks and fetches them from
+   * YouTube. It is the fast path - a second or two - and it is tried before
+   * the paid one. A short deadline keeps a page that never answers from
+   * delaying the paid fallback behind it.
+   */
+  const LOCAL_TRANSCRIPT_TIMEOUT_MS = 15_000;
+
+  /**
    * Interface language preference. The settings page owns the preference, but
    * the side panel reads the same key so the shared GitHub sync header speaks
    * the same language the user picked there.
@@ -483,6 +493,7 @@ var YTD_SETTINGS = (() => {
     STORAGE_QUOTA_EXCEEDED,
     CLOUD_REQUEST_TIMEOUT_MS,
     TRANSCRIPT_REQUEST_TIMEOUT_MS,
+    LOCAL_TRANSCRIPT_TIMEOUT_MS,
     UI_LANGUAGE_STORAGE_KEY,
     PENDING_LOGIN_NONCE_KEY,
     NOTES_STORAGE_KEY,

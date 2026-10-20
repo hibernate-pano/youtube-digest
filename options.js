@@ -12,7 +12,8 @@ const YTD_OPTIONS = (() => {
         "Keys stay in this Chrome profile and are sent only to Supadata and your chosen AI provider. There is no analytics or telemetry. If you sign in with GitHub below, your saved notes are mirrored to this project's own sync service at ytd.panbo.space; without signing in, nothing leaves this device.",
       transcriptProvider: "Transcript provider",
       supadataApiKeyLabel: "Supadata API key",
-      supadataHelp: "Used to fetch timestamped YouTube subtitles. ",
+      supadataHelp:
+        "Optional. Subtitles are read out of the YouTube page itself; this key is only a fallback for when that fails. ",
       supadataLink: "Create a Supadata account and key",
       supadataHelpSuffix:
         ". Supadata generates the key during onboarding.",
@@ -120,7 +121,8 @@ const YTD_OPTIONS = (() => {
         "密钥仅保存在当前 Chrome 个人资料中，只会发送给 Supadata 和你选择的 AI 服务。本扩展不使用分析统计或行为追踪。如果你在下方使用 GitHub 登录，已保存的笔记会镜像到本项目自建的同步服务 ytd.panbo.space；不登录时不会有任何数据离开这台设备。",
       transcriptProvider: "字幕服务",
       supadataApiKeyLabel: "Supadata API 密钥",
-      supadataHelp: "用于获取带时间戳的 YouTube 字幕。",
+      supadataHelp:
+        "可选。字幕直接从 YouTube 页面里读；只有读不到的时候，才需要这个密钥作为兜底。",
       supadataLink: "创建 Supadata 账号并获取密钥",
       supadataHelpSuffix: "。Supadata 会在引导流程中生成密钥。",
       aiProvider: "AI 服务",
@@ -804,10 +806,10 @@ const YTD_OPTIONS = (() => {
         supadataApiKey: supadataApiKeyInput.value,
       });
 
-      if (!settings.supadataApiKey) {
-        setStatus(saveStatus, "addSupadataKey");
-        return;
-      }
+      // The Supadata key is a fallback, not a requirement: the subtitles are
+      // read out of the YouTube page itself, and the key is only used when
+      // that fails. The AI key is what the summary and the translation
+      // need, so that is the one the settings page insists on.
       if (!selectedProviderKey(settings)) {
         setStatus(saveStatus, "addAiKey");
         return;

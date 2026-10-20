@@ -82,12 +82,12 @@ Because this is an unpacked extension, it does not update automatically. After d
 
 ## Set up your API keys
 
-YouTube Digest needs a Supadata key and one API key from your chosen AI provider:
+YouTube Digest needs one API key from your chosen AI provider, and optionally a Supadata key:
 
-1. A **Supadata API key** to retrieve YouTube transcripts.
-2. An **AI provider key** from DeepSeek, MiniMax (China), or OpenCode Go, for summaries, explanations, translation, and automatic note polishing.
+1. An **AI provider key** from DeepSeek, MiniMax (China), or OpenCode Go, for summaries, explanations, translation, and automatic note polishing. This one is required.
+2. A **Supadata API key**, used only as a fallback. Transcripts are read out of the YouTube page you already have open, so most videos work without it and no Supadata credit is spent. Add it if you want the fallback for videos whose captions cannot be read locally.
 
-### Get a Supadata API key
+### Get a Supadata API key (optional)
 
 1. Open the official [Supadata sign-up page](https://dash.supadata.ai/auth/sign-up).
 2. Create an account and complete the short onboarding flow.
@@ -169,7 +169,7 @@ The dashboard is read-mostly on purpose: it is the place to *read* and *review* 
 
 - Google Chrome 116 or newer, using the Side Panel API.
 - Standard `youtube.com/watch` video pages.
-- Native subtitle tracks returned by Supadata. YouTube Digest prefers English when available, but may show another native language.
+- Native subtitle tracks. YouTube Digest reads them out of the YouTube page you already have open, so no transcript credit is spent. Supadata is used only as a fallback for videos whose captions cannot be read that way. YouTube Digest prefers English when available, but may show another native language.
 - Original, Simplified Chinese, and aligned bilingual transcript views, with one content-language setting shared across Transcript, Summary, and Notes.
 - Transcript search for words or phrases, with previous and next buttons for every match.
 - AI summaries, chapters, key quotes, selected-text explanations, translation, and automatic note polishing.
@@ -184,7 +184,11 @@ Shorts, live streams, private or access-restricted videos, and videos without an
 
 YouTube Digest forces Supadata's `mode=native`. It does not request AI-generated transcripts or perform local audio transcription when native captions are unavailable.
 
-## Supadata free tier and request costs
+## Transcript costs
+
+**Most videos cost nothing.** The transcript is read out of the YouTube page you already have open, using the caption track the page itself carries. No API key is involved, no credit is spent, and the subtitle text does not leave your browser.
+
+**Supadata is the fallback.** It is used when the page cannot be read: YouTube changed how the player exposes its captions, the tab is gone, or the video has no caption track at all.
 
 Current as of October 20, 2026, the [Supadata pricing page](https://supadata.ai/pricing) lists a free tier with **100 credits per month**, no credit card required. Unused credits do not roll over. Supadata pricing can change, so check the current page before relying on these numbers.
 
@@ -194,7 +198,7 @@ The [Supadata transcript documentation](https://docs.supadata.ai/get-transcript)
 - A generated transcript costs **2 credits per video minute**. YouTube Digest does not use this path because it forces `mode=native`.
 - An unavailable native lookup returned as HTTP `206` still uses **1 credit**. YouTube Digest shows this as "No native subtitle track is available for this video.", but the credit is already spent.
 
-With the current native-only behavior, the free tier can cover roughly 100 transcript lookups per month when each request succeeds once. Retries and unavailable-caption lookups also consume credits, so actual successful-video coverage can be lower.
+With the current native-only behavior, the free tier can cover roughly 100 fallback lookups per month when each request succeeds once. Retries and unavailable-caption lookups also consume credits, so actual successful-video coverage can be lower.
 
 DeepSeek usage is separate from Supadata. YouTube Digest does not collect payments or resell access. Set spending limits and monitor both accounts.
 
@@ -240,10 +244,11 @@ If you want another AI provider or model, first open the exact YouTube Digest pr
 
 YouTube Digest makes provider requests directly from the extension:
 
-1. It sends a canonical YouTube watch URL to Supadata to request the native transcript.
-2. It sends the transcript and relevant video metadata to your chosen AI provider when you request AI features.
-3. Focused features send only the content they need, such as selected text with context or small transcript batches for translation.
-4. It stores keys, settings, notes, and recent cache entries locally in Chrome.
+1. It reads the transcript out of the YouTube page you already have open. Nothing leaves your browser on this path.
+2. Only when that read fails, it sends a canonical YouTube watch URL to Supadata to request the native transcript.
+3. It sends the transcript and relevant video metadata to your chosen AI provider when you request AI features.
+4. Focused features send only the content they need, such as selected text with context or small transcript batches for translation.
+5. It stores keys, settings, notes, and recent cache entries locally in Chrome.
 
 The one exception is the optional GitHub sync described above. If you sign in, your saved notes are also mirrored to this project's own sync service at `https://ytd.panbo.space`, which runs on Cloudflare Workers with a Neon PostgreSQL database. Sign-in uses GitHub's OAuth flow, and the service only ever serves the rows belonging to the account you signed in with. If you never sign in, no note data leaves your device.
 
@@ -270,13 +275,14 @@ There is no YouTube Digest account system, advertising, analytics, or telemetry.
 ### YouTube Digest asks for setup
 
 - The panel shows the title **API Keys Missing** and a button labeled **Open Settings** when a key is missing. Click that button, or open **Settings** from the panel header, from the YouTube Digest card at `chrome://extensions`, or by right-clicking the toolbar icon.
-- Save a Supadata key and the API key of your chosen AI provider. The extension also opens Settings by itself the first time it is installed.
+- Save the API key of your chosen AI provider. The Supadata key is optional. The extension also opens Settings by itself the first time it is installed.
 - Choose one of the supported providers: DeepSeek V4 Flash, MiniMax M3, or OpenCode Go. Endpoints and models are fixed, so there are no Base URL or Model fields to configure.
 - If Settings says a legacy custom provider was removed, enter the API key of your chosen provider. The old AI key was cleared so it could not be reused with the wrong service.
 
 ### No transcript is found
 
 - Confirm the video is public and has native captions.
+- Make sure the YouTube tab is still open and playing: the transcript is read out of that page. If the page cannot be read, YouTube Digest falls back to Supadata, and then it needs a Supadata key.
 - Check your Supadata key, remaining credits, rate limit, and account status.
 - Remember that unavailable native lookups and manual retries may still consume credits.
 

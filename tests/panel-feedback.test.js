@@ -843,6 +843,58 @@ test("a quote that did not save says why", async () => {
   assert.match(message, /storage is full/i, "the reason is not explained");
 });
 
+test("a video with no captions and no fallback key says both things", async () => {
+  const panel = createPanel({ sendMessageImpl: workerRouter() });
+
+  panel.helpers.showTranscriptError({ error: "NO_SUPADATA_KEY" });
+
+  const message = panel.el("errorMessage").textContent;
+  assert.match(message, /no subtitles/i, "the video's real problem is hidden");
+  assert.match(message, /Supadata/i, "the fallback key is not named");
+  assert.doesNotMatch(
+    message,
+    /NO_SUPADATA_KEY/,
+    "the code reached the user",
+  );
+});
+
+test("the panel works without a Supadata key and says so once", async () => {
+  const panel = createPanel({
+    sendMessageImpl: workerRouter({
+      checkConfig: { hasSupadataKey: false, hasAiKey: true },
+    }),
+  });
+  await panel.boot();
+
+  // The panel is alive: it did not fall into the "missing keys" dead end.
+  assert.equal(
+    panel.el("errorState").style.display,
+    "none",
+    "a missing fallback key stops the whole panel",
+  );
+
+  // And the user knows the fallback is gone.
+  const notice = panel.el("panelToastText").textContent;
+  assert.match(notice, /Supadata/i, "the missing fallback is not mentioned");
+});
+
+test("the panel stops when both keys are missing", async () => {
+  const panel = createPanel({
+    sendMessageImpl: workerRouter({
+      checkConfig: { hasSupadataKey: false, hasAiKey: false },
+    }),
+  });
+  await panel.boot();
+
+  assert.equal(
+    panel.el("errorState").style.display,
+    "block",
+    "the panel runs without any key at all",
+  );
+  const message = panel.el("errorMessage").textContent;
+  assert.match(message, /AI provider key/i, "the missing AI key is not named");
+});
+
 test("the video the panel just read is cached for next time", async () => {
   const panel = createPanel({ sendMessageImpl: workerRouter() });
 

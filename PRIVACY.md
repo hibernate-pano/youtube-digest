@@ -6,7 +6,7 @@ Effective: October 20, 2026
 
 YouTube Digest is a GitHub-only, bring-your-own-key Chrome extension. It has no YouTube Digest account, analytics, advertising, or telemetry. It does run an optional sync service, described in "GitHub sync (optional)" below, that stores your saved notes, vocabulary, and review progress when you choose to sign in.
 
-Two kinds of data leave your device, and it is worth naming them up front. The canonical video URL goes to Supadata to fetch the transcript, and the transcript text you ask to be translated, explained, summarized, or polished goes to the AI provider you selected in Settings. Both requests carry your own API key and go straight from your browser to those services. YouTube Digest's developer does not proxy, receive, or store them.
+Two kinds of data leave your device, and it is worth naming them up front. The transcript is read out of the YouTube page you already have open, so most of the time no subtitle data leaves your device at all; when that read does not work and a Supadata key is set, the canonical video URL goes to Supadata to fetch the transcript. The transcript text you ask to be translated, explained, summarized, or polished goes to the AI provider you selected in Settings. Both requests carry your own API key and go straight from your browser to those services. YouTube Digest's developer does not proxy, receive, or store them.
 
 ## Data the extension handles
 
@@ -22,6 +22,8 @@ Depending on the feature you use, YouTube Digest handles:
 - vocabulary entries you capture, and the review schedule attached to them;
 - Supadata and AI provider configuration, including API keys; and
 - cached transcript, digest, and translation results.
+
+The Supadata key is optional. It is only needed for the fallback path, and the panel tells you when a video needs it.
 
 ## Where data goes
 
@@ -97,9 +99,26 @@ The dashboard at `https://ytd.panbo.space` is served from the same
 service. It loads only its own scripts and styles, sends no analytics or
 telemetry, and sets a Content-Security-Policy that blocks third-party scripts.
 
-### Supadata
+### YouTube's own caption tracks
 
-YouTube Digest sends the canonical YouTube video URL to `https://api.supadata.ai` with your Supadata API key. Supadata returns the transcript and timestamps. A Supadata key is required for transcript retrieval. The request asks for native caption tracks only: no audio, no video, and no other file from the watch page is uploaded.
+The transcript is read out of the YouTube page that is already open in your tab.
+YouTube's player state carries a signed URL for the video's own caption track,
+and the extension fetches that URL directly from your browser. **No subtitle
+text is sent to YouTube Digest's developer or to any third party on this path,
+and no Supadata credit is spent.**
+
+This is the default path. It is tried first on every video.
+
+### Supadata (fallback)
+
+When the page cannot be read — YouTube changed how the player exposes its
+captions, the tab is gone, or the video has no caption track at all — the
+extension falls back to Supadata, and only then does the canonical YouTube
+video URL leave your device.
+
+YouTube Digest sends the canonical YouTube video URL to `https://api.supadata.ai` with your Supadata API key. Supadata returns the transcript and timestamps. **A Supadata key is optional**: without one, videos whose captions can be read locally still work, and the panel tells you plainly when a video needs the fallback and a key is not set. The request asks for native caption tracks only: no audio, no video, and no other file from the watch page is uploaded.
+
+A video with no caption track is remembered as having none, so reopening it does not spend a credit on the same answer again.
 
 ### AI providers
 
@@ -119,7 +138,7 @@ Each provider receives:
 
 Endpoints and models are fixed in the published Settings page. Keys for all three providers can be saved side by side, and only the selected provider is used. To use a provider or model outside this list, you must adapt your own local source copy and its permissions. The Settings page provides a coding-agent prompt for that purpose and warns you never to include an API key in the prompt or chat.
 
-Requests go directly from the extension to Supadata or the selected AI provider. They are authenticated with the keys you supply. YouTube Digest's developer does not proxy or receive these requests.
+Requests go directly from the extension to Supadata or the selected AI provider. They are authenticated with the keys you supply. YouTube Digest's developer does not proxy or receive these requests. The local caption path described above involves no third party at all.
 
 Those services process data under their own terms, privacy policies, retention practices, and account settings. Do not send confidential, personal, or regulated content unless their terms and your obligations permit it.
 
@@ -164,9 +183,9 @@ YouTube Digest uses Chrome permissions for these purposes:
   videos fit on the device. It sends nothing anywhere: everything stored under
   it stays in your Chrome profile.
 - `tabs`: identify and interact with the active YouTube tab.
-- `scripting`: coordinate the extension's YouTube page controls.
-- YouTube host access: read the active video's URL and metadata and provide timestamp controls.
-- Supadata host access: retrieve transcripts.
+- `scripting`: coordinate the extension's YouTube page controls, and read the page's own caption tracks so the transcript can be fetched without a third party.
+- YouTube host access: read the active video's URL and metadata, provide timestamp controls, and fetch the caption track the page already carries.
+- Supadata host access: retrieve transcripts when the page's own captions cannot be read.
 - DeepSeek, MiniMax, and OpenCode Go host access: provide AI overviews, explanations, translation, and note polishing through the selected provider.
 - Sync service host access (`https://ytd.panbo.space`): sign in with GitHub, and sync the saved notes you choose to back up. This permission is only used for the optional sync; it is not used while you are signed out.
 

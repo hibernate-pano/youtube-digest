@@ -218,6 +218,12 @@ const PANEL_COPY = {
     apiKeysMissingTitle: "API Keys Missing",
     apiKeyMissingTitle: "API key missing",
     addSupadataKey: "Add your Supadata API key in YouTube Digest Settings.",
+    // The subtitles are read out of the page itself, so the Supadata key is
+    // only a fallback. The AI key is what the summary and the translation
+    // need, so that is the one the dead end names first.
+    addAiKey: "Add your AI provider key in YouTube Digest Settings.",
+    noCaptionsNoKey:
+      "This video has no subtitles that could be read, and no Supadata key is set as a fallback. Add the key in YouTube Digest Settings to try the paid service.",
     invalidApiKeyTitle: "Invalid API key",
     invalidSupadataKey:
       "Your Supadata API key is invalid. Open YouTube Digest Settings.",
@@ -439,6 +445,11 @@ const PANEL_COPY = {
     apiKeysMissingTitle: "缺少 API 密钥",
     apiKeyMissingTitle: "缺少 API 密钥",
     addSupadataKey: "请在 YouTube Digest 设置中填写 Supadata API 密钥。",
+    // 字幕直接从页面里读，Supadata 密钥只是兜底。摘要和翻译要的是 AI 密钥，
+    // 所以死胡同先说它。
+    addAiKey: "请在 YouTube Digest 设置中填写你的 AI 服务商密钥。",
+    noCaptionsNoKey:
+      "这个视频没有能读到的字幕，也没有设置 Supadata 密钥作为兜底。请在 YouTube Digest 设置里填入密钥，改用付费服务再试。",
     invalidApiKeyTitle: "API 密钥无效",
     invalidSupadataKey: "Supadata API 密钥无效，请在 YouTube Digest 设置中修改。",
     rateLimitedTitle: "请求过于频繁",
@@ -1215,9 +1226,19 @@ async function bootPanel() {
     return;
   }
 
-  if (!configStatus?.hasSupadataKey) {
+  // A Supadata key is no longer a dead end. The subtitles are read out of
+  // the page itself first, and the key is only needed for the fallback. A
+  // user without one still gets the transcript of most videos.
+  if (!configStatus?.hasSupadataKey && !configStatus?.hasAiKey) {
     showConfigError(configStatus);
     return;
+  }
+
+  // Only the fallback key is missing. The panel still works, so it says so
+  // once and then gets out of the way: a notice that stays on screen would
+  // read like something is broken.
+  if (!configStatus?.hasSupadataKey) {
+    announceAlert(panelCopy("noCaptionsNoKey"), { notice: true });
   }
 
   await loadPanelContent();
@@ -1258,7 +1279,7 @@ async function handleSettingsChanged() {
     .sendMessage({ action: "checkConfig" })
     .catch(() => null);
   if (!configStatus || configStatus.error) return;
-  if (!configStatus.hasSupadataKey) return;
+  if (!configStatus.hasSupadataKey && !configStatus.hasAiKey) return;
   await bootPanel();
 }
 
@@ -1954,6 +1975,9 @@ async function startDigest(videoId, videoUrl) {
     chrome.runtime.sendMessage({
       action: "fetchTranscript",
       videoId: videoId,
+      // The worker reads the captions out of the page itself when it can,
+      // and only spends a credit when it cannot.
+      tabId: youtubeTabId,
     }),
   );
   const transcriptResult = await transcriptRequest.promise;
@@ -3105,8 +3129,14 @@ function openOptions() {
 function showConfigError(configStatus) {
   awaitingApiKey = true;
   showState("error");
+  // Which key is named first depends on which one the product cannot work
+  // without right now. Without an AI key there is no summary and no
+  // translation; without a Supadata key the fallback is gone, but the
+  // subtitles are read out of the page itself, so most videos still work.
   const errorTitle = panelCopy("apiKeysMissingTitle");
-  const errorMessage = panelCopy("addSupadataKey");
+  const errorMessage = configStatus?.hasAiKey
+    ? panelCopy("addSupadataKey")
+    : panelCopy("addAiKey");
   document.getElementById("errorTitle").textContent = errorTitle;
   document.getElementById("errorMessage").textContent = errorMessage;
   document.getElementById("errorBtn").textContent = panelCopy("openSettings");
@@ -3145,9 +3175,16 @@ function showTranscriptError(result) {
   const code = String(result?.error || "");
   switch (code) {
     case "NO_SUPADATA_KEY":
-      showError(panelCopy("apiKeyMissingTitle"), panelCopy("addSupadataKey"), {
-        action: openOptions,
-      });
+      // The subtitles are read out of the page itself when they can be. The
+      // key is the fallback, so the panel says which half of the story
+      // failed instead of pretending the product cannot work.
+      showError(
+        panelCopy("apiKeyMissingTitle"),
+        panelCopy("noCaptionsNoKey"),
+        {
+          action: openOptions,
+        },
+      );
       return;
     case "INVALID_SUPADATA_KEY":
       showError(

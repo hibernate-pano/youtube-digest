@@ -448,7 +448,10 @@ chrome.tabs.onActivated.addListener(async ({ tabId, windowId }) => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // We need to return true to indicate we'll respond asynchronously
   if (message.action === "fetchTranscript") {
-    handleFetchTranscript(message.videoId)
+    // The tab id lets the worker read the captions out of the page itself
+    // before it spends a Supadata credit. Without it the fallback is the
+    // only path, which is exactly what happened before.
+    handleFetchTranscriptLocalFirst(message.videoId, message.tabId || null)
       .then(sendResponse)
       .catch((err) => sendResponse({ error: err.message }));
     return true; // Keep the message channel open for async response
@@ -846,6 +849,326 @@ async function getPlayerVideoDetails(tabId) {
     console.warn("[YouTube Digest BG] Player details unavailable:", e.message);
     return null;
   }
+}
+
+// ============================================================
+// TRANSCRIPT FETCHING: LOCAL FIRST, SUPADATA AS THE FALLBACK
+// ============================================================
+
+/**
+ * Reads the native caption tracks from the YouTube tab's own player state.
+ *
+ * The player response carries a playerCaptionsTracklistRenderer whose
+ * captionTracks point at YouTube's own timedtext endpoint. The URL is
+ * already signed by YouTube, so the subtitles can be fetched without an API
+ * key and without spending a Supadata credit.
+ *
+ * Three sources are tried, in order: the live player object, the page's
+ * global ytInitialPlayerResponse, and the inline <script> that defines it.
+ * The third one matters because a page that has not started playing yet has
+ * no player object but does have the script tag.
+ *
+ * Runs in the page's MAIN world, where YouTube's player object lives. A
+ * content script lives in an isolated world and cannot see it.
+ *
+ * @param {number} tabId the YouTube tab to read
+ * @returns {Promise<Array<{baseUrl: string, languageCode: string}>|null>}
+ */
+async function readCaptionTracksFromTab(tabId) {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: "MAIN",
+      func: () => {
+        try {
+          let playerResponse =
+            document.getElementById("movie_player")?.getPlayerResponse?.() ||
+            null;
+
+          if (!playerResponse?.captions?.playerCaptionsTracklistRenderer) {
+            const globalResponse = window.ytInitialPlayerResponse;
+            if (globalResponse?.captions?.playerCaptionsTracklistRenderer) {
+              playerResponse = globalResponse;
+            }
+          }
+
+          if (!playerResponse?.captions?.playerCaptionsTracklistRenderer) {
+            // The page has the player response inline before the player
+            // object exists. A page that has not started playing yet is
+            // exactly the case where the local path is most valuable.
+            const marker = "var ytInitialPlayerResponse = ";
+            for (const script of document.querySelectorAll("script")) {
+              const text = script.textContent || "";
+              const index = text.indexOf(marker);
+              if (index === -1) continue;
+              const start = index + marker.length;
+              const end = text.indexOf(";", start);
+              if (end === -1) continue;
+              try {
+                const parsed = JSON.parse(text.slice(start, end));
+                if (parsed?.captions?.playerCaptionsTracklistRenderer) {
+                  playerResponse = parsed;
+                  break;
+                }
+              } catch (error) {
+                // A malformed inline script is not the one we want. Keep
+                // looking: a page carries several of them.
+              }
+            }
+          }
+
+          const tracks =
+            playerResponse?.captions?.playerCaptionsTracklistRenderer
+              ?.captionTracks;
+          if (!Array.isArray(tracks) || tracks.length === 0) return null;
+
+          return tracks
+            .filter((track) => typeof track.baseUrl === "string" && track.baseUrl)
+            .map((track) => ({
+              baseUrl: track.baseUrl,
+              languageCode: track.languageCode || "",
+            }));
+        } catch (error) {
+          return null;
+        }
+      },
+    });
+    return results?.[0]?.result || null;
+  } catch (error) {
+    debugLog(
+      "[YouTube Digest BG] Caption tracks unavailable:",
+      error.message,
+    );
+    return null;
+  }
+}
+
+/**
+ * Picks the caption track to use.
+ *
+ * English comes first, because that is the language the product reads and
+ * translates from. A track in any other language is better than no track at
+ * all, so the first one is the fallback.
+ *
+ * @param {Array<{baseUrl: string, languageCode: string}>} tracks
+ * @returns {{baseUrl: string, languageCode: string}|null}
+ */
+function pickCaptionTrack(tracks) {
+  if (!Array.isArray(tracks) || tracks.length === 0) return null;
+  const exact = tracks.find((track) => track.languageCode === "en");
+  if (exact) return exact;
+  const english = tracks.find((track) =>
+    String(track.languageCode || "").startsWith("en"),
+  );
+  if (english) return english;
+  return tracks[0];
+}
+
+/**
+ * Turns YouTube's json3 caption payload into the chunks the panel uses.
+ *
+ * Each event carries a start time in milliseconds, an optional duration,
+ * and the text pieces that have to be joined before they mean anything.
+ *
+ * @param {Object} json3 the parsed payload
+ * @param {string|null} language the track's language
+ * @returns {Array<{text: string, offset: number, duration: number, lang: string|null}>}
+ */
+function parseTimedtextJson3(json3, language) {
+  const chunks = [];
+  if (!json3 || !Array.isArray(json3.events)) return chunks;
+
+  for (const event of json3.events) {
+    if (!event || !Array.isArray(event.segs)) continue;
+    let text = "";
+    for (const seg of event.segs) {
+      if (seg && typeof seg.utf8 === "string") text += seg.utf8;
+    }
+    text = text.replace(/\n/g, " ").trim();
+    if (!text) continue;
+
+    chunks.push({
+      text,
+      offset: typeof event.tStartMs === "number" ? event.tStartMs : 0,
+      duration:
+        typeof event.dDurationMs === "number" ? event.dDurationMs : 0,
+      lang: language,
+    });
+  }
+  return chunks;
+}
+
+/**
+ * Builds the transcript the panel and the AI features read.
+ *
+ * The shape has to match the one the Supadata path produces, so nothing
+ * downstream has to know where the subtitles came from.
+ *
+ * @param {Array<{text: string, offset: number, duration: number, lang?: string}>} chunks
+ * @param {string|null} language the fallback language
+ * @returns {Object|null} the transcript, or null when there is no usable text
+ */
+function buildTranscriptResult(chunks, language) {
+  const transcript = [];
+  let transcriptTextPlain = "";
+  let transcriptTextTimestamped = "";
+
+  for (const chunk of chunks) {
+    if (!chunk || !chunk.text) continue;
+    // ">>" is YouTube's speaker-change marker, not a word.
+    const cleanText = chunk.text.replace(/>> ?/g, "").trim();
+    if (!cleanText) continue;
+
+    const startSeconds = Math.floor((chunk.offset || 0) / 1000);
+    const minutes = Math.floor(startSeconds / 60);
+    const seconds = startSeconds % 60;
+    const timestamp = `${minutes}:${String(seconds).padStart(2, "0")}`;
+
+    transcript.push({
+      text: cleanText,
+      start: startSeconds,
+      duration: Math.floor((chunk.duration || 0) / 1000),
+      language: chunk.lang || language || null,
+    });
+
+    transcriptTextPlain += cleanText + " ";
+    transcriptTextTimestamped += `[${timestamp}] ${cleanText}\n`;
+  }
+
+  if (transcript.length === 0) return null;
+
+  return {
+    success: true,
+    transcript,
+    transcriptText: transcriptTextPlain.trim(),
+    transcriptTextTimestamped: transcriptTextTimestamped.trim(),
+    language: typeof language === "string" ? language : null,
+  };
+}
+
+/**
+ * Fetches the subtitles from YouTube's own timedtext endpoint.
+ *
+ * The track URL comes from the page's player state, so it is already signed
+ * and needs no key. The request runs under a deadline: a page that never
+ * answers must not hold the paid fallback behind it.
+ *
+ * @param {string} baseUrl the signed caption track URL
+ * @param {string} language the track's language
+ * @returns {Promise<Object|null>} the transcript, or null on any failure
+ */
+async function fetchTimedtextTranscript(baseUrl, language) {
+  const controller =
+    typeof AbortController === "function" ? new AbortController() : null;
+  let timerId = null;
+  const deadline = new Promise((_, reject) => {
+    timerId = setTimeout(() => {
+      if (controller) {
+        try {
+          controller.abort();
+        } catch (error) {
+          // The abort is best effort; the race below still settles.
+        }
+      }
+      const error = new Error(
+        "The local caption lookup did not answer in time.",
+      );
+      error.code = "LOCAL_TRANSCRIPT_TIMEOUT";
+      reject(error);
+    }, YTD_SETTINGS.LOCAL_TRANSCRIPT_TIMEOUT_MS);
+  });
+
+  try {
+    const timedtextUrl = new URL(baseUrl);
+    timedtextUrl.searchParams.set("fmt", "json3");
+
+    const request = (async () => {
+      const init = { method: "GET" };
+      if (controller) init.signal = controller.signal;
+      const response = await fetch(timedtextUrl.toString(), init);
+      if (!response.ok) {
+        debugLog(
+          `[YouTube Digest BG] timedtext request failed: ${response.status}`,
+        );
+        return null;
+      }
+      const data = await response.json();
+      const chunks = parseTimedtextJson3(data, language);
+      if (chunks.length === 0) return null;
+      return buildTranscriptResult(chunks, language);
+    })();
+
+    return await Promise.race([request, deadline]);
+  } catch (error) {
+    debugLog("[YouTube Digest BG] timedtext fetch failed:", error.message);
+    return null;
+  } finally {
+    if (timerId !== null) clearTimeout(timerId);
+  }
+}
+
+/**
+ * Reads the subtitles straight out of the YouTube tab.
+ *
+ * Returns null on any failure, so the caller falls back to Supadata. The
+ * local path is a bonus, never the only path: YouTube can change its page
+ * internals at any time, and a video can have no caption track at all.
+ *
+ * @param {number} tabId the YouTube tab to read
+ * @returns {Promise<Object|null>} the transcript, or null
+ */
+async function tryLocalTranscript(tabId) {
+  if (!tabId) return null;
+  const tracks = await readCaptionTracksFromTab(tabId);
+  if (!tracks) return null;
+  const track = pickCaptionTrack(tracks);
+  if (!track) return null;
+  return await fetchTimedtextTranscript(
+    track.baseUrl,
+    track.languageCode || null,
+  );
+}
+
+/**
+ * Fetches the transcript for a video: locally first, Supadata as the backup.
+ *
+ * The local path is free and needs no key. It can fail when the page has no
+ * caption track, when YouTube changed its internals, or when the tab is
+ * gone. The Supadata path covers all of that, so the product still works
+ * when the cheap path does not.
+ *
+ * @param {string} videoId the video to read
+ * @param {number|null} tabId the YouTube tab, when there is one
+ * @returns {Promise<Object>} the transcript or a failure
+ */
+async function handleFetchTranscriptLocalFirst(videoId, tabId) {
+  if (tabId) {
+    const local = await tryLocalTranscript(tabId);
+    if (local?.success) {
+      debugLog("[YouTube Digest BG] Transcript read locally:", videoId);
+      return { ...local, source: "local" };
+    }
+    debugLog(
+      "[YouTube Digest BG] Local captions unavailable, using the fallback",
+    );
+  }
+
+  const remote = await handleFetchTranscript(videoId);
+  if (remote.success) return { ...remote, source: "supadata" };
+
+  // The local path was tried and did not work, and there is no key to fall
+  // back on. Saying only "add a Supadata key" would hide the half of the
+  // story the user can act on right now: the page had no captions to read.
+  if (tabId && remote.error === "NO_SUPADATA_KEY") {
+    return {
+      success: false,
+      error: "NO_TRANSCRIPT",
+      message:
+        "This video has no subtitles that could be read, and no Supadata key is set to fall back on.",
+    };
+  }
+
+  return remote;
 }
 
 // ============================================================
@@ -2076,6 +2399,13 @@ globalThis.__YTD_TRANSLATION_TESTING__ = {
   closePanelForTab,
   updatePanelForTab,
   handleFetchTranscript,
+  handleFetchTranscriptLocalFirst,
+  tryLocalTranscript,
+  readCaptionTracksFromTab,
+  pickCaptionTrack,
+  parseTimedtextJson3,
+  buildTranscriptResult,
+  fetchTimedtextTranscript,
   cleanupNoteText,
   createNoteId,
 };
