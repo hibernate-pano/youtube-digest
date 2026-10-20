@@ -761,6 +761,31 @@ function makeKeyboardActivatable(
 }
 
 /**
+ * Tells whether the system asked for less movement.
+ *
+ * The panel asks the browser the same way the stylesheet does, so a change
+ * in the system setting takes effect without reloading the panel.
+ */
+function prefersReducedMotion() {
+  if (typeof window.matchMedia !== "function") return false;
+  try {
+    return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The way the panel scrolls something into view.
+ *
+ * A smooth scroll is movement, so a user who asked for less movement must
+ * not get one.
+ */
+function scrollBehavior() {
+  return prefersReducedMotion() ? "auto" : "smooth";
+}
+
+/**
  * Keeps the selection toolbar inside the panel.
  *
  * The toolbar is centred on the selection, so a selection near the left edge
@@ -786,6 +811,23 @@ const FOCUSABLE_TAGS = new Set([
 ]);
 
 /**
+ * The keys a selection is built with.
+ *
+ * A selection that grows from the place the caret stands is made with one of
+ * these, so they are the keys the panel watches for a keyboard selection.
+ */
+const SELECTION_KEYS = new Set([
+  "ArrowUp",
+  "ArrowDown",
+  "ArrowLeft",
+  "ArrowRight",
+  "Home",
+  "End",
+  "PageUp",
+  "PageDown",
+]);
+
+/**
  * Returns the focusable elements inside a container, in document order.
  * The dialog trap needs this list, and it must not depend on a selector
  * engine the panel can rely on everywhere.
@@ -807,6 +849,68 @@ function collectFocusableElements(root) {
   };
   visit(root);
   return items;
+}
+
+/**
+ * Keeps the keyboard inside a modal dialog.
+ *
+ * A dialog that says it is modal has to behave like one: Tab cycles inside
+ * it, Shift+Tab walks back, and Escape closes it. The listener sits on the
+ * document in the capture phase, so the dialog owns the keyboard for as
+ * long as it is open.
+ */
+function createDialogKeyHandler(dialog, close) {
+  return (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      close();
+      return;
+    }
+    if (event.key !== "Tab") return;
+
+    const items = collectFocusableElements(dialog);
+    if (!items.length) {
+      event.preventDefault();
+      dialog.focus();
+      return;
+    }
+    const first = items[0];
+    const last = items[items.length - 1];
+    const active = document.activeElement;
+    if (event.shiftKey) {
+      if (active === first || !dialog.contains(active)) {
+        event.preventDefault();
+        last.focus();
+      }
+    } else if (active === last || !dialog.contains(active)) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+}
+
+/**
+ * Takes the rest of the panel out of reach while a dialog is open.
+ *
+ * The announcers stay live, so a state change is still spoken. The returned
+ * function puts the panel back the way it was.
+ */
+function makeBackgroundInert(modal) {
+  const background = [...(document.body.children || [])].filter(
+    (child) =>
+      child !== modal &&
+      child.id !== "panelStatus" &&
+      child.id !== "panelAlert",
+  );
+  const previousInert = background.map((child) => [child, Boolean(child.inert)]);
+  background.forEach((child) => {
+    child.inert = true;
+  });
+  return () => {
+    previousInert.forEach(([child, wasInert]) => {
+      child.inert = wasInert;
+    });
+  };
 }
 
 // --- Transcript search state ---
@@ -2525,7 +2629,7 @@ function revealCurrentTranscriptSearchMatch({ scroll = true } = {}) {
     autoScrollEnabled = false;
     document.getElementById("followPlaybackBtn").style.display = "block";
   }
-  mark.scrollIntoView({ behavior: "smooth", block: "center" });
+  mark.scrollIntoView({ behavior: scrollBehavior(), block: "center" });
 }
 
 /**
@@ -3577,8 +3681,134 @@ function setupExplainFeature() {
   tooltip.style.display = "none";
   document.body.appendChild(tooltip);
 
+  // The transcript is static text, so the browser has no caret to put in it
+  // on its own. One tab stop on the list gives the region a focus target:
+  // the keyboard can land there, and the toolbar can send the focus back to
+  // the place the text was selected.
+  transcriptList.setAttribute("tabindex", "0");
+
   let selectedText = "";
   let selectedTimestamp = 0;
+  // The range the toolbar is acting on. The browser keeps a selection when
+  // the focus moves, but the range is kept so the selection can be put back
+  // if something clears it.
+  let selectedRange = null;
+  // Where the selection the toolbar was opened for starts. A selection that
+  // starts in the same place is the user extending it, not a new one.
+  let selectionAnchor = null;
+
+  /**
+   * Tells whether two ranges start at the same place.
+   */
+  function sameSelectionStart(anchor, range) {
+    if (!anchor || !range) return false;
+    return (
+      anchor.container === range.startContainer &&
+      anchor.offset === range.startOffset
+    );
+  }
+
+  /**
+   * Shows the toolbar on the current selection.
+   *
+   * The toolbar belongs to the selection, not to the device that made it, so
+   * the mouse and the keyboard share this routine. Only the keyboard moves
+   * the focus, because a mouse user is already pointing at the text.
+   *
+   * @param {boolean} moveFocus - true when the keyboard made the selection.
+   * @returns {boolean} true when the toolbar is on the screen.
+   */
+  function showToolbarForSelection(moveFocus = false) {
+    const selection = window.getSelection();
+    const text = selection?.toString().trim() || "";
+    const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+
+    // Both ends must be inside the transcript. The first selected row
+    // supplies the timestamp when the selection spans more than one row.
+    const isInTranscript = Boolean(
+      range &&
+        transcriptList.contains(range.startContainer) &&
+        transcriptList.contains(range.endContainer),
+    );
+
+    // Allow any selection length.
+    if (text.length === 0 || !isInTranscript) {
+      tooltip.style.display = "none";
+      return false;
+    }
+
+    selectedText = text;
+    selectedRange = range;
+    const startElement =
+      range.startContainer.nodeType === 1
+        ? range.startContainer
+        : range.startContainer.parentElement;
+    const selectedRow = startElement?.closest(".transcript-entry");
+    const rowSeconds = Number(selectedRow?.dataset.seconds);
+    selectedTimestamp = Number.isFinite(rowSeconds) ? rowSeconds : 0;
+
+    // Set the final coordinates while the toolbar is still hidden. If it
+    // becomes visible first, Chrome paints it at its default left edge for
+    // one frame before moving it to the selection center.
+    const rect = range.getBoundingClientRect();
+    tooltip.style.top = `${rect.bottom + window.scrollY + 8}px`;
+    // The toolbar is centred on the selection, so a selection near the
+    // left edge pushed half of it out of the panel, where it could not be
+    // reached. The centre is clamped between the two panel edges.
+    const panelWidth =
+      document.documentElement?.clientWidth || window.innerWidth || 0;
+    tooltip.style.left = `${clampToolbarCenter(
+      rect.left + rect.width / 2,
+      selectionToolbarWidth,
+      panelWidth,
+    )}px`;
+    tooltip.style.display = "flex";
+
+    // Measure the toolbar now that it is on screen, so the next
+    // placement can clamp it to its real width.
+    const measuredWidth = tooltip.offsetWidth;
+    if (measuredWidth && measuredWidth !== selectionToolbarWidth) {
+      selectionToolbarWidth = measuredWidth;
+      tooltip.style.left = `${clampToolbarCenter(
+        rect.left + rect.width / 2,
+        selectionToolbarWidth,
+        panelWidth,
+      )}px`;
+    }
+
+    // A selection that continues where the last one started is the user
+    // refining it. Taking the focus now would cut the selection short.
+    const isNewSelection = !sameSelectionStart(selectionAnchor, range);
+    selectionAnchor = {
+      container: range.startContainer,
+      offset: range.startOffset,
+    };
+    if (moveFocus && isNewSelection) {
+      explainBtn.focus();
+    }
+    return true;
+  }
+
+  /**
+   * Closes the toolbar and hands the transcript back to the keyboard.
+   *
+   * The focus lands on the transcript and the selection is put back, so the
+   * user continues from the words they had selected.
+   */
+  function closeToolbar() {
+    tooltip.style.display = "none";
+    const selection = window.getSelection();
+    if (selection && selectedRange) {
+      const current = selection.rangeCount ? selection.getRangeAt(0) : null;
+      // The browser keeps a selection when the focus moves, so the range only
+      // has to be put back when something cleared it.
+      if (!current || selection.isCollapsed) {
+        selection.removeAllRanges();
+        selection.addRange(selectedRange);
+      }
+    }
+    transcriptList.focus();
+  }
 
   // Interacting with either action must preserve the transcript selection and
   // stay isolated from document and row click behavior.
@@ -3593,64 +3823,59 @@ function setupExplainFeature() {
     event.stopPropagation();
   });
 
+  // A toolbar is a toolbar: the arrow keys move between the actions, and
+  // Escape puts the selection back and sends the focus to the transcript.
+  tooltip.addEventListener("keydown", (event) => {
+    const actions = collectFocusableElements(tooltip);
+    if (!actions.length) return;
+    const index = actions.indexOf(event.target);
+
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      closeToolbar();
+      return;
+    }
+    if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+      event.preventDefault();
+      actions[(index + 1) % actions.length]?.focus();
+      return;
+    }
+    if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+      event.preventDefault();
+      actions[(index - 1 + actions.length) % actions.length]?.focus();
+      return;
+    }
+    if (event.key === "Home") {
+      event.preventDefault();
+      actions[0].focus();
+      return;
+    }
+    if (event.key === "End") {
+      event.preventDefault();
+      actions[actions.length - 1].focus();
+    }
+  });
+
   // Listen for text selection
   document.addEventListener(
     "mouseup",
     () => {
-      const selection = window.getSelection();
-      const text = selection?.toString().trim() || "";
-      const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+      showToolbarForSelection(false);
+    },
+    { signal: selectionSignal },
+  );
 
-      // Both ends must be inside the transcript. The first selected row
-      // supplies the timestamp when the selection spans more than one row.
-      const isInTranscript = Boolean(
-        range &&
-          transcriptList.contains(range.startContainer) &&
-          transcriptList.contains(range.endContainer),
-      );
-
-      // Allow any selection length.
-      if (text.length > 0 && isInTranscript) {
-        selectedText = text;
-        const startElement =
-          range.startContainer.nodeType === 1
-            ? range.startContainer
-            : range.startContainer.parentElement;
-        const selectedRow = startElement?.closest(".transcript-entry");
-        const rowSeconds = Number(selectedRow?.dataset.seconds);
-        selectedTimestamp = Number.isFinite(rowSeconds) ? rowSeconds : 0;
-
-        // Set the final coordinates while the toolbar is still hidden. If it
-        // becomes visible first, Chrome paints it at its default left edge for
-        // one frame before moving it to the selection center.
-        const rect = range.getBoundingClientRect();
-        tooltip.style.top = `${rect.bottom + window.scrollY + 8}px`;
-        // The toolbar is centred on the selection, so a selection near the
-        // left edge pushed half of it out of the panel, where it could not be
-        // reached. The centre is clamped between the two panel edges.
-        const panelWidth =
-          document.documentElement?.clientWidth || window.innerWidth || 0;
-        tooltip.style.left = `${clampToolbarCenter(
-          rect.left + rect.width / 2,
-          selectionToolbarWidth,
-          panelWidth,
-        )}px`;
-        tooltip.style.display = "flex";
-
-        // Measure the toolbar now that it is on screen, so the next
-        // placement can clamp it to its real width.
-        const measuredWidth = tooltip.offsetWidth;
-        if (measuredWidth && measuredWidth !== selectionToolbarWidth) {
-          selectionToolbarWidth = measuredWidth;
-          tooltip.style.left = `${clampToolbarCenter(
-            rect.left + rect.width / 2,
-            selectionToolbarWidth,
-            panelWidth,
-          )}px`;
-        }
-      } else {
-        tooltip.style.display = "none";
-      }
+  // A keyboard selection ends with a keyup: by then the browser has already
+  // moved the caret, so the range is the one the user sees. The toolbar used
+  // to wait for a mouseup, which meant the actions were gone for a user who
+  // never touches a mouse.
+  document.addEventListener(
+    "keyup",
+    (event) => {
+      if (!event.shiftKey) return;
+      if (!SELECTION_KEYS.has(event.key)) return;
+      showToolbarForSelection(true);
     },
     { signal: selectionSignal },
   );
@@ -3749,14 +3974,17 @@ function setupExplainFeature() {
       const words = Array.isArray(result.words) ? result.words : [];
       if (!words.length) throw new Error(panelCopy("extractWordFailed"));
 
-      showWordConfirmation(words, selectedText, selectedTimestamp);
+      // The dialog takes the screen over, so the toolbar stays where it is
+      // until the dialog is closed and the focus comes back to this button.
+      showWordConfirmation(words, selectedText, selectedTimestamp, button);
     } catch (error) {
       console.error("[YouTube Digest] Extract vocabulary error:", error);
       announceAlert(panelCopy("extractWordFailed"));
+      // Nothing opened, so there is no focus to hand back.
+      tooltip.style.display = "none";
     } finally {
       button.textContent = originalText;
       button.disabled = false;
-      tooltip.style.display = "none";
     }
   });
 }
@@ -3766,8 +3994,14 @@ function setupExplainFeature() {
  *
  * The AI is a suggestion, not an authority: the learner sees the words,
  * the sentence they came from and the price, and decides.
+ *
+ * The dialog is a real dialog: it names itself, takes the focus, keeps the
+ * focus inside, closes on Escape, and gives the focus back to the control
+ * that opened it.
  */
-function showWordConfirmation(words, sentence, timestamp) {
+function showWordConfirmation(words, sentence, timestamp, trigger = null) {
+  const returnFocusTo = trigger || document.activeElement;
+
   const modal = document.createElement("div");
   modal.id = "wordModal";
   modal.className = "explain-modal-overlay";
@@ -3837,17 +4071,25 @@ function showWordConfirmation(words, sentence, timestamp) {
   modal.appendChild(dialog);
   document.body.appendChild(modal);
 
+  // Everything behind the dialog is out of reach while it is open. The
+  // announcers stay live so a state change is still spoken.
+  const releaseBackground = makeBackgroundInert(modal);
+
   const close = () => {
     document.removeEventListener("keydown", onKeydown, true);
+    releaseBackground();
     modal.remove();
-  };
-
-  const onKeydown = (event) => {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      close();
+    // The focus goes back where it came from, so the keyboard user is not
+    // dropped at the top of the panel.
+    if (returnFocusTo && typeof returnFocusTo.focus === "function") {
+      returnFocusTo.focus();
     }
   };
+
+  // Escape closes the dialog, and Tab cycles inside it. The listener sits
+  // on the document in the capture phase, so the dialog owns the keyboard
+  // for as long as it is open.
+  const onKeydown = createDialogKeyHandler(dialog, close);
   document.addEventListener("keydown", onKeydown, true);
 
   closeButton.addEventListener("click", close);
@@ -3952,23 +4194,12 @@ async function showExplanation(selectedText, trigger = null) {
 
   // Everything behind the dialog is out of reach while it is open. The
   // announcers stay live so a state change is still spoken.
-  const background = [...(document.body.children || [])].filter(
-    (child) =>
-      child !== modal &&
-      child.id !== "panelStatus" &&
-      child.id !== "panelAlert",
-  );
-  const previousInert = background.map((child) => [child, Boolean(child.inert)]);
-  background.forEach((child) => {
-    child.inert = true;
-  });
+  const releaseBackground = makeBackgroundInert(modal);
 
   const close = () => {
     document.removeEventListener("keydown", onKeydown, true);
     explainModalOpen = false;
-    previousInert.forEach(([child, wasInert]) => {
-      child.inert = wasInert;
-    });
+    releaseBackground();
     modal.remove();
     // The focus goes back where it came from, so the keyboard user is not
     // dropped at the top of the panel.
@@ -3980,33 +4211,7 @@ async function showExplanation(selectedText, trigger = null) {
   // Escape closes the dialog, and Tab cycles inside it. The listener sits
   // on the document in the capture phase, so the dialog owns the keyboard
   // for as long as it is open.
-  const onKeydown = (event) => {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      close();
-      return;
-    }
-    if (event.key !== "Tab") return;
-
-    const items = collectFocusableElements(dialog);
-    if (!items.length) {
-      event.preventDefault();
-      dialog.focus();
-      return;
-    }
-    const first = items[0];
-    const last = items[items.length - 1];
-    const active = document.activeElement;
-    if (event.shiftKey) {
-      if (active === first || !dialog.contains(active)) {
-        event.preventDefault();
-        last.focus();
-      }
-    } else if (active === last || !dialog.contains(active)) {
-      event.preventDefault();
-      first.focus();
-    }
-  };
+  const onKeydown = createDialogKeyHandler(dialog, close);
 
   document.addEventListener("keydown", onKeydown, true);
   explainModalOpen = true;
@@ -5487,7 +5692,7 @@ function scrollToActiveEntry() {
   if (!activeEntry) return false;
 
   lastAutoScrollTime = Date.now();
-  activeEntry.scrollIntoView({ behavior: "smooth", block: "center" });
+  activeEntry.scrollIntoView({ behavior: scrollBehavior(), block: "center" });
   return true;
 }
 
@@ -5530,7 +5735,7 @@ function highlightActiveEntry(currentSeconds) {
   // Only scroll if auto-scroll is enabled
   if (autoScrollEnabled) {
     lastAutoScrollTime = Date.now();
-    activeEntry.scrollIntoView({ behavior: "smooth", block: "center" });
+    activeEntry.scrollIntoView({ behavior: scrollBehavior(), block: "center" });
   }
 }
 
