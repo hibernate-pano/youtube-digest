@@ -28,6 +28,14 @@ let currentVideoDuration = 0;
 let isAnalysisLoading = false; // Track if analysis is in progress
 let youtubeTabId = null; // Store the YouTube tab ID for reliable messaging
 let errorAction = null;
+// True while the panel waits for the user to add a missing API key. The
+// settings watcher uses it to know when a settings change should bring the
+// panel back to life.
+let awaitingApiKey = false;
+// The notes filter is a preference, not a per-open choice: the panel document
+// is recreated on every open, so it has to be remembered.
+const NOTES_FILTER_KEY = "ytd_notes_filter";
+let notesFilterShowAll = false;
 
 // --- Translation state ---
 // The universal language control supports original content, Chinese, and an
@@ -47,6 +55,153 @@ let currentNotes = [];
 let currentNotesFilterVideoId = null;
 const TRANSLATION_MESSAGE_TIMEOUT_MS = 130_000;
 const TRANSLATION_BATCH_SIZE = 3;
+
+// Every digest run gets a ticket. A slow transcript or analysis response
+// carries the ticket it was started with, so a response for a video the user
+// already left can never be applied to the video on screen.
+let digestGeneration = 0;
+
+// ============================================================
+// PANEL COPY (LOCALIZATION)
+// ============================================================
+// The panel speaks the language the user picked on the settings page. The
+// table below covers the state, empty and error copy a user actually hits;
+// it is deliberately not a translation of every string in the panel.
+const PANEL_COPY = {
+  en: {
+    welcomeTitle: "Ready to Digest",
+    welcomeDescription:
+      "Navigate to a YouTube video and click the extension icon to get an AI-powered digest.",
+    fetchingTranscript: "Fetching transcript",
+    extractingCaptions: "Extracting captions from video...",
+    loadingQuotes: "Loading quotes...",
+    generatingOverview: "Generating overview... uses your AI balance",
+    errorTitle: "Error",
+    errorMessage: "Something went wrong.",
+    serviceErrorTitle: "YouTube Digest could not start",
+    tryAgain: "Try Again",
+    openSettings: "Open Settings",
+    apiKeysMissingTitle: "API Keys Missing",
+    apiKeyMissingTitle: "API key missing",
+    addSupadataKey: "Add your Supadata API key in YouTube Digest Settings.",
+    invalidApiKeyTitle: "Invalid API key",
+    invalidSupadataKey:
+      "Your Supadata API key is invalid. Open YouTube Digest Settings.",
+    rateLimitedTitle: "Too many requests",
+    rateLimitedMessage:
+      "Supadata rate limit reached. Please wait a minute and try again.",
+    noTranscriptTitle: "No transcript found",
+    noTranscriptMessage: "No subtitles found for this video.",
+    emptyTranscriptTitle: "Empty transcript",
+    emptyTranscriptMessage:
+      "Supadata returned an empty transcript for this video.",
+    outOfCreditsTitle: "Out of credits",
+    outOfCreditsMessage:
+      "Your Supadata credits are exhausted. Add credits at dash.supadata.ai.",
+    chaptersEmpty: "Chapters will appear here",
+    quotesEmpty: "Quotes will be extracted when you view this tab...",
+    fullTranscript: "Full Transcript",
+    savedNotes: "Saved Notes",
+    noNotesForVideo:
+      "No notes for this video yet. Hover over the video and click Note to save.",
+    noNotesYet:
+      "No notes saved yet. Hover over a video and click Note to save.",
+    costDisclosure:
+      "AI calls use your own provider balance. Each transcript lookup uses 1 Supadata credit.",
+    translationUnavailable: "Translation unavailable.",
+    translating: "Translating...",
+    retry: "Retry",
+  },
+  "zh-CN": {
+    welcomeTitle: "准备开始",
+    welcomeDescription:
+      "打开一个 YouTube 视频并点击扩展图标，即可获得 AI 摘要。",
+    fetchingTranscript: "正在获取字幕",
+    extractingCaptions: "正在从视频中提取字幕...",
+    loadingQuotes: "正在加载引用...",
+    generatingOverview: "正在生成概览... 会消耗你的 AI 额度",
+    errorTitle: "出错了",
+    errorMessage: "出了点问题。",
+    serviceErrorTitle: "YouTube Digest 无法启动",
+    tryAgain: "重试",
+    openSettings: "打开设置",
+    apiKeysMissingTitle: "缺少 API 密钥",
+    apiKeyMissingTitle: "缺少 API 密钥",
+    addSupadataKey: "请在 YouTube Digest 设置中填写 Supadata API 密钥。",
+    invalidApiKeyTitle: "API 密钥无效",
+    invalidSupadataKey: "Supadata API 密钥无效，请在 YouTube Digest 设置中修改。",
+    rateLimitedTitle: "请求过于频繁",
+    rateLimitedMessage: "已触发 Supadata 速率限制，请稍等一分钟再试。",
+    noTranscriptTitle: "没有找到字幕",
+    noTranscriptMessage: "这个视频没有可用的字幕。",
+    emptyTranscriptTitle: "字幕为空",
+    emptyTranscriptMessage: "Supadata 返回了空字幕。",
+    outOfCreditsTitle: "额度已用完",
+    outOfCreditsMessage: "Supadata 额度已用完，请前往 dash.supadata.ai 充值。",
+    chaptersEmpty: "章节会显示在这里",
+    quotesEmpty: "切换到这个标签后会提取精彩引用...",
+    fullTranscript: "完整字幕",
+    savedNotes: "已保存的笔记",
+    noNotesForVideo: "这个视频还没有笔记。把鼠标移到视频上并点击 Note 即可保存。",
+    noNotesYet: "还没有保存任何笔记。把鼠标移到视频上并点击 Note 即可保存。",
+    costDisclosure:
+      "AI 调用使用你自己的服务额度。每次字幕查询会消耗 1 个 Supadata 额度。",
+    translationUnavailable: "翻译不可用。",
+    translating: "正在翻译...",
+    retry: "重试",
+  },
+};
+
+let panelLanguage = "en";
+
+function normalizePanelLanguage(language) {
+  if (
+    typeof YTD_SETTINGS !== "undefined" &&
+    YTD_SETTINGS.normalizeUiLanguage
+  ) {
+    return YTD_SETTINGS.normalizeUiLanguage(language);
+  }
+  return language === "zh-CN" ? "zh-CN" : "en";
+}
+
+/**
+ * Returns the copy for the current panel language. English is the fallback
+ * for every missing key, so a partial table can never blank out the panel.
+ */
+function panelCopy(key) {
+  const table = PANEL_COPY[panelLanguage] || PANEL_COPY.en;
+  return table[key] ?? PANEL_COPY.en[key] ?? "";
+}
+
+/**
+ * Applies the translated copy to the static markup. Dynamic copy (errors,
+ * empty states) is written at render time through panelCopy().
+ */
+function applyPanelCopy() {
+  document.querySelectorAll("[data-i18n]").forEach((element) => {
+    const key = element.getAttribute("data-i18n");
+    const value = panelCopy(key);
+    if (value) element.textContent = value;
+  });
+}
+
+/**
+ * Reads the interface language the user picked on the settings page and
+ * applies it to the panel. Never throws: the panel must still render.
+ */
+async function loadPanelLanguage() {
+  try {
+    const key =
+      typeof YTD_SETTINGS !== "undefined" && YTD_SETTINGS.UI_LANGUAGE_STORAGE_KEY
+        ? YTD_SETTINGS.UI_LANGUAGE_STORAGE_KEY
+        : "ytd_options_language";
+    const stored = await chrome.storage.local.get(key);
+    panelLanguage = normalizePanelLanguage(stored?.[key]);
+  } catch (error) {
+    panelLanguage = "en";
+  }
+  applyPanelCopy();
+}
 
 // --- Transcript search state ---
 // Matches point to visible marks in the active transcript language mode.
@@ -255,37 +410,98 @@ function groupTranscriptEntries(entries, limits = TRANSCRIPT_SEGMENT_LIMITS) {
 document.addEventListener("DOMContentLoaded", async () => {
   setTranscriptModeButtons("original");
   setupEventListeners();
+  // The user may add their keys while the panel is open, so watch the
+  // settings from the very first moment - including the dead end.
+  setupSettingsWatcher();
+  await loadPanelLanguage();
+  await loadNotesFilter();
   await evictOldCacheEntries(20);
+  await bootPanel();
+});
 
-  const configStatus = await chrome.runtime.sendMessage({
-    action: "checkConfig",
-  });
-
-  if (!configStatus.hasSupadataKey || !configStatus.hasAiKey) {
-    showConfigError(configStatus);
-    return;
-  }
-
+/**
+ * Loads everything the panel needs once the configuration is usable.
+ * Split out of the boot path so the panel can re-enter it after the user
+ * adds a key without reloading the document.
+ */
+async function loadPanelContent() {
+  awaitingApiKey = false;
   await refreshGithubSyncStatus();
-  // Pull cloud changes when the panel opens (no-op when signed out). Both
-  // verdicts carry a reason code, so a dead token shows the re-login chip
+  // Pull cloud changes when the panel opens (no-op when signed out). The
+  // verdict carries a reason code, so a dead token shows the re-login chip
   // instead of resolving quietly: the old chain swallowed exactly the failure
   // that silently ended the backup.
   const notesSync = await chrome.runtime
     .sendMessage({ action: "syncNotes" })
     .catch(() => null);
-  const vocabularySync = await chrome.runtime
-    .sendMessage({ action: "syncVocabulary" })
-    .catch(() => null);
-  // Notes run first, so its verdict wins; vocabulary is the fallback when the
-  // notes request never produced one.
-  await applySyncSessionSignal(notesSync || vocabularySync);
-  const filterAll = document
-    .getElementById("notesFilterAll")
-    ?.classList.contains("active");
-  loadNotes(filterAll ? null : currentVideoId);
+  await applySyncSessionSignal(notesSync);
+  await loadNotes(notesFilterShowAll ? null : currentVideoId);
   await checkCurrentTab();
-});
+}
+
+/**
+ * Reads the configuration and decides what the panel can do.
+ * Only the transcript key gates the start: the AI key is required lazily by
+ * the Overview tab, which explains the missing key where it is needed.
+ */
+async function bootPanel() {
+  const configStatus = await chrome.runtime
+    .sendMessage({ action: "checkConfig" })
+    .catch((error) => ({ error: error.message }));
+
+  // A broken service worker or storage area must never be reported as a
+  // missing key: the panel used to ask for API keys it did not need.
+  if (configStatus?.error) {
+    showServiceError(configStatus.error);
+    return;
+  }
+
+  if (!configStatus?.hasSupadataKey) {
+    showConfigError(configStatus);
+    return;
+  }
+
+  await loadPanelContent();
+}
+
+/**
+ * Watches the stored settings so the panel recovers from the missing-key
+ * dead end as soon as the user fills the settings page.
+ */
+function setupSettingsWatcher() {
+  if (!chrome.storage?.onChanged?.addListener) return;
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName && areaName !== "local") return;
+    const settingsKey =
+      typeof YTD_SETTINGS !== "undefined" && YTD_SETTINGS.STORAGE_KEY
+        ? YTD_SETTINGS.STORAGE_KEY
+        : "ytd_settings";
+    const languageKey =
+      typeof YTD_SETTINGS !== "undefined" && YTD_SETTINGS.UI_LANGUAGE_STORAGE_KEY
+        ? YTD_SETTINGS.UI_LANGUAGE_STORAGE_KEY
+        : "ytd_options_language";
+    if (changes?.[settingsKey]) {
+      void handleSettingsChanged();
+    }
+    if (changes?.[languageKey]) {
+      void loadPanelLanguage();
+    }
+  });
+}
+
+/**
+ * Re-checks the configuration after the settings changed. A panel that is
+ * already working keeps its state; only the dead end is left behind.
+ */
+async function handleSettingsChanged() {
+  if (!awaitingApiKey) return;
+  const configStatus = await chrome.runtime
+    .sendMessage({ action: "checkConfig" })
+    .catch(() => null);
+  if (!configStatus || configStatus.error) return;
+  if (!configStatus.hasSupadataKey) return;
+  await bootPanel();
+}
 
 /**
  * Turns a sync verdict into a visible header state. Only an explicit
@@ -324,18 +540,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message.action === "noteSaved") {
     // Refresh notes list when a new note is saved
-    const filterAll = document
-      .getElementById("notesFilterAll")
-      ?.classList.contains("active");
-    loadNotes(filterAll ? null : currentVideoId);
+    loadNotes(notesFilterShowAll ? null : currentVideoId);
     sendResponse({ success: true });
   }
   if (message.action === "githubLoginChanged") {
     refreshGithubSyncStatus();
-    const filterAll = document
-      .getElementById("notesFilterAll")
-      ?.classList.contains("active");
-    loadNotes(filterAll ? null : currentVideoId);
+    loadNotes(notesFilterShowAll ? null : currentVideoId);
     sendResponse({ success: true });
   }
   if (message.action === "syncSessionExpired") {
@@ -575,10 +785,7 @@ function setupEventListeners() {
     }
     await chrome.runtime.sendMessage({ action: "logoutGithub" });
     await refreshGithubSyncStatus();
-    const filterAll = document
-      .getElementById("notesFilterAll")
-      ?.classList.contains("active");
-    loadNotes(filterAll ? null : currentVideoId);
+    loadNotes(notesFilterShowAll ? null : currentVideoId);
   });
 
   // Transcript actions
@@ -626,13 +833,40 @@ function setupEventListeners() {
   });
 }
 
-function setNotesFilter(showAll) {
+function setNotesFilter(showAll, { persist = true } = {}) {
+  notesFilterShowAll = Boolean(showAll);
   const thisVideoButton = document.getElementById("notesFilterThis");
   const allNotesButton = document.getElementById("notesFilterAll");
   thisVideoButton?.classList.toggle("active", !showAll);
   thisVideoButton?.setAttribute("aria-pressed", String(!showAll));
   allNotesButton?.classList.toggle("active", showAll);
   allNotesButton?.setAttribute("aria-pressed", String(showAll));
+  if (persist) void saveNotesFilter(notesFilterShowAll);
+}
+
+/**
+ * Restores the notes filter the user picked last time. The panel document is
+ * recreated on every open, so reading the buttons back from the markup would
+ * silently reset the choice.
+ */
+async function loadNotesFilter() {
+  try {
+    const stored = await chrome.storage.local.get(NOTES_FILTER_KEY);
+    notesFilterShowAll = stored?.[NOTES_FILTER_KEY] === "all";
+  } catch (error) {
+    notesFilterShowAll = false;
+  }
+  setNotesFilter(notesFilterShowAll, { persist: false });
+}
+
+async function saveNotesFilter(showAll) {
+  try {
+    await chrome.storage.local.set({
+      [NOTES_FILTER_KEY]: showAll ? "all" : "this",
+    });
+  } catch (error) {
+    // A failed preference write must never interrupt the user.
+  }
 }
 
 // ============================================================
@@ -737,6 +971,10 @@ async function startDigest(videoId, videoUrl) {
     return;
   }
 
+  // A new digest run invalidates the previous one. Without this ticket, a
+  // slow transcript or analysis response for a video the user already left
+  // lands on the video that is on screen now.
+  const generation = ++digestGeneration;
   const videoChanged = videoId !== currentVideoId;
 
   // Every video change invalidates observer work and in-flight translations.
@@ -746,10 +984,18 @@ async function startDigest(videoId, videoUrl) {
     transcriptScrollObserver = null;
     resetTranscriptSearch();
     lastTranscriptScrollTop = 0;
+    // A failed interface translation used to be permanent: the failure set
+    // was only cleared by a mode switch, so one timeout blocked the same
+    // chapter for the rest of the panel's life.
+    interfaceTranslationFailures.clear();
+    interfaceTranslationInFlight.clear();
+    pruneTranslationCachesForVideo(videoId);
     pendingTranscriptViewState = await loadTranscriptViewState(videoId);
+    if (generation !== digestGeneration) return;
     // An unseen video always starts in Original, so opening it never spends
     // translation tokens. A saved choice is restored only for this video.
     currentTranscriptMode = await loadDisplayLanguageMode(videoId);
+    if (generation !== digestGeneration) return;
     document
       .getElementById("contentArea")
       ?.classList.toggle(
@@ -760,6 +1006,7 @@ async function startDigest(videoId, videoUrl) {
 
   // Check cache for this video
   const cached = await loadFromCache(videoId);
+  if (generation !== digestGeneration) return;
   if (cached) {
     debugLog("Loading from cache:", videoId);
     currentVideoId = videoId;
@@ -796,7 +1043,6 @@ async function startDigest(videoId, videoUrl) {
     // Render analysis if we have it cached
     if (currentAnalysis) {
       renderAnalysisResults(currentAnalysis);
-      highlightMomentsOnPage(currentAnalysis.keyMoments);
     }
 
     showState("results");
@@ -804,7 +1050,7 @@ async function startDigest(videoId, videoUrl) {
     restorePendingTranscriptViewState(videoId);
 
     // Load notes for this video
-    loadNotes(videoId);
+    loadNotes(notesFilterShowAll ? null : videoId);
 
     // Setup explain feature
     setupExplainFeature();
@@ -829,25 +1075,19 @@ async function startDigest(videoId, videoUrl) {
   }
 
   showState("loading");
-  updateLoading("Fetching transcript", "");
+  updateLoading(panelCopy("fetchingTranscript"), panelCopy("extractingCaptions"));
 
   const transcriptResult = await chrome.runtime.sendMessage({
     action: "fetchTranscript",
     videoId: videoId,
   });
 
+  // The video can change while the transcript is on the wire. A transcript
+  // for a video the user already left must not overwrite the current one.
+  if (generation !== digestGeneration || videoId !== currentVideoId) return;
+
   if (!transcriptResult.success) {
-    if (transcriptResult.error === "NO_SUPADATA_KEY") {
-      showError(
-        "API key missing",
-        "Add your Supadata API key in YouTube Digest Settings.",
-      );
-      return;
-    }
-    showError(
-      "No transcript found",
-      transcriptResult.message || transcriptResult.error,
-    );
+    showTranscriptError(transcriptResult);
     return;
   }
 
@@ -884,6 +1124,22 @@ function interfaceTranslationCacheKey(surface, id, text) {
   return `${currentVideoId || "none"}:zh:${surface}:${id}:${text}`;
 }
 
+/**
+ * Drops the translation caches that belong to other videos. The caches live
+ * for the whole life of the panel document, so without this they grew
+ * without bound while the user moved from video to video.
+ */
+function pruneTranslationCachesForVideo(videoId) {
+  if (!videoId) return;
+  const prefix = `${videoId}:`;
+  for (const key of [...transcriptParagraphCache.keys()]) {
+    if (!key.startsWith(prefix)) transcriptParagraphCache.delete(key);
+  }
+  for (const key of [...interfaceTranslationCache.keys()]) {
+    if (!key.startsWith(prefix)) interfaceTranslationCache.delete(key);
+  }
+}
+
 function getInterfaceTranslation(surface, id, text) {
   return interfaceTranslationCache.get(
     interfaceTranslationCacheKey(surface, id, text),
@@ -900,13 +1156,49 @@ function renderLocalizedContent(text, surface, id) {
   const translation = translated
     ? escapeHtml(translated)
     : interfaceTranslationFailures.has(cacheKey)
-      ? '<span class="translation-error">Translation unavailable.</span>'
-      : '<span class="translation-pending">Translating...</span>';
+      ? `<span class="translation-error">${escapeHtml(panelCopy("translationUnavailable"))}</span><button class="translation-retry-btn" type="button" data-interface-retry-surface="${escapeHtml(surface)}" data-interface-retry-id="${escapeHtml(id)}">${escapeHtml(panelCopy("retry"))}</button>`
+      : `<span class="translation-pending">${escapeHtml(panelCopy("translating"))}</span>`;
   if (currentTranscriptMode === "bilingual") {
     return `<span class="localized-copy"><span class="localized-original">${escapeHtml(original)}</span><span class="localized-translation">${translation}</span></span>`;
   }
   return `<span class="localized-copy"><span class="localized-translation">${translation}</span></span>`;
 }
+
+/**
+ * Retries one failed interface translation. The failure set is a deny list,
+ * so the key has to be removed before the segment is requested again.
+ */
+async function retryInterfaceTranslation(surface, id) {
+  const prefix = `${currentVideoId || "none"}:zh:${surface}:${id}:`;
+  for (const key of [...interfaceTranslationFailures]) {
+    if (key.startsWith(prefix)) interfaceTranslationFailures.delete(key);
+  }
+  if (surface === "overview") {
+    if (currentAnalysis) renderAnalysisResults(currentAnalysis);
+    void translateOverviewContent();
+    return;
+  }
+  if (surface === "notes") {
+    if (currentNotes.length) renderNotes(currentNotes, currentNotesFilterVideoId);
+    void translateNotesContent();
+  }
+}
+
+// The retry button lives inside the chapter/quote rows, which have their own
+// click handlers (they seek the video). Listening in the capture phase means
+// the retry wins and the row click never fires.
+function handleInterfaceRetryClick(event) {
+  const trigger = event.target?.closest?.("[data-interface-retry-surface]");
+  if (!trigger) return;
+  event.preventDefault();
+  event.stopPropagation();
+  void retryInterfaceTranslation(
+    trigger.getAttribute("data-interface-retry-surface"),
+    trigger.getAttribute("data-interface-retry-id"),
+  );
+}
+
+document.addEventListener("click", handleInterfaceRetryClick, true);
 
 function getLocalizedPlainText(text, surface, id) {
   const original = String(text || "");
@@ -1576,25 +1868,114 @@ function updateLoading(title, subtitle) {
   document.getElementById("loadingSubtext").textContent = subtitle;
 }
 
-function showError(title, message) {
-  errorAction = null;
+function showError(title, message, options = {}) {
+  errorAction = options.action || null;
   showState("error");
-  document.getElementById("errorTitle").textContent = title;
-  document.getElementById("errorMessage").textContent = message;
-  document.getElementById("errorBtn").textContent = "Try Again";
+  document.getElementById("errorTitle").textContent =
+    title || panelCopy("errorTitle");
+  document.getElementById("errorMessage").textContent =
+    message || panelCopy("errorMessage");
+  document.getElementById("errorBtn").textContent =
+    options.buttonLabel ||
+    (options.action ? panelCopy("openSettings") : panelCopy("tryAgain"));
 }
 
-function showConfigError(configStatus) {
-  const missingKeys = [];
-  if (!configStatus.hasSupadataKey) missingKeys.push("Supadata");
-  if (!configStatus.hasAiKey) missingKeys.push("AI provider");
-
+/**
+ * Explains a failure of the extension itself (a dead service worker, a
+ * broken storage area). It must never look like a missing API key.
+ */
+function showServiceError(message) {
+  awaitingApiKey = false;
   showState("error");
-  document.getElementById("errorTitle").textContent = "API Keys Missing";
-  document.getElementById("errorMessage").textContent =
-    `Add your ${missingKeys.join(" and ")} API key${missingKeys.length === 1 ? "" : "s"} in YouTube Digest Settings.`;
-  document.getElementById("errorBtn").textContent = "Open Settings";
-  errorAction = () => chrome.runtime.sendMessage({ action: "openOptions" });
+  document.getElementById("errorTitle").textContent = panelCopy(
+    "serviceErrorTitle",
+  );
+  document.getElementById("errorMessage").textContent = String(
+    message || panelCopy("errorMessage"),
+  );
+  document.getElementById("errorBtn").textContent = panelCopy("tryAgain");
+  errorAction = () => {
+    void bootPanel();
+  };
+}
+
+function openOptions() {
+  try {
+    chrome.runtime.sendMessage({ action: "openOptions" });
+  } catch (error) {
+    // The settings page is a best effort: the message can fail when the
+    // extension context is invalidated.
+  }
+}
+
+/**
+ * Shows the missing transcript key and waits for the user to add it. The
+ * settings watcher brings the panel back once the key shows up.
+ */
+function showConfigError(configStatus) {
+  awaitingApiKey = true;
+  showState("error");
+  document.getElementById("errorTitle").textContent = panelCopy(
+    "apiKeysMissingTitle",
+  );
+  document.getElementById("errorMessage").textContent = panelCopy(
+    "addSupadataKey",
+  );
+  document.getElementById("errorBtn").textContent = panelCopy("openSettings");
+  errorAction = openOptions;
+}
+
+/**
+ * Turns a transcript failure into a message the user can act on. Every
+ * Supadata failure mode has its own title: "No transcript found" for an
+ * invalid key or an exhausted balance sent people hunting for subtitles
+ * that were never missing.
+ */
+function showTranscriptError(result) {
+  const code = String(result?.error || "");
+  switch (code) {
+    case "NO_SUPADATA_KEY":
+      showError(panelCopy("apiKeyMissingTitle"), panelCopy("addSupadataKey"), {
+        action: openOptions,
+      });
+      return;
+    case "INVALID_SUPADATA_KEY":
+      showError(
+        panelCopy("invalidApiKeyTitle"),
+        result?.message || panelCopy("invalidSupadataKey"),
+        { action: openOptions },
+      );
+      return;
+    case "OUT_OF_CREDITS":
+      showError(
+        panelCopy("outOfCreditsTitle"),
+        result?.message || panelCopy("outOfCreditsMessage"),
+      );
+      return;
+    case "RATE_LIMITED":
+      showError(
+        panelCopy("rateLimitedTitle"),
+        result?.message || panelCopy("rateLimitedMessage"),
+      );
+      return;
+    case "NO_TRANSCRIPT":
+      showError(
+        panelCopy("noTranscriptTitle"),
+        result?.message || panelCopy("noTranscriptMessage"),
+      );
+      return;
+    case "EMPTY_TRANSCRIPT":
+      showError(
+        panelCopy("emptyTranscriptTitle"),
+        result?.message || panelCopy("emptyTranscriptMessage"),
+      );
+      return;
+    default:
+      showError(
+        panelCopy("noTranscriptTitle"),
+        result?.message || result?.error || panelCopy("errorMessage"),
+      );
+  }
 }
 
 // ============================================================
@@ -1675,6 +2056,12 @@ async function triggerAnalysis() {
   if (!currentTranscriptTimestamped || isAnalysisLoading || currentAnalysis)
     return;
 
+  // Bind this run to the video on screen. The analysis takes seconds, and the
+  // user can open another video in the meantime. A response for the old
+  // video must never be rendered for - or cached under - the new one.
+  const videoId = currentVideoId;
+  const generation = digestGeneration;
+
   isAnalysisLoading = true;
 
   // Show loading indicators in the Overview tab
@@ -1682,11 +2069,9 @@ async function triggerAnalysis() {
   const quotesList = document.getElementById("quotesList");
 
   if (chapterList)
-    chapterList.innerHTML =
-      '<li class="chapter-item" style="color: var(--text-muted); border: none;">Loading chapters...</li>';
+    chapterList.innerHTML = `<li class="chapter-item" style="color: var(--text-muted); border: none;">${escapeHtml(panelCopy("generatingOverview"))}</li>`;
   if (quotesList)
-    quotesList.innerHTML =
-      '<div class="quote-item" style="color: var(--text-muted); border-left-color: var(--border);">Loading quotes...</div>';
+    quotesList.innerHTML = `<div class="quote-item" style="color: var(--text-muted); border-left-color: var(--border);">${escapeHtml(panelCopy("loadingQuotes"))}</div>`;
 
   try {
     const analysisResult = await chrome.runtime.sendMessage({
@@ -1698,26 +2083,77 @@ async function triggerAnalysis() {
       videoDuration: currentVideoDuration,
     });
 
+    if (videoId !== currentVideoId || generation !== digestGeneration) return;
+
     if (!analysisResult.success) {
-      if (chapterList)
-        chapterList.innerHTML = `<li class="chapter-item" style="color: var(--accent); border: none;">Analysis failed: ${escapeHtml(analysisResult.error || "Unknown error")}</li>`;
-      isAnalysisLoading = false;
+      renderAnalysisFailure(analysisResult);
       return;
     }
 
     currentAnalysis = analysisResult.analysis;
     renderAnalysisResults(currentAnalysis);
-    highlightMomentsOnPage(currentAnalysis.keyMoments);
 
     // Save to cache now that we have analysis
-    await saveToCache(currentVideoId);
+    await saveToCache(videoId);
   } catch (error) {
     console.error("[YouTube Digest Panel] Analysis error:", error);
-    if (chapterList)
-      chapterList.innerHTML = `<li class="chapter-item" style="color: var(--accent); border: none;">Error: ${escapeHtml(error.message)}</li>`;
+    if (videoId !== currentVideoId || generation !== digestGeneration) return;
+    renderAnalysisFailure({ error: error.message });
+  } finally {
+    // The flag must always be released. Leaving it set would disable the
+    // Overview tab for the rest of the panel's life.
+    if (generation === digestGeneration) isAnalysisLoading = false;
+  }
+}
+
+/**
+ * Shows why the analysis failed. The provider already sends a readable
+ * message, so the panel shows that instead of a raw error code, and offers
+ * a way out when a key is missing.
+ */
+function renderAnalysisFailure(result) {
+  const chapterList = document.getElementById("chapterList");
+  const quotesList = document.getElementById("quotesList");
+  const code = String(result?.error || "");
+  const message = String(
+    result?.message || result?.error || panelCopy("errorMessage"),
+  );
+
+  if (chapterList) {
+    chapterList.innerHTML = "";
+    const item = document.createElement("li");
+    item.className = "chapter-item";
+    item.style.color = "var(--accent)";
+    item.style.border = "none";
+    item.style.flexDirection = "column";
+    item.style.alignItems = "flex-start";
+    item.style.gap = "10px";
+
+    const text = document.createElement("span");
+    text.textContent = message;
+    item.appendChild(text);
+
+    if (code === "NO_AI_KEY") {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "enhance-btn";
+      button.textContent = panelCopy("openSettings");
+      button.addEventListener("click", openOptions);
+      item.appendChild(button);
+    }
+
+    chapterList.appendChild(item);
   }
 
-  isAnalysisLoading = false;
+  if (quotesList) {
+    quotesList.innerHTML = "";
+    const item = document.createElement("div");
+    item.className = "quote-item";
+    item.style.color = "var(--accent)";
+    item.style.borderLeftColor = "var(--border)";
+    item.textContent = message;
+    quotesList.appendChild(item);
+  }
 }
 
 // ============================================================
@@ -1775,24 +2211,6 @@ function playNote(note) {
   } else {
     // note.timestampedUrl already includes the &t=<seconds>s anchor
     chrome.tabs.create({ url: note.timestampedUrl });
-  }
-}
-
-async function highlightMomentsOnPage(moments) {
-  if (!moments || !moments.length) return;
-
-  try {
-    // Route through background script for reliable message passing
-    await chrome.runtime.sendMessage({
-      action: "relayToContent",
-      payload: {
-        action: "highlightMoments",
-        moments: moments,
-        videoDuration: currentVideoDuration,
-      },
-    });
-  } catch (error) {
-    console.error("Highlight error:", error);
   }
 }
 
@@ -2277,8 +2695,8 @@ function renderNotes(notes, filteredVideoId) {
   if (!notes || notes.length === 0) {
     notesIntro.style.display = "block";
     notesIntro.textContent = filteredVideoId
-      ? "No notes for this video yet. Hover over the video and click Note to save."
-      : "No notes saved yet. Hover over a video and click Note to save.";
+      ? panelCopy("noNotesForVideo")
+      : panelCopy("noNotesYet");
     return;
   }
 
@@ -2817,9 +3235,16 @@ async function handleDisplayLanguageModeChange(mode) {
   if (mode === currentTranscriptMode) return;
 
   currentTranscriptMode = mode;
-  await saveDisplayLanguageMode(currentVideoId, mode);
-  if (mode !== "original") interfaceTranslationFailures.clear();
+  // Invalidate the in-flight translations BEFORE the first await. The old
+  // order let a response for the previous mode land after the await and be
+  // accepted as if it belonged to the new one.
   translationGeneration += 1;
+  if (mode !== "original") {
+    // A failure recorded for the old mode must not block the new one.
+    interfaceTranslationFailures.clear();
+    interfaceTranslationInFlight.clear();
+  }
+  await saveDisplayLanguageMode(currentVideoId, mode);
   translationWorkCount = 0;
   setTranslatingSpinner(false);
   if (transcriptScrollObserver) transcriptScrollObserver.disconnect();
@@ -3154,4 +3579,51 @@ globalThis.__YTD_TRANSCRIPT_TESTING__ = {
   refreshGithubSyncStatus,
   loadSyncHeaderCopy,
   applySyncSessionSignal,
+};
+
+// The panel is the product's main surface, so the tests drive the real file
+// through a DOM stub. These hooks expose the stateful parts the tests need
+// to observe; the extension never reads this object at runtime.
+globalThis.__YTD_PANEL_TESTING__ = {
+  startDigest,
+  triggerAnalysis,
+  bootPanel,
+  handleSettingsChanged,
+  loadPanelContent,
+  setNotesFilter,
+  loadNotesFilter,
+  showError,
+  showTranscriptError,
+  showConfigError,
+  showServiceError,
+  renderAnalysisFailure,
+  renderLocalizedContent,
+  retryInterfaceTranslation,
+  handleInterfaceRetryClick,
+  handleDisplayLanguageModeChange,
+  panelCopy,
+  loadPanelLanguage,
+  applyPanelCopy,
+  setTranscriptMode: (mode) => {
+    currentTranscriptMode = DISPLAY_LANGUAGE_MODES.has(mode)
+      ? mode
+      : "original";
+    return currentTranscriptMode;
+  },
+  getState: () => ({
+    currentVideoId,
+    currentVideoUrl,
+    currentAnalysis,
+    currentTranscript,
+    currentTranscriptText,
+    currentTranscriptTimestamped,
+    currentTranscriptMode,
+    isAnalysisLoading,
+    notesFilterShowAll,
+    digestGeneration,
+    interfaceTranslationFailures,
+    interfaceTranslationInFlight,
+    interfaceTranslationCache,
+    transcriptParagraphCache,
+  }),
 };

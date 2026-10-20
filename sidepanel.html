@@ -77,6 +77,24 @@
         </div>
       </div>
 
+      <!-- The user pays for every call with their own key. Say so. -->
+      <p
+        class="cost-note"
+        id="costNote"
+        data-i18n="costDisclosure"
+        style="
+          margin: 6px 0 0;
+          font-family: var(--font-body);
+          font-size: 10.5px;
+          line-height: 1.45;
+          color: var(--text-muted);
+          text-align: right;
+        "
+      >
+        AI calls use your own provider balance. Each transcript lookup uses 1
+        Supadata credit.
+      </p>
+
       <!-- Tab navigation -->
       <div class="tabs" id="tabsNav" style="display: none">
         <button class="tab active" data-tab="transcript">Transcript</button>
@@ -90,8 +108,10 @@
       <!-- WELCOME STATE -->
       <div id="welcomeState" class="welcome-container">
         <div class="welcome-icon" aria-hidden="true"></div>
-        <div class="welcome-title">Ready to Digest</div>
-        <div class="welcome-desc">
+        <div class="welcome-title" data-i18n="welcomeTitle">
+          Ready to Digest
+        </div>
+        <div class="welcome-desc" data-i18n="welcomeDescription">
           Navigate to a YouTube video and click the extension icon to get an
           AI-powered digest.
         </div>
@@ -101,8 +121,10 @@
       <div id="loadingState" style="display: none">
         <div class="loading-container">
           <div class="loading-bar"></div>
-          <div class="loading-text" id="loadingText">Fetching transcript</div>
-          <div class="loading-subtext" id="loadingSubtext">
+          <div class="loading-text" id="loadingText" data-i18n="fetchingTranscript">
+            Fetching transcript
+          </div>
+          <div class="loading-subtext" id="loadingSubtext" data-i18n="extractingCaptions">
             Extracting captions from video...
           </div>
         </div>
@@ -112,11 +134,15 @@
       <div id="errorState" style="display: none">
         <div class="error-container">
           <div class="error-icon" aria-hidden="true">!</div>
-          <div class="error-title" id="errorTitle">Error</div>
-          <div class="error-message" id="errorMessage">
+          <div class="error-title" id="errorTitle" data-i18n="errorTitle">
+            Error
+          </div>
+          <div class="error-message" id="errorMessage" data-i18n="errorMessage">
             Something went wrong.
           </div>
-          <button class="error-btn" id="errorBtn">Try Again</button>
+          <button class="error-btn" id="errorBtn" data-i18n="tryAgain">
+            Try Again
+          </button>
         </div>
       </div>
 
@@ -126,7 +152,9 @@
         <div class="tab-panel active" data-panel="transcript">
           <div class="section">
             <div class="section-header transcript-section-header">
-              <div class="section-title">Full Transcript</div>
+              <div class="section-title" data-i18n="fullTranscript">
+                Full Transcript
+              </div>
               <div class="transcript-actions">
                 <button class="enhance-btn" id="copyTranscriptBtn">Copy</button>
                 <button class="enhance-btn" id="exportTranscriptBtn">
@@ -206,6 +234,7 @@
             <ul class="chapter-list" id="chapterList">
               <li
                 class="chapter-item"
+                data-i18n="chaptersEmpty"
                 style="
                   color: var(--text-muted);
                   cursor: default;
@@ -229,7 +258,11 @@
                   cursor: default;
                 "
               >
-                <div class="quote-text" style="font-style: normal">
+                <div
+                  class="quote-text"
+                  data-i18n="quotesEmpty"
+                  style="font-style: normal"
+                >
                   Quotes will be extracted when you view this tab...
                 </div>
               </div>
@@ -241,7 +274,7 @@
         <div class="tab-panel" data-panel="notes">
           <div class="section">
             <div class="section-header">
-              <div class="section-title">Saved Notes</div>
+              <div class="section-title" data-i18n="savedNotes">Saved Notes</div>
               <div class="notes-filter">
                 <button
                   class="enhance-btn active"

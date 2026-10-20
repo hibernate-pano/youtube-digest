@@ -27,10 +27,39 @@ class FakeElement {
     this.children = [];
     this.style = {};
     this.listeners = {};
+    this.attributes = {};
+    this.disabled = false;
+    this._text = "";
+    this._html = null;
   }
 
   get firstChild() {
     return this.children[0] || null;
+  }
+
+  set textContent(value) {
+    this._text = String(value ?? "");
+    this._html = null;
+  }
+
+  get textContent() {
+    if (this._text) return this._text;
+    return this.children.map((child) => child.textContent || "").join("");
+  }
+
+  set innerHTML(value) {
+    this._html = String(value ?? "");
+    this._text = "";
+    this.children = [];
+  }
+
+  get innerHTML() {
+    if (this._html !== null) return this._html;
+    return this._text
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;");
   }
 
   getBoundingClientRect() {
@@ -41,6 +70,12 @@ class FakeElement {
     if (selector === "ytd-watch-metadata" && this.inMetadata) return this;
     if (selector === "#primary" && this.inPrimary) return this;
     return null;
+  }
+
+  querySelector() {
+    // The harness does not parse markup, so every query returns a stub that
+    // accepts the calls the content script makes on it.
+    return new FakeElement();
   }
 
   querySelectorAll(selector) {
@@ -64,7 +99,13 @@ class FakeElement {
   }
 
   setAttribute(name, value) {
+    this.attributes[name] = String(value);
     this[name] = value;
+  }
+
+  getAttribute(name) {
+    if (Object.hasOwn(this.attributes, name)) return this.attributes[name];
+    return null;
   }
 
   appendChild(child) {
@@ -96,7 +137,7 @@ class FakeElement {
   }
 }
 
-function createHarness() {
+function createHarness({ sendMessage } = {}) {
   const actionRows = [];
   const fallbackRows = [];
   const elements = [];
@@ -109,6 +150,7 @@ function createHarness() {
   const document = {
     readyState: "loading",
     body: new FakeElement(),
+    head: new FakeElement(),
     addEventListener(type, listener) {
       documentListeners[type] = listener;
     },
@@ -153,9 +195,15 @@ function createHarness() {
     chrome: {
       runtime: {
         onMessage: { addListener() {} },
-        async sendMessage() {
+        async sendMessage(message) {
+          if (sendMessage) return sendMessage(message);
           return { success: true };
         },
+      },
+    },
+    navigator: {
+      clipboard: {
+        async writeText() {},
       },
     },
     MutationObserver: class {
@@ -332,4 +380,80 @@ test("DOM mutation reconciliation repairs a replaced toolbar", () => {
   assert.equal(oldGroup.children.length, 0);
   assert.equal(newRow.children.length, 1);
   assert.equal(newGroup.children.length, 1);
+});
+
+// ============================================================
+// The Digest button must show what it is doing
+// ============================================================
+
+function digestButtonHarness(sendMessage) {
+  const harness = createHarness({ sendMessage });
+  const { row } = createActionRow({ width: 500, height: 36 });
+  harness.actionRows.push(row);
+  harness.context.injectDigestButton();
+  const button = harness.elements.find(
+    (element) => element.id === "ytd-digest-button",
+  );
+  return { harness, button };
+}
+
+function clickEvent() {
+  return { preventDefault() {}, stopPropagation() {} };
+}
+
+test("the Digest button says it is opening and blocks double clicks", async () => {
+  let release;
+  const pending = new Promise((resolve) => {
+    release = resolve;
+  });
+  const { button } = digestButtonHarness(async () => pending);
+
+  const click = button.listeners.click(clickEvent());
+
+  assert.equal(button.children[0].textContent, "Opening…");
+  assert.equal(button.disabled, true);
+
+  release({ success: true });
+  await click;
+
+  assert.equal(button.children[0].textContent, "Digest");
+  assert.equal(button.disabled, false);
+});
+
+test("a failed panel open tells the user what to do instead of doing nothing", async () => {
+  const { harness, button } = digestButtonHarness(async () => {
+    throw new Error("Could not open the side panel.");
+  });
+
+  await button.listeners.click(clickEvent());
+
+  assert.equal(button.children[0].textContent, "Digest");
+  assert.equal(button.disabled, false);
+
+  const toast = harness.elements.find(
+    (element) => element.id === "ytd-toast" && element.isConnected,
+  );
+  assert.ok(toast, "the failure must be visible on the page");
+  assert.match(toast.innerHTML, /Chrome toolbar/);
+});
+
+test("a refused panel open is reported back to the page", async () => {
+  const { harness, button } = digestButtonHarness(async () => ({
+    success: false,
+    error: "No active tab to open.",
+  }));
+
+  await button.listeners.click(clickEvent());
+
+  assert.equal(button.children[0].textContent, "Digest");
+  assert.equal(button.disabled, false);
+  const toast = harness.elements.find(
+    (element) => element.id === "ytd-toast" && element.isConnected,
+  );
+  assert.ok(toast, "the failure must be visible on the page");
+});
+
+test("the Digest button announces its state to screen readers", () => {
+  const { button } = digestButtonHarness(async () => ({ success: true }));
+  assert.equal(button.getAttribute("aria-live"), "polite");
 });
