@@ -4,7 +4,7 @@
 
 ## 一、准备两个 API Key(5 分钟)
 
-YouTube Digest 不收费,但需要你自己申请两个免费 API Key(数据只发给这两个服务,不经过我们的服务器):
+YouTube Digest 不收费,但需要你自己申请两个 API Key(一个 Supadata Key,一个 AI 服务 Key)。数据只会发给你选择的这两个服务;只有你用 GitHub 登录之后,已保存的笔记才会同步到本项目自建的同步服务。
 
 1. **Supadata Key**(用于拉取 YouTube 字幕)
    - 打开 https://dash.supadata.ai/auth/sign-up 注册
@@ -33,13 +33,14 @@ YouTube Digest 不收费,但需要你自己申请两个免费 API Key(数据只�
 1. 打开一个有字幕的 YouTube 视频(英语学习视频最佳)
 2. 侧边栏自动显示字幕,可以切换 原文 / 中文 / 双语
 3. 点「Overview」看 AI 总结和章节
-4. 看视频时按键盘 n 键(或点视频上的 📝)记笔记
+4. 看视频时按键盘 n 键(或把鼠标移到视频上,点出现的 **Note** 按钮)记笔记
 
 ## 五、(可选)开通云同步
 
 1. 在 Settings 里点「Sign in with GitHub」登录
-2. 笔记自动备份到云端,网页版管理:https://ytd.panbo.space/
+2. 笔记会同步到本项目自建的同步服务 https://ytd.panbo.space/,登录后也可以在网页版查看和管理笔记:https://ytd.panbo.space/
 3. 换电脑/浏览器,重新安装扩展后登录同一账号,数据就回来了
+4. 不登录也一样能用,只是笔记只留在这台设备上,不会上传到任何服务器
 
 ## 常见问题
 
