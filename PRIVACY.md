@@ -136,6 +136,11 @@ Each provider receives:
   translation, or requested overview or explanation content;
 - nearby transcript context and video metadata when polishing a saved note.
 
+OpenCode Go routes and caches on a session id, so a request to that provider also
+carries one: a random value your browser generates once and keeps. It says
+nothing about you, it is never sent to any other service, and no one else using
+the extension has it.
+
 Endpoints and models are fixed in the published Settings page. Keys for all three providers can be saved side by side, and only the selected provider is used. To use a provider or model outside this list, you must adapt your own local source copy and its permissions. The Settings page provides a coding-agent prompt for that purpose and warns you never to include an API key in the prompt or chat.
 
 Requests go directly from the extension to Supadata or the selected AI provider. They are authenticated with the keys you supply. YouTube Digest's developer does not proxy or receive these requests. The local caption path described above involves no third party at all.
