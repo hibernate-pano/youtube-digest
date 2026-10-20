@@ -1987,3 +1987,24 @@ test("a successful side panel open is reported as success", async () => {
 
   assert.deepEqual(JSON.parse(JSON.stringify(response)), { success: true });
 });
+
+test("the account that owns a note can still import it again", async () => {
+  const storageMock = createStorageMock({
+    ytd_notes: [
+      { id: "legacy_1", text: "private note", videoId: "abc123xyz", createdAt: 1000 },
+    ],
+  });
+  const helpers = loadBackgroundHelpers({ storageMock });
+  assert.equal(await helpers.migrateLegacyLocalNotes(1001), 1);
+
+  // The bucket still holds a copy (the clear did not happen), but the note
+  // belongs to the first account, so that account must be able to import it
+  // again instead of losing it.
+  await storageMock.set({
+    ytd_notes: [{ id: "legacy_1", text: "private note", videoId: "abc123xyz", createdAt: 1000 }],
+  });
+  const again = await helpers.migrateLegacyLocalNotes(1001);
+  assert.equal(again, 0, "the note is already in the account namespace");
+  const raw = await storageMock.get(null);
+  assert.equal(raw.ytd_notes_1001.length, 1, "the note is still owned by the account");
+});

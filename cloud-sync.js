@@ -1035,36 +1035,40 @@ async function updateLocalVocabularyStatus(status, cloudId) {
 
 
 /**
- * Storage key for the record of which notes the signed-out bucket already
- * handed to an account.
+ * Storage key for the record of which account owns which note from the
+ * signed-out bucket.
  *
  * The bucket is cleared as soon as it is imported, so a failed upload can
  * never leave it behind for the next account to inherit. This record is the
  * safety net for the case where that clear did not happen (a storage
  * error, an interrupted write): those notes are already spoken for and
- * must not be imported a second time.
+ * must not be imported by a second account.
  */
 const NOTES_CLAIM_KEY = "ytd_notes_claim";
 
+/**
+ * Reads the claim record: which account owns which note id.
+ *
+ * @returns {Promise<Record<string, string>>} note id -> account id.
+ */
 async function readNotesClaim() {
   try {
     const result = await chrome.storage.local.get(NOTES_CLAIM_KEY);
     const claim = result[NOTES_CLAIM_KEY];
-    if (!claim || typeof claim !== "object") return null;
-    return {
-      githubId: String(claim.githubId || ""),
-      ids: Array.isArray(claim.ids) ? claim.ids.map((id) => String(id)) : [],
-    };
+    if (!claim || typeof claim !== "object" || !claim.ids) return {};
+    const owners = {};
+    for (const [id, owner] of Object.entries(claim.ids)) {
+      owners[String(id)] = String(owner);
+    }
+    return owners;
   } catch (error) {
-    return null;
+    return {};
   }
 }
 
-async function writeNotesClaim(githubId, ids) {
+async function writeNotesClaim(owners) {
   try {
-    await chrome.storage.local.set({
-      [NOTES_CLAIM_KEY]: { githubId: String(githubId || ""), ids },
-    });
+    await chrome.storage.local.set({ [NOTES_CLAIM_KEY]: { ids: owners } });
   } catch (error) {
     // The claim is a safety net, not the primary guard: the bucket is
     // already cleared when the import happens.
@@ -1079,7 +1083,8 @@ async function writeNotesClaim(githubId, ids) {
  * - A note belongs to exactly one account. Once a note has been handed to
  *   an account it is never handed to another one, so a failed sync cannot
  *   make another learner inherit notes that were written under a different
- *   account.
+ *   account. The account that owns a note can always import it again, so a
+ *   retry never loses it.
  * - The signed-out bucket is cleared as soon as the notes are copied into
  *   the account namespace, not after the upload. The notes now live in the
  *   account's own namespace, so a failed upload keeps them on the device
@@ -1091,11 +1096,14 @@ async function migrateLegacyLocalNotes(githubId) {
   if (!accountId) return 0;
   const legacy = await readLocalNotes(YTD_SETTINGS.NOTES_STORAGE_KEY);
   if (!Array.isArray(legacy) || legacy.length === 0) return 0;
-  const claim = await readNotesClaim();
-  const claimedIds = new Set(claim ? claim.ids : []);
-  const unclaimed = legacy.filter(
-    (note) => note && note.id && !claimedIds.has(String(note.id)),
-  );
+  const owners = await readNotesClaim();
+  const unclaimed = legacy.filter((note) => {
+    if (!note || !note.id) return false;
+    const owner = owners[String(note.id)];
+    // A note this account already owns is importable again; a note that
+    // belongs to another account is not.
+    return !owner || owner === accountId;
+  });
   if (unclaimed.length === 0) {
     // Every note in the bucket already belongs to another account.
     console.warn(
@@ -1119,10 +1127,10 @@ async function migrateLegacyLocalNotes(githubId) {
   // is cleared right away - before the upload - and the ids are recorded
   // as belonging to this account.
   await chrome.storage.local.remove(YTD_SETTINGS.NOTES_STORAGE_KEY);
-  await writeNotesClaim(accountId, [
-    ...claimedIds,
-    ...unclaimed.map((note) => String(note.id)),
-  ]);
+  for (const note of unclaimed) {
+    owners[String(note.id)] = accountId;
+  }
+  await writeNotesClaim(owners);
   return added;
 }
 
