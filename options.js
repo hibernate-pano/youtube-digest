@@ -9,7 +9,7 @@ const YTD_OPTIONS = (() => {
       languageGroupLabel: "Interface language",
       heading: "Bring your own API keys",
       lede:
-        "Keys stay in this Chrome profile and are sent only to Supadata and your chosen AI provider. This open-source extension has no developer server or analytics.",
+        "Keys stay in this Chrome profile and are sent only to Supadata and your chosen AI provider. There is no analytics or telemetry. If you sign in with GitHub below, your saved notes are mirrored to this project's own sync service at ytd.panbo.space; without signing in, nothing leaves this device.",
       transcriptProvider: "Transcript provider",
       supadataApiKeyLabel: "Supadata API key",
       supadataHelp: "Used to fetch timestamped YouTube subtitles. ",
@@ -46,7 +46,7 @@ const YTD_OPTIONS = (() => {
         'Read the bilingual transcript, open Overview for the AI digest, and press "n" on the video to save a note.',
       githubSync: "GitHub sync",
       githubSyncIntro:
-        "Sign in with GitHub to back up your notes, vocabulary, and review progress. Every GitHub account has its own isolated data. Sign in with a different account to switch learner profiles.",
+        "Sign in with GitHub to back up your saved notes to this project's sync service at ytd.panbo.space. Every GitHub account has its own isolated data. Sign in with a different account to switch learner profiles.",
       githubLogin: "Sign in with GitHub",
       githubLogout: "Sign out",
       githubLoginFailed: "GitHub sign-in failed. Please try again.",
@@ -73,7 +73,7 @@ const YTD_OPTIONS = (() => {
       copyCustomizationPrompt: "Copy edited prompt",
       localData: "Local data",
       localDataHelp:
-        "Digests, translations, and notes are stored only in this Chrome profile. You can remove them at any time.",
+        "Digests and translations are stored only in this Chrome profile. Notes are stored here too, and are mirrored to the sync service while you are signed in. You can remove them at any time.",
       clearCache: "Clear cached digests",
       deleteNotes: "Delete all notes",
       resetData: "Reset extension data",
@@ -104,7 +104,7 @@ const YTD_OPTIONS = (() => {
       languageGroupLabel: "界面语言",
       heading: "使用你自己的 API 密钥",
       lede:
-        "密钥仅保存在当前 Chrome 个人资料中，只会发送给 Supadata 和你选择的 AI 服务。本开源扩展没有开发者服务器，也不使用分析服务。",
+        "密钥仅保存在当前 Chrome 个人资料中，只会发送给 Supadata 和你选择的 AI 服务。本扩展不使用分析统计或行为追踪。如果你在下方使用 GitHub 登录，已保存的笔记会镜像到本项目自建的同步服务 ytd.panbo.space；不登录时不会有任何数据离开这台设备。",
       transcriptProvider: "字幕服务",
       supadataApiKeyLabel: "Supadata API 密钥",
       supadataHelp: "用于获取带时间戳的 YouTube 字幕。",
@@ -139,7 +139,7 @@ const YTD_OPTIONS = (() => {
       setupGuideStep3: "阅读双语字幕;点 Overview 查看 AI 摘要;在视频上按 n 键保存笔记。",
       githubSync: "GitHub 同步",
       githubSyncIntro:
-        "使用 GitHub 登录,备份你的笔记、生词和复习进度。每个 GitHub 账户的数据相互隔离,换一个账户登录即可切换学习者档案。",
+        "使用 GitHub 登录,把你的笔记备份到本项目自建的同步服务 ytd.panbo.space。每个 GitHub 账户的数据相互隔离,换一个账户登录即可切换学习者档案。",
       githubLogin: "使用 GitHub 登录",
       githubLogout: "退出登录",
       githubLoginFailed: "GitHub 登录失败,请重试。",
@@ -165,7 +165,7 @@ const YTD_OPTIONS = (() => {
       copyCustomizationPrompt: "复制编辑后的提示词",
       localData: "本地数据",
       localDataHelp:
-        "摘要、翻译和笔记仅保存在当前 Chrome 个人资料中。你可以随时删除。",
+        "摘要和翻译仅保存在当前 Chrome 个人资料中。笔记也保存在这里,登录状态下会同时镜像到同步服务。你可以随时删除。",
       clearCache: "清除缓存的摘要",
       deleteNotes: "删除全部笔记",
       resetData: "重置扩展数据",
