@@ -65,7 +65,24 @@ npm run dev                      # http://localhost:8787
 ```
 
 Then in the extension source set `SERVER_BASE_URL` in `settings.js` to
-`http://localhost:8787` and reload the unpacked extension.
+`http://localhost:8787` **and add the local backend to the extension's host
+permissions** in `manifest.json`:
+
+```json
+"host_permissions": [
+  ...
+  "http://localhost:8787/*"
+]
+```
+
+and reload the unpacked extension.
+
+> The released manifest does **not** ship the `http://localhost:8787/*` host
+> permission. A published extension that can reach a port on the user's own
+> machine is a liability: any process listening there could be handed the
+> user's notes and their GitHub session token. Add the line back only while
+> you are developing against a local backend, and take it out again before
+> you package a release.
 
 Without `DATABASE_URL` the server runs an in-memory store (restarts lose
 data) so you can exercise the OAuth flow without a database.
