@@ -437,6 +437,88 @@ test("deleting a vocabulary entry that was never stored is harmless", async () =
 });
 
 // ============================================================
+// The starred-note route
+// ============================================================
+
+test("the setNoteStarred route stars a note without rewriting its text", async () => {
+  const background = loadBackground({
+    storage: {
+      ytd_notes: [
+        { id: "n1", text: "the original text", starred: false },
+        { id: "n2", text: "another note", starred: false },
+      ],
+    },
+  });
+
+  const response = await new Promise((resolve) => {
+    const listener = background.messageListeners.at(-1);
+    const kept = listener(
+      { action: "setNoteStarred", noteId: "n1", starred: true },
+      {},
+      resolve,
+    );
+    assert.equal(kept, true, "the message channel must stay open");
+  });
+
+  assert.equal(response.success, true);
+  const stored = background.storage.ytd_notes.find((note) => note.id === "n1");
+  assert.equal(stored.starred, true, "the note must be starred");
+  assert.equal(
+    stored.text,
+    "the original text",
+    "starring a note must not rewrite its text",
+  );
+  assert.equal(
+    background.storage.ytd_notes.find((note) => note.id === "n2").starred,
+    false,
+    "another note must not be touched",
+  );
+});
+
+test("the setNoteStarred route tells the cloud about the flag", async () => {
+  const background = loadBackground({
+    storage: {
+      ytd_github_session: { token: "tok", githubId: 42 },
+      ytd_notes_42: [
+        { id: "n1", text: "a note", starred: false, cloudId: "cloud-1" },
+      ],
+    },
+  });
+
+  const response = await new Promise((resolve) => {
+    background.messageListeners.at(-1)(
+      { action: "setNoteStarred", noteId: "n1", starred: true },
+      {},
+      resolve,
+    );
+  });
+
+  assert.equal(response.success, true);
+  const cloudCall = background.requests.find((request) =>
+    request.url.startsWith(SYNC_BASE_URL),
+  );
+  assert.ok(cloudCall, "the cloud must learn about the flag");
+  assert.equal(cloudCall.url, `${SYNC_BASE_URL}/api/notes/cloud-1/star`);
+  assert.equal(cloudCall.options.method, "PATCH");
+  assert.deepEqual(JSON.parse(cloudCall.options.body), { starred: true });
+});
+
+test("the setNoteStarred route reports a note it cannot find", async () => {
+  const background = loadBackground({ storage: { ytd_notes: [] } });
+
+  const response = await new Promise((resolve) => {
+    background.messageListeners.at(-1)(
+      { action: "setNoteStarred", noteId: "nope", starred: true },
+      {},
+      resolve,
+    );
+  });
+
+  assert.equal(response.success, false);
+  assert.match(response.error, /not found/i);
+});
+
+// ============================================================
 // formatSyncTimestamp
 // ============================================================
 
