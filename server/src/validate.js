@@ -49,6 +49,29 @@ function parseNote(input) {
   return parsed;
 }
 
+/**
+ * Sparse parser for PATCH. Unlike parseNote it returns ONLY the fields the
+ * client actually sent, so a partial update never zeroes the fields it left
+ * out (video title, channel, timestamp, quote). `clientId` is deliberately
+ * absent: it is the sync identity key and must stay immutable on edit.
+ */
+function parseNotePatch(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return null;
+  const note = cleanString(input.note, MAX_NOTE_LENGTH);
+  if (!note) return null;
+  const patch = { note };
+  if ("videoId" in input) patch.videoId = cleanVideoId(input.videoId);
+  if ("videoTitle" in input) patch.videoTitle = cleanString(input.videoTitle, MAX_VIDEO_TITLE_LENGTH);
+  if ("channelName" in input) patch.channelName = cleanString(input.channelName, MAX_CHANNEL_LENGTH);
+  if ("timestampSeconds" in input) {
+    patch.timestampSeconds = cleanTimestampSeconds(input.timestampSeconds) ?? 0;
+  }
+  if ("quote" in input) patch.quote = cleanString(input.quote, MAX_QUOTE_LENGTH);
+  // Tri-state: only an explicit boolean touches the stored flag.
+  if (typeof input.starred === "boolean") patch.starred = input.starred;
+  return patch;
+}
+
 const VOCABULARY_STATUSES = new Set(["learning", "reviewing", "mastered"]);
 
 function parseVocabulary(input) {
@@ -69,15 +92,33 @@ function parseVocabulary(input) {
 
 const REVIEW_GRADES = new Set([0, 1, 2, 3, 4, 5]);
 
+/**
+ * Parses a review grade (0-5).
+ *
+ * `Number(null)`, `Number("")` and `Number(false)` are all 0, and 0 is a
+ * legal grade ("Again"). Coercing first would therefore turn a missing or
+ * blank grade into a real "Again", which resets the word's schedule. So the
+ * empty-ish values are rejected before any coercion happens.
+ */
 function parseReviewGrade(value) {
-  const grade = Number(value);
-  return Number.isInteger(grade) && REVIEW_GRADES.has(grade) ? grade : null;
+  if (value === null || value === undefined) return null;
+  if (typeof value === "boolean") return null;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    if (!/^[+-]?\d+$/.test(trimmed)) return null;
+    const parsed = Number(trimmed);
+    return Number.isInteger(parsed) && REVIEW_GRADES.has(parsed) ? parsed : null;
+  }
+  if (typeof value !== "number") return null;
+  return Number.isInteger(value) && REVIEW_GRADES.has(value) ? value : null;
 }
 
 module.exports = {
   cleanString,
   cleanVideoId,
   parseNote,
+  parseNotePatch,
   parseVocabulary,
   parseReviewGrade,
   VOCABULARY_STATUSES,

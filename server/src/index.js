@@ -17,7 +17,14 @@
  */
 
 const { signToken } = require("./jwt");
-const { HttpError, requireUser, json } = require("./middleware");
+const {
+  HttpError,
+  requireUser,
+  json,
+  createRateLimiter,
+  requireJwtSecret,
+  HARDENING_HEADERS,
+} = require("./middleware");
 const { createStore } = require("./db");
 const auth = require("./auth");
 const notes = require("./routes/notes");
@@ -45,8 +52,28 @@ function checkLoginRate(ip) {
   }
   timestamps.push(now);
   loginAttempts.set(ip, timestamps);
+  // A key whose window has fully expired is dropped, so the map cannot grow
+  // without bound when many distinct clients hit the login route.
+  if (loginAttempts.size > 10_000) loginAttempts.clear();
   return true;
 }
+
+// Per-user rate limits for the authenticated data routes. A valid token must
+// not be able to write an unbounded number of rows, and a read is not free
+// either: every list endpoint can return thousands of rows.
+const USER_RATE_WINDOW_MS = 60 * 1000;
+const USER_WRITE_RATE_MAX = 120;
+const USER_READ_RATE_MAX = 600;
+const userWriteLimiter = createRateLimiter({
+  windowMs: USER_RATE_WINDOW_MS,
+  max: USER_WRITE_RATE_MAX,
+  maxKeys: 10_000,
+});
+const userReadLimiter = createRateLimiter({
+  windowMs: USER_RATE_WINDOW_MS,
+  max: USER_READ_RATE_MAX,
+  maxKeys: 10_000,
+});
 
 function clientIp(request) {
   return (
@@ -59,7 +86,7 @@ function clientIp(request) {
 function redirect(location) {
   return new Response(null, {
     status: 302,
-    headers: { Location: location },
+    headers: Object.assign({ Location: location }, HARDENING_HEADERS),
   });
 }
 
@@ -91,6 +118,9 @@ async function handleLogin(ctx) {
   if (!env.GITHUB_CLIENT_ID || !env.GITHUB_CLIENT_SECRET) {
     throw new HttpError(500, "GitHub OAuth is not configured on the server.");
   }
+  // A missing secret would throw a DataError from `importKey` on every
+  // request; fail with a clear configuration error instead.
+  requireJwtSecret(env);
   if (!checkLoginRate(clientIp(ctx.request))) {
     throw new HttpError(429, "Too many sign-in attempts. Try again in a few minutes.");
   }
@@ -133,6 +163,9 @@ async function handleLogin(ctx) {
 
 async function handleCallback(ctx) {
   const env = ctx.env;
+  // Checked before the GitHub code is exchanged: a missing secret would
+  // otherwise fail *after* the code was already spent.
+  requireJwtSecret(env);
   const url = new URL(ctx.request.url);
   const code = url.searchParams.get("code") || "";
   const state = url.searchParams.get("state") || "";
@@ -153,7 +186,13 @@ async function handleCallback(ctx) {
   const githubUser = await auth.fetchGithubUser(accessToken);
   const user = await env.store.upsertUser(githubUser);
   const token = await signToken(
-    { sub: String(user.id), githubId: user.githubId, login: user.login },
+    {
+      sub: String(user.id),
+      githubId: user.githubId,
+      login: user.login,
+      // The token version lets a deleted account revoke the tokens it issued.
+      tokenVersion: Number(user.tokenVersion) || 0,
+    },
     env.JWT_SECRET,
     SESSION_TTL_SECONDS,
   );
@@ -175,13 +214,23 @@ async function handleCallback(ctx) {
 
 async function handleComplete() {
   return new Response(COMPLETE_PAGE, {
-    headers: { "Content-Type": "text/html; charset=utf-8" },
+    headers: Object.assign(
+      { "Content-Type": "text/html; charset=utf-8" },
+      HARDENING_HEADERS,
+    ),
   });
 }
+
+/** A canonical UUID, as used by the notes and vocabulary primary keys. */
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Tiny path router. Patterns use `:name` segments; matched values land in
  * ctx.params. All data routes run through requireUser first.
+ *
+ * `uuidParams` names the parameters that carry a row id. A value that is not
+ * a UUID can never match a row, so it is answered with 404 instead of being
+ * handed to the database (where it would raise a uuid syntax error).
  */
 const ROUTES = [
   { method: "GET", pattern: "/api/auth/login", handler: handleLogin, public: true },
@@ -194,16 +243,16 @@ const ROUTES = [
   { method: "GET", pattern: "/api/status", handler: handleStatus, public: true },
   { method: "GET", pattern: "/api/notes", handler: notes.listNotes },
   { method: "POST", pattern: "/api/notes", handler: notes.createNote },
-  { method: "PATCH", pattern: "/api/notes/:id", handler: notes.updateNote },
-  { method: "DELETE", pattern: "/api/notes/:id", handler: notes.deleteNote },
-  { method: "PATCH", pattern: "/api/notes/:id/star", handler: notes.setNoteStarred },
+  { method: "PATCH", pattern: "/api/notes/:id", handler: notes.updateNote, uuidParams: ["id"] },
+  { method: "DELETE", pattern: "/api/notes/:id", handler: notes.deleteNote, uuidParams: ["id"] },
+  { method: "PATCH", pattern: "/api/notes/:id/star", handler: notes.setNoteStarred, uuidParams: ["id"] },
   { method: "DELETE", pattern: "/api/notes/client/:clientId", handler: notes.deleteNoteByClientId },
   { method: "GET", pattern: "/api/vocabulary", handler: vocabulary.listVocabulary },
   { method: "POST", pattern: "/api/vocabulary", handler: vocabulary.upsertVocabulary },
-  { method: "PATCH", pattern: "/api/vocabulary/:id", handler: vocabulary.updateVocabularyStatus },
-  { method: "DELETE", pattern: "/api/vocabulary/:id", handler: vocabulary.deleteVocabulary },
+  { method: "PATCH", pattern: "/api/vocabulary/:id", handler: vocabulary.updateVocabularyStatus, uuidParams: ["id"] },
+  { method: "DELETE", pattern: "/api/vocabulary/:id", handler: vocabulary.deleteVocabulary, uuidParams: ["id"] },
   { method: "GET", pattern: "/api/reviews/due", handler: reviews.listDueReviews },
-  { method: "POST", pattern: "/api/reviews/:vocabId", handler: reviews.submitReview },
+  { method: "POST", pattern: "/api/reviews/:vocabId", handler: reviews.submitReview, uuidParams: ["vocabId"] },
 ];
 
 function matchRoute(method, pathname) {
@@ -217,7 +266,20 @@ function matchRoute(method, pathname) {
     for (let i = 0; i < patternParts.length; i++) {
       const patternPart = patternParts[i];
       if (patternPart.startsWith(":")) {
-        params[patternPart.slice(1)] = decodeURIComponent(pathParts[i]);
+        let decoded;
+        try {
+          decoded = decodeURIComponent(pathParts[i]);
+        } catch {
+          // A malformed percent-escape is a client error, not a server error.
+          throw new HttpError(400, "Malformed request path.");
+        }
+        const name = patternPart.slice(1);
+        if (route.uuidParams && route.uuidParams.includes(name) && !UUID_PATTERN.test(decoded)) {
+          // A row id that cannot be a UUID matches nothing. Answering 404
+          // keeps the database from ever seeing it.
+          throw new HttpError(404, "Not found.");
+        }
+        params[name] = decoded;
       } else if (patternPart !== pathParts[i]) {
         matched = false;
         break;
@@ -232,17 +294,19 @@ const STARTED_AT = Date.now();
 
 /**
  * In-memory ring buffer of recent server errors so the service owner can
- * see failures without log access (see /api/status). Messages are trimmed;
- * no tokens or user content are stored.
+ * see failures without log access.
+ *
+ * Only the NORMALIZED route pattern is stored, never the raw request path:
+ * the raw path contains the user's note and vocabulary ids. The buffer is
+ * internal: the public status probe does not expose it.
  */
 const recentErrors = [];
 
-function recordError(request, error) {
+function recordError(request, error, routePattern) {
   try {
-    const path = new URL(request.url).pathname;
     recentErrors.push({
       at: new Date().toISOString(),
-      path,
+      route: routePattern || "unmatched",
       message: String((error && error.message) || error || "unknown error").slice(0, 300),
     });
     if (recentErrors.length > 50) recentErrors.shift();
@@ -251,11 +315,15 @@ function recordError(request, error) {
   }
 }
 
+/**
+ * Public health probe. It deliberately exposes nothing but liveness: the
+ * error buffer contains internal messages and resource ids, which must not
+ * reach an unauthenticated caller.
+ */
 async function handleStatus() {
   return json({
     ok: true,
     uptimeSeconds: Math.floor((Date.now() - STARTED_AT) / 1000),
-    recentErrors: recentErrors.slice(-5),
   });
 }
 
@@ -272,10 +340,28 @@ async function handleRequest(request, env) {
     params,
     store: env.store,
   };
-  if (!route.public) {
-    ctx.user = await requireUser(request, env);
+  try {
+    if (!route.public) {
+      ctx.user = await requireUser(request, env);
+      // Rate limit per authenticated account: writes create rows, reads can
+      // return thousands of them.
+      const isWrite = request.method !== "GET" && request.method !== "HEAD";
+      const allowed = isWrite
+        ? userWriteLimiter(String(ctx.user.id))
+        : userReadLimiter(String(ctx.user.id));
+      if (!allowed) {
+        throw new HttpError(429, "Too many requests. Try again in a moment.");
+      }
+    }
+    return await route.handler(ctx);
+  } catch (error) {
+    // The route pattern, not the raw path: the path holds the user's row
+    // ids, which must not be recorded in a buffer that could be exposed.
+    if (error && typeof error === "object" && !error.routePattern) {
+      error.routePattern = route.pattern;
+    }
+    throw error;
   }
-  return route.handler(ctx);
 }
 
 module.exports = {
@@ -285,9 +371,13 @@ module.exports = {
       return await handleRequest(request, env);
     } catch (error) {
       const status = error instanceof HttpError ? error.status : 500;
-      recordError(request, error);
+      recordError(request, error, error && error.routePattern);
       if (status === 500) console.error("[youtube-digest-server]", error);
-      return json({ error: error.message || "Internal server error." }, status);
+      // A raw driver message ("invalid input syntax for type uuid") leaks
+      // schema details, so only our own messages reach the client.
+      const message =
+        error instanceof HttpError ? error.message || "Request failed." : "Internal server error.";
+      return json({ error: message }, status);
     }
   },
   async scheduled(event, env) {

@@ -39,6 +39,17 @@ function targetTable(sql) {
 const sameId = (a, b) => String(a) === String(b);
 const truthy = (v) => v === true || v === "t" || v === 1 || v === "1";
 
+/** Column name -> the snake_case field the fake stores it in. */
+const NOTE_COLUMN_MAP = {
+  note: "note",
+  video_id: "video_id",
+  video_title: "video_title",
+  channel_name: "channel_name",
+  timestamp_seconds: "timestamp_seconds",
+  quote: "quote",
+  starred: "starred",
+};
+
 /**
  * Zip the trailing positional values onto column names, skipping any value the
  * statement did not interpolate (a tagged template only passes the
@@ -93,7 +104,12 @@ class FakeSql {
   }
 
   seedUser(githubId) {
-    const row = { id: this.nextUserId++, github_id: githubId, github_login: "u" + githubId };
+    const row = {
+      id: this.nextUserId++,
+      github_id: githubId,
+      github_login: "u" + githubId,
+      token_version: 0,
+    };
     this.users.set(row.id, row);
     return row;
   }
@@ -172,8 +188,17 @@ class FakeSql {
     // Dispatch on the statement kind rather than the target table: INSERTs
     // carry no `from <table>` clause at all.
     if (/count\(\*\)\s+as\s+count/.test(lowered)) {
-      // deleteUserData's `with deleted as (...) select count(*)`.
-      return [{ count: this.deleteNotesFor(values[0]) }];
+      if (lowered.trim().startsWith("with")) {
+        // deleteUserData's `with deleted as (...) select count(*)`.
+        return [{ count: this.deleteNotesFor(values[0]) }];
+      }
+      // A plain `select count(*) as count from <table> where user_id = $1`.
+      const table = targetTable(sql);
+      const rows = table === "vocabulary" ? this.vocabulary : this.notes;
+      const count = [...rows.values()].filter(
+        (row) => sameId(row.user_id, values[0]),
+      ).length;
+      return [{ count }];
     }
     if (lowered.includes("insert into users")) return this.handleUsers(lowered, values);
     if (lowered.includes("insert into notes")) return this.handleNotes(lowered, values);
@@ -231,13 +256,25 @@ class FakeSql {
         github_id: githubId,
         github_login: values[1],
         avatar_url: values[2],
+        token_version: 0,
       };
       this.users.set(row.id, row);
+      return [projectUser(row)];
+    }
+    if (lowered.includes("update users set token_version")) {
+      const row = this.users.get(Number(values[0]));
+      if (!row) return [];
+      row.token_version = (row.token_version || 0) + 1;
       return [projectUser(row)];
     }
     if (lowered.includes("delete from users")) {
       this.users.delete(Number(values[0]));
       return [];
+    }
+    if (lowered.includes("token_version")) {
+      // getTokenVersion: `select token_version as "tokenVersion" from users where id = $1`.
+      const row = this.users.get(Number(values[0]));
+      return row ? [{ tokenVersion: row.token_version || 0 }] : [];
     }
     if (lowered.includes("from users")) {
       const row = this.users.get(Number(values[0]));
@@ -432,15 +469,33 @@ class FakeSql {
     }
 
     if (lowered.includes("update notes set")) {
-      const [title, channel, seconds, quote, note, starred, noteId, userId] = values;
+      // The sparse update is built from a hardcoded column whitelist, so the
+      // fake reads the SET clause to know which columns to write and which
+      // values belong to the where clause.
+      const setClause = lowered.slice(
+        lowered.indexOf("update notes set") + "update notes set".length,
+        lowered.indexOf(" where "),
+      );
+      const columns = [];
+      for (const part of setClause.split(",")) {
+        const name = /^\s*([a-z_]+)\s*=/.exec(part);
+        if (name) columns.push(name[1]);
+      }
+      const where = lowered.slice(lowered.indexOf(" where ") + " where ".length);
+      const noteId = /id = __val__/.test(where) ? values[values.length - 2] : values[values.length - 1];
+      const userId = values[values.length - 1];
       const row = this.notes.get(noteId);
       if (!row || !sameId(row.user_id, userId)) return [];
-      row.video_title = title;
-      row.channel_name = channel;
-      row.timestamp_seconds = seconds;
-      row.quote = quote;
-      row.note = note;
-      if (starred !== null) row.starred = truthy(starred);
+      // `starred = coalesce($1, starred)`: a null param keeps the stored flag.
+      columns.forEach((column, index) => {
+        const value = values[index];
+        if (column === "starred") {
+          if (value !== null) row.starred = truthy(value);
+          return;
+        }
+        const target = NOTE_COLUMN_MAP[column];
+        if (target) row[target] = value;
+      });
       row.updated_at = new Date().toISOString();
       return [noteRow(row)];
     }
@@ -462,6 +517,7 @@ function projectUser(row) {
     githubId: row.github_id,
     login: row.github_login,
     avatarUrl: row.avatar_url || "",
+    tokenVersion: row.token_version || 0,
   };
 }
 

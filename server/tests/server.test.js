@@ -6,7 +6,9 @@ const auth = require("../src/auth");
 const { MemoryStore, createStore, applyGrade } = require("../src/db");
 const worker = require("../src/index");
 
-const SECRET = "test-" + "secret-0123456789abcdef";
+// The server refuses to sign or verify tokens with a secret shorter than 32
+// characters, so the test secret has to clear that bar.
+const SECRET = "test-" + "secret-0123456789abcdef-0123456789";
 
 function makeEnv(overrides) {
   return Object.assign({
@@ -39,7 +41,18 @@ async function api(env, method, path, { token, body } = {}) {
 
 async function signIn(env, githubId, login) {
   const user = await env.store.upsertUser({ githubId, login, avatarUrl: "" });
-  return jwt.signToken({ sub: String(user.id), githubId: user.githubId, login: user.login }, SECRET, 3600);
+  // The token carries the account's token version, so deleting the account
+  // revokes it (see the revocation test below).
+  return jwt.signToken(
+    {
+      sub: String(user.id),
+      githubId: user.githubId,
+      login: user.login,
+      tokenVersion: Number(user.tokenVersion) || 0,
+    },
+    SECRET,
+    3600,
+  );
 }
 
 test("JWT round-trips, rejects tampering, and rejects expiry", async () => {
@@ -411,9 +424,11 @@ test("export returns only the caller's data and deletes the account cleanly", as
   assert.equal(deleted.data.deleted, true);
 
   const after = await api(env, "GET", "/api/export", { token: aliceToken });
-  assert.equal(after.status, 200);
-  assert.equal(after.data.notes.length, 0);
-  assert.equal(after.data.vocabulary.length, 0);
+  assert.equal(
+    after.status,
+    401,
+    "deleting the account revokes its token, so the export must be refused",
+  );
 
   const bobExport = await api(env, "GET", "/api/export", { token: bobToken });
   assert.equal(bobExport.data.notes.length, 1);
@@ -425,6 +440,440 @@ test("status endpoint is public and reports service health", async () => {
   assert.equal(result.status, 200);
   assert.equal(result.data.ok, true);
   assert.ok(typeof result.data.uptimeSeconds === "number");
-  assert.ok(Array.isArray(result.data.recentErrors));
+  // The status probe is public: it must not hand an unauthenticated caller
+  // internal error text or the request paths (which contain user ids).
+  assert.deepEqual(
+    Object.keys(result.data).sort(),
+    ["ok", "uptimeSeconds"],
+    "the public status payload must only expose health information",
+  );
+});
+
+test("the status probe never echoes an internal error back to an anonymous caller", async () => {
+  const env = makeEnv();
+  const token = await signIn(env, 1001, "alice");
+  // Provoke a server-side failure whose message mentions a table name.
+  env.store.listNotes = async () => {
+    throw new Error('invalid input syntax for type uuid: "secret-note-id"');
+  };
+  await api(env, "GET", "/api/notes", { token });
+
+  const status = await api(env, "GET", "/api/status");
+  assert.equal(status.status, 200);
+  const body = JSON.stringify(status.data);
+  assert.doesNotMatch(body, /uuid/i, "the public probe must not leak driver messages");
+  assert.doesNotMatch(body, /secret-note-id/, "the public probe must not leak resource ids");
+  assert.doesNotMatch(body, /api\/notes/, "the public probe must not leak request paths");
+});
+
+// ---------------------------------------------------------------------------
+// Security and correctness regressions
+// ---------------------------------------------------------------------------
+
+test("a review body that is not JSON is rejected without touching the schedule", async () => {
+  const env = makeEnv();
+  const token = await signIn(env, 1001, "alice");
+  const created = await api(env, "POST", "/api/vocabulary", {
+    token,
+    body: { term: "ephemeral", sentence: "Fleeting moment." },
+  });
+  const vocabId = created.data.vocabulary.id;
+
+  const graded = await api(env, "POST", "/api/reviews/" + vocabId, {
+    token,
+    body: { grade: 4 },
+  });
+  assert.equal(graded.status, 200);
+  const before = await api(env, "GET", "/api/export", { token });
+  const beforeReview = before.data.reviews[0];
+  assert.equal(beforeReview.lapses, 0);
+  assert.equal(beforeReview.intervalDays, 2);
+
+  // A truncated body must not be mistaken for grade 0 ("Again").
+  const truncated = new Request("https://test.example/api/reviews/" + vocabId, {
+    method: "POST",
+    headers: {
+      Authorization: "Bearer " + token,
+      "Content-Type": "application/json",
+    },
+    body: '{"grade":',
+  });
+  const response = await worker.fetch(truncated, env);
+  assert.equal(response.status, 400);
+  const data = await response.json();
+  assert.match(data.error, /must be JSON/i);
+
+  // The schedule must be untouched: no lapse, no ease drop, same interval.
+  const after = await api(env, "GET", "/api/export", { token });
+  const afterReview = after.data.reviews[0];
+  assert.equal(afterReview.lapses, beforeReview.lapses, "a bad body must not count as a lapse");
+  assert.equal(afterReview.intervalDays, beforeReview.intervalDays);
+  assert.equal(afterReview.ease, beforeReview.ease);
+});
+
+test("a JSON review body with an invalid grade names the grade, not the body", async () => {
+  const env = makeEnv();
+  const token = await signIn(env, 1001, "alice");
+  const created = await api(env, "POST", "/api/vocabulary", {
+    token,
+    body: { term: "ephemeral", sentence: "Fleeting moment." },
+  });
+  const vocabId = created.data.vocabulary.id;
+
+  for (const body of [{}, { grade: null }, { grade: "" }, { grade: "high" }, { grade: 9 }]) {
+    const result = await api(env, "POST", "/api/reviews/" + vocabId, { token, body });
+    assert.equal(result.status, 400, JSON.stringify(body));
+    assert.match(result.data.error, /grade must be an integer from 0 to 5/i);
+  }
+
+  // The word is still untouched: it was never graded.
+  const exported = await api(env, "GET", "/api/export", { token });
+  assert.equal(exported.data.reviews[0].reps, 0);
+  assert.equal(exported.data.reviews[0].lapses, 0);
+});
+
+test("a malformed review grade is never coerced into a numeric zero", async () => {
+  const { parseReviewGrade } = require("../src/validate");
+  assert.equal(parseReviewGrade(null), null);
+  assert.equal(parseReviewGrade(undefined), null);
+  assert.equal(parseReviewGrade(""), null);
+  assert.equal(parseReviewGrade("   "), null);
+  assert.equal(parseReviewGrade(false), null);
+  assert.equal(parseReviewGrade([]), null);
+  assert.equal(parseReviewGrade({}), null);
+  assert.equal(parseReviewGrade(3), 3);
+  assert.equal(parseReviewGrade("3"), 3);
+  assert.equal(parseReviewGrade(0), 0);
+  assert.equal(parseReviewGrade(5), 5);
+  assert.equal(parseReviewGrade(1.5), null);
+  assert.equal(parseReviewGrade(6), null);
+});
+
+test("a malformed JWT signature is an expired session, not a server error", async () => {
+  const env = makeEnv();
+  const token = await signIn(env, 1001, "alice");
+  const parts = token.split(".");
+
+  const badSignature = await api(env, "GET", "/api/me", {
+    token: parts[0] + "." + parts[1] + ".!!!!not-base64!!!!",
+  });
+  assert.equal(badSignature.status, 401, "a broken signature must be 401, never 500");
+  assert.match(badSignature.data.error, /invalid or expired session/i);
+
+  const badBody = await api(env, "GET", "/api/me", {
+    token: parts[0] + ".!!!not-base64!!!." + parts[2],
+  });
+  assert.equal(badBody.status, 401);
+});
+
+test("a missing or short JWT secret is reported as a configuration error", async () => {
+  for (const secret of ["", "too-short"]) {
+    const env = makeEnv({ JWT_SECRET: secret });
+    const login = await api(env, "GET", "/api/auth/login");
+    assert.equal(login.status, 500, JSON.stringify(secret));
+    assert.match(login.data.error, /JWT_SECRET missing or too short/i);
+
+    const callback = new Request(
+      "https://test.example/api/auth/callback?code=abc&state=state-1",
+      { headers: { cookie: "ytd_oauth_state=state-1" } },
+    );
+    const response = await worker.fetch(callback, env);
+    assert.equal(response.status, 500);
+    const data = await response.json();
+    assert.match(data.error, /JWT_SECRET missing or too short/i);
+
+    // The data routes must say the same thing. A 401 here would look like
+    // "your session expired" and send the user round the sign-in loop
+    // instead of telling the operator the server is misconfigured.
+    const me = await api(env, "GET", "/api/me");
+    assert.equal(me.status, 500, JSON.stringify(secret));
+    assert.match(me.data.error, /JWT_SECRET missing or too short/i);
+  }
+});
+
+test("OAuth cookies are marked Secure", async () => {
+  const env = makeEnv();
+  const login = await api(env, "GET", "/api/auth/login?redirect=/dashboard");
+  const cookies = login.response.headers.getSetCookie
+    ? login.response.headers.getSetCookie()
+    : [login.response.headers.get("set-cookie") || ""];
+  assert.ok(cookies.length >= 1);
+  for (const cookie of cookies) {
+    assert.match(cookie, /Secure/, "the CSRF state cookie must not travel in cleartext");
+    assert.match(cookie, /HttpOnly/);
+  }
+});
+
+test("responses carry hardening headers", async () => {
+  const env = makeEnv();
+  const token = await signIn(env, 1001, "alice");
+
+  const me = await api(env, "GET", "/api/me", { token });
+  assert.equal(me.response.headers.get("cache-control"), "no-store");
+  assert.equal(me.response.headers.get("referrer-policy"), "no-referrer");
+  assert.equal(me.response.headers.get("x-content-type-options"), "nosniff");
+
+  const login = await api(env, "GET", "/api/auth/login");
+  assert.equal(login.response.headers.get("cache-control"), "no-store");
+  assert.equal(login.response.headers.get("referrer-policy"), "no-referrer");
+  assert.equal(login.response.headers.get("x-content-type-options"), "nosniff");
+
+  const complete = await api(env, "GET", "/auth/complete");
+  assert.equal(complete.response.headers.get("cache-control"), "no-store");
+  assert.equal(complete.response.headers.get("referrer-policy"), "no-referrer");
+  assert.equal(complete.response.headers.get("x-content-type-options"), "nosniff");
+});
+
+test("the dashboard ships a Content-Security-Policy", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const html = fs.readFileSync(
+    path.join(__dirname, "..", "dashboard", "index.html"),
+    "utf8",
+  );
+  assert.match(html, /http-equiv="Content-Security-Policy"/i);
+  assert.match(html, /default-src 'self'/);
+  assert.match(html, /script-src 'self'/);
+  // The policy is only safe because the dashboard has no inline handlers.
+  assert.doesNotMatch(html, /on(click|change|submit|load|input|error)\s*=/i);
+});
+
+test("an oversized request body is rejected before it is parsed", async () => {
+  const env = makeEnv();
+  const token = await signIn(env, 1001, "alice");
+  const big = JSON.stringify({ note: "x".repeat(200_000), clientId: "big_1" });
+
+  const declared = new Request("https://test.example/api/notes", {
+    method: "POST",
+    headers: {
+      Authorization: "Bearer " + token,
+      "Content-Type": "application/json",
+      "Content-Length": String(big.length),
+    },
+    body: big,
+  });
+  const declaredResponse = await worker.fetch(declared, env);
+  assert.equal(declaredResponse.status, 413);
+
+  // Even without a content-length header the body must be capped.
+  const undeclared = new Request("https://test.example/api/notes", {
+    method: "POST",
+    headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+    body: big,
+  });
+  const undeclaredResponse = await worker.fetch(undeclared, env);
+  assert.equal(undeclaredResponse.status, 413);
+
+  const listed = await api(env, "GET", "/api/notes", { token });
+  assert.equal(listed.data.notes.length, 0, "a rejected body must not be stored");
+});
+
+test("mutating routes are rate limited per user", async () => {
+  const env = makeEnv();
+  const token = await signIn(env, 4242, "flooder");
+  const statuses = [];
+  for (let i = 0; i < 125; i += 1) {
+    const result = await api(env, "POST", "/api/notes", {
+      token,
+      body: { note: "flood " + i, videoId: "abc123xyz", clientId: "flood_1" },
+    });
+    statuses.push(result.status);
+  }
+  assert.equal(statuses[119], 201, "the 120th request in the window is still allowed");
+  assert.equal(statuses[120], 429, "the 121st request in the window is rejected");
+  assert.equal(statuses[124], 429);
+});
+
+test("reads are rate limited per user too", async () => {
+  const env = makeEnv();
+  const token = await signIn(env, 4343, "reader");
+  const statuses = [];
+  for (let i = 0; i < 605; i += 1) {
+    const result = await api(env, "GET", "/api/notes", { token });
+    statuses.push(result.status);
+  }
+  // A read is not free: every list endpoint can return thousands of rows.
+  assert.equal(statuses[599], 200, "the 600th read in the window is still allowed");
+  assert.equal(statuses[600], 429, "the 601st read in the window is rejected");
+});
+
+test("the rate limiter releases a key once the window passes", () => {
+  const { createRateLimiter } = require("../src/middleware");
+  const limiter = createRateLimiter({ windowMs: 1000, max: 2 });
+  assert.equal(limiter("k"), true);
+  assert.equal(limiter("k"), true);
+  assert.equal(limiter("k"), false);
+  assert.equal(limiter.mapSize(), 1);
+  // Past the window the key is dropped instead of lingering in the map.
+  assert.equal(limiter("k", Date.now() + 5000), true);
+  assert.equal(limiter.mapSize(), 1);
+  assert.equal(limiter("k", Date.now() + 20000), true);
+  assert.equal(limiter.mapSize(), 1, "an idle key must not stay in the map forever");
+});
+
+test("a malformed cookie is skipped instead of crashing the callback", async () => {
+  const env = makeEnv();
+  const request = new Request("https://test.example/api/auth/callback?code=abc&state=wrong", {
+    headers: { cookie: "ytd_oauth_state=%; other=1" },
+  });
+  const response = await worker.fetch(request, env);
+  assert.equal(response.status, 400);
+  const data = await response.json();
+  assert.match(data.error, /state mismatch/i);
+});
+
+test("a malformed path segment is a bad request, not a server error", async () => {
+  const env = makeEnv();
+  const token = await signIn(env, 1001, "alice");
+  // A truncated percent-escape: decoding it throws, which must be reported
+  // as a client error instead of crashing the worker.
+  const request = new Request("https://test.example/api/notes/%", {
+    method: "PATCH",
+    headers: {
+      Authorization: "Bearer " + token,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ note: "x" }),
+  });
+  const response = await worker.fetch(request, env);
+  assert.equal(response.status, 400);
+});
+
+test("a malformed id in the path is a not-found, not a database error", async () => {
+  const env = makeEnv();
+  const token = await signIn(env, 1001, "alice");
+  const patch = await api(env, "PATCH", "/api/notes/not-a-uuid", {
+    token,
+    body: { note: "x" },
+  });
+  assert.equal(patch.status, 404);
+  const review = await api(env, "POST", "/api/reviews/not-a-uuid", {
+    token,
+    body: { grade: 3 },
+  });
+  assert.equal(review.status, 404);
+  const vocab = await api(env, "PATCH", "/api/vocabulary/not-a-uuid", {
+    token,
+    body: { status: "mastered" },
+  });
+  assert.equal(vocab.status, 404);
+});
+
+test("a database failure is reported generically", async () => {
+  const env = makeEnv();
+  const token = await jwt.signToken(
+    { sub: "1", githubId: 1001, login: "alice", tokenVersion: 0 },
+    SECRET,
+    3600,
+  );
+  env.store = {
+    async getTokenVersion() {
+      return 0;
+    },
+    async listNotes() {
+      throw new Error('invalid input syntax for type uuid: "abc"');
+    },
+  };
+  const result = await api(env, "GET", "/api/notes", { token });
+  assert.equal(result.status, 500);
+  assert.match(result.data.error, /internal server error/i);
+  assert.doesNotMatch(JSON.stringify(result.data), /uuid/i, "driver messages must not leak");
+});
+
+test("the review interval never grows past a year", () => {
+  let review = { intervalDays: 0, ease: 2.5, reps: 0, lapses: 0 };
+  for (let i = 0; i < 40; i += 1) {
+    review = applyGrade(review, 5, new Date("2026-01-01T00:00:00Z"));
+  }
+  assert.ok(review.intervalDays <= 365, "the interval must be capped: " + review.intervalDays);
+});
+
+test("a partial note update leaves the fields it did not mention alone", async () => {
+  const env = makeEnv();
+  const token = await signIn(env, 1001, "alice");
+  const created = await api(env, "POST", "/api/notes", {
+    token,
+    body: {
+      note: "original",
+      clientId: "sparse_1",
+      videoId: "abc123xyz",
+      videoTitle: "A title",
+      channelName: "A channel",
+      timestampSeconds: 42,
+      quote: "a quote",
+    },
+  });
+  assert.equal(created.status, 201);
+  const id = created.data.note.id;
+
+  const patched = await api(env, "PATCH", "/api/notes/" + id, {
+    token,
+    body: { note: "edited" },
+  });
+  assert.equal(patched.status, 200);
+  assert.equal(patched.data.note.note, "edited");
+  assert.equal(patched.data.note.videoTitle, "A title", "an omitted field must survive");
+  assert.equal(patched.data.note.channelName, "A channel");
+  assert.equal(patched.data.note.timestampSeconds, 42);
+  assert.equal(patched.data.note.quote, "a quote");
+  assert.equal(patched.data.note.clientId, "sparse_1", "the client id is the sync key");
+});
+
+test("a note update cannot rewrite the client id", async () => {
+  const env = makeEnv();
+  const token = await signIn(env, 1001, "alice");
+  const created = await api(env, "POST", "/api/notes", {
+    token,
+    body: { note: "original", clientId: "immutable_1", videoId: "abc123xyz" },
+  });
+  const id = created.data.note.id;
+  const patched = await api(env, "PATCH", "/api/notes/" + id, {
+    token,
+    body: { note: "edited", clientId: "hijacked_1" },
+  });
+  assert.equal(patched.status, 200);
+  assert.equal(patched.data.note.clientId, "immutable_1");
+  const exported = await api(env, "GET", "/api/export", { token });
+  assert.equal(exported.data.notes[0].clientId, "immutable_1");
+});
+
+test("deleting the account revokes the session token", async () => {
+  const env = makeEnv();
+  const token = await signIn(env, 1001, "alice");
+  assert.equal((await api(env, "GET", "/api/me", { token })).status, 200);
+
+  const deleted = await api(env, "DELETE", "/api/account", { token });
+  assert.equal(deleted.status, 200);
+
+  const after = await api(env, "GET", "/api/me", { token });
+  assert.equal(after.status, 401, "a deleted account must not keep a working token");
+  const write = await api(env, "POST", "/api/notes", {
+    token,
+    body: { note: "after deletion", clientId: "ghost_1" },
+  });
+  assert.equal(write.status, 401);
+});
+
+test("/api/sync rejects an unparseable since parameter", async () => {
+  const env = makeEnv();
+  const token = await signIn(env, 1001, "alice");
+  const result = await api(env, "GET", "/api/sync?since=not-a-date", { token });
+  assert.equal(result.status, 400);
+  const ok = await api(env, "GET", "/api/sync?since=2000-01-01T00:00:00Z", { token });
+  assert.equal(ok.status, 200);
+});
+
+test("the export reports whether rows were left out", async () => {
+  const env = makeEnv();
+  const token = await signIn(env, 1001, "alice");
+  await api(env, "POST", "/api/notes", {
+    token,
+    body: { note: "a note", clientId: "export_1" },
+  });
+  const exported = await api(env, "GET", "/api/export", { token });
+  assert.equal(exported.status, 200);
+  assert.ok(exported.data.truncated, "the export must report truncation");
+  assert.equal(exported.data.truncated.notes, 0);
+  assert.equal(exported.data.truncated.vocabulary, 0);
 });
 
