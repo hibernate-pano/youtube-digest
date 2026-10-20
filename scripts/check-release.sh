@@ -30,6 +30,7 @@ public_allowlist=(
   "settings.js"
   "cloud-sync.js"
   "content.js"
+  "tokens.css"
   "sidepanel.html"
   "sidepanel.css"
   "sidepanel.js"
@@ -57,6 +58,7 @@ required_public_files=(
   "settings.js"
   "cloud-sync.js"
   "content.js"
+  "tokens.css"
   "sidepanel.html"
   "sidepanel.css"
   "sidepanel.js"
@@ -73,6 +75,14 @@ required_public_files=(
 for file in "${required_public_files[@]}"; do
   [[ -f "$file" ]] || fail "required public file is missing: $file"
 done
+
+# The web dashboard serves its own copy of the shared design tokens. A drifted
+# copy would quietly give the dashboard a different palette from the
+# extension, so the two files have to stay byte-identical.
+[[ -f "server/dashboard/tokens.css" ]] ||
+  fail "shared design tokens are missing: server/dashboard/tokens.css"
+cmp -s tokens.css server/dashboard/tokens.css ||
+  fail "tokens.css and server/dashboard/tokens.css have diverged"
 
 release_files=()
 for file in "${public_allowlist[@]}"; do
@@ -133,6 +143,23 @@ if (!/^\d+\.\d+\.\d+(?:\.\d+)?$/.test(manifest.version)) {
   process.exit(1);
 }
 
+let packageJson;
+try {
+  packageJson = JSON.parse(fs.readFileSync("package.json", "utf8"));
+} catch (error) {
+  console.error(`package.json is not valid JSON: ${error.message}`);
+  process.exit(1);
+}
+
+// The extension and the repository release one version number. A mismatch
+// means the ZIP in the wild would claim a version the package does not.
+if (packageJson.version !== manifest.version) {
+  console.error(
+    `manifest.json version (${manifest.version}) does not match package.json version (${packageJson.version})`,
+  );
+  process.exit(1);
+}
+
 const referenced = new Set();
 const add = (value) => {
   if (typeof value === "string" && value) referenced.add(value);
@@ -165,11 +192,15 @@ for (const item of manifest.web_accessible_resources || []) {
 for (const file of releaseFiles) {
   if (file.endsWith(".js")) {
     const source = fs.readFileSync(file, "utf8");
-    for (const match of source.matchAll(
-      /\bimportScripts\s*\(\s*["']([^"']+)["']\s*\)/g,
-    )) {
-      if (!/^[a-z]+:/i.test(match[1])) {
-        referenced.add(path.posix.join(path.posix.dirname(file), match[1]));
+    // importScripts() takes a list, so every quoted argument counts. The
+    // previous pattern only matched a single argument and therefore never
+    // matched the production call in background.js.
+    for (const match of source.matchAll(/\bimportScripts\s*\(([^)]*)\)/g)) {
+      for (const argument of match[1].matchAll(/["']([^"']+)["']/g)) {
+        const value = argument[1];
+        if (!/^[a-z]+:/i.test(value)) {
+          referenced.add(path.posix.join(path.posix.dirname(file), value));
+        }
       }
     }
     for (const match of source.matchAll(
@@ -230,7 +261,9 @@ for file in "${javascript_files[@]}"; do
 done
 
 if compgen -G "tests/*.test.js" >/dev/null; then
-  node --test tests/*.test.js
+  # The test report belongs on stderr: stdout is the file list that
+  # scripts/package-extension.sh reads, and TAP output there would corrupt it.
+  node --test tests/*.test.js >&2
 fi
 
 if ((${#javascript_files[@]} > 0)); then

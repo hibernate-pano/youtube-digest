@@ -1,0 +1,196 @@
+/*
+ * YouTube Digest — shared design tokens.
+ *
+ * One source of truth for colour, type and spacing across the three product
+ * surfaces: the Chrome side panel, the settings page and the web dashboard.
+ * The file is copied verbatim into server/dashboard/ so the dashboard serves
+ * the same tokens from its own origin; scripts/check-release.sh fails the
+ * release when the two copies drift apart.
+ *
+ * Colour values are not picked by eye. Every text/background pair below was
+ * measured with the WCAG 2.2 relative-luminance formula and clears AA
+ * (4.5:1 for body text, 3:1 for large text and UI boundaries). The dark
+ * block re-measures the same pairs against the dark surfaces, which is why
+ * it does not simply reuse the light values.
+ *
+ * Loading order matters: link this file BEFORE the per-surface stylesheet so
+ * a surface can still override anything it needs.
+ */
+
+/* ============================================================
+   LIGHT THEME (default)
+   ============================================================ */
+:root {
+  color-scheme: light dark;
+
+  /* Surfaces — all warm-toned, never pure grey. */
+  --bg: #f7f3ec;
+  --surface: #ffffff;
+  --surface-raised: #fbf8f2;
+  --surface-tint: #f8eee9;
+  --surface-glass: rgba(255, 255, 255, 0.72);
+
+  /* Borders. */
+  --border: #e7dfd2;
+  --border-heavy: #d8cebe;
+
+  /* Ink. */
+  --text: #2e2a24;
+  --text-secondary: #6b6258;
+  --text-muted: #756b60;
+
+  /* Accent.
+     --accent is the ink version (text, icons, borders).
+     --accent-solid is the fill version, paired with --on-accent.
+     Keeping them apart is what lets one hue serve both jobs without
+     failing contrast in either direction. */
+  --accent: #a34732;
+  --accent-solid: #b0513b;
+  --accent-hover: #93412f;
+  --on-accent: #ffffff;
+  --accent-dim: rgba(163, 71, 50, 0.12);
+  --accent-tint: #fbead9;
+  --accent-tint-soft: #fdf6f2;
+
+  /* Focus ring — a solid, opaque accent so it is always visible. */
+  --focus-ring: #a34732;
+  --focus-halo: rgba(163, 71, 50, 0.35);
+
+  /* Secondary hue. */
+  --sage: #55634b;
+  --sage-dim: rgba(85, 99, 75, 0.14);
+
+  /* Modal scrim behind a dialog. */
+  --scrim: rgba(46, 42, 36, 0.55);
+
+  /* Danger / failure. */
+  --danger: #9f2d2d;
+  --danger-dim: rgba(159, 45, 45, 0.1);
+
+  /* Search highlight and star. */
+  --highlight: #d99a5b;
+  --highlight-soft: #f5d9a8;
+  --on-highlight: #1c1917;
+  --star: #a8760f;
+
+  /* Soft shadows give depth instead of heavy borders. */
+  --shadow-sm: 0 1px 3px rgba(90, 80, 60, 0.06);
+  --shadow-md: 0 4px 16px rgba(90, 80, 60, 0.1);
+  --shadow-lg: 0 16px 48px rgba(50, 42, 32, 0.22);
+  --shadow-accent: 0 4px 14px rgba(163, 71, 50, 0.3);
+  --shadow-accent-lg: 0 12px 30px rgba(163, 71, 50, 0.35);
+
+  /* Rounding scale. */
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --r-xl: 20px;
+  --r-pill: 999px;
+
+  /* Type — one stack for the whole product, so nothing falls back to a
+     different face (the injected YouTube UI used to bring its own).
+     --font-display, --font-body and --font-reading are kept as aliases:
+     they all resolve to this one stack, so the product no longer ships
+     three names that promise a hierarchy it does not have. */
+  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC",
+    sans-serif;
+  --font-display: var(--font-sans);
+  --font-body: var(--font-sans);
+  --font-reading: var(--font-sans);
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    monospace;
+
+  /* Type scale. Every size in the product comes from here. */
+  --fs-body: 14px;
+  --lh-body: 1.6;
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 13px;
+  --fs-lg: 14px;
+  --fs-xl: 16px;
+  --fs-2xl: 18px;
+  --fs-3xl: 22px;
+  --fs-4xl: 26px;
+  --fs-5xl: 34px;
+
+  /* Spacing scale. */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-7: 32px;
+  --sp-8: 40px;
+
+  /* Inline SVG icon, masked so it inherits the surrounding text colour.
+     This is how a bullet or an arrow is drawn: a character would be a
+     pictograph that renders differently on every platform font. */
+  --icon-arrow-right: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12h14'/%3E%3Cpath d='m12 5 7 7-7 7'/%3E%3C/svg%3E");
+}
+
+/* ============================================================
+   DARK THEME
+   ============================================================ */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1c1917;
+    --surface: #262220;
+    --surface-raised: #2e2926;
+    --surface-tint: #2a2522;
+    --surface-glass: rgba(255, 255, 255, 0.05);
+
+    --border: #3b3531;
+    --border-heavy: #4d4540;
+
+    --text: #f2ece4;
+    --text-secondary: #c4b9ab;
+    --text-muted: #9c9184;
+
+    /* A pale terracotta on a dark surface. The fill and the ink version
+       are the same colour here, but the text on the fill is dark ink —
+       white on this accent would be 2.61:1 and unreadable. */
+    --accent: #e08a70;
+    --accent-solid: #e08a70;
+    --accent-hover: #ec9b81;
+    --on-accent: #1c1917;
+    --accent-dim: rgba(224, 138, 112, 0.16);
+    --accent-tint: rgba(224, 138, 112, 0.16);
+    --accent-tint-soft: rgba(224, 138, 112, 0.08);
+
+    --focus-ring: #f0a385;
+    --focus-halo: rgba(224, 138, 112, 0.45);
+
+    --sage: #a8b89a;
+    --sage-dim: rgba(168, 184, 154, 0.16);
+
+    --scrim: rgba(10, 8, 7, 0.72);
+
+    --danger: #e08585;
+    --danger-dim: rgba(224, 133, 133, 0.14);
+
+    --highlight: #e0a56a;
+    --highlight-soft: #4a3520;
+    --on-highlight: #1c1917;
+    --star: #e8b45c;
+
+    --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4);
+    --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.45);
+    --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.55);
+    --shadow-accent: 0 4px 14px rgba(0, 0, 0, 0.5);
+    --shadow-accent-lg: 0 12px 30px rgba(0, 0, 0, 0.55);
+  }
+}
+
+/* ============================================================
+   SHARED BASE
+   ============================================================ */
+/* The three surfaces used to disagree about the body size (14px, 15px and
+   16px). They now all inherit this one base, so a paragraph reads the same
+   everywhere in the product. */
+body {
+  font-family: var(--font-sans);
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+}

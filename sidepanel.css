@@ -19,47 +19,9 @@
   display: none !important;
 }
 
-:root {
-  /* Surfaces & ink — all warm-toned, never pure grey */
-  --bg: #f7f3ec;
-  --surface: #ffffff;
-  --surface-raised: #fbf8f2;
-  --border: #ece5d9;
-  --border-heavy: #ddd4c4;
-  --text: #2e2a24;
-  --text-secondary: #6b6258;
-  --text-muted: #a39a8d;
-
-  /* Accents */
-  --accent: #c8674f; /* terracotta */
-  --accent-hover: #b25742;
-  --accent-dim: rgba(200, 103, 79, 0.1);
-  --sage: #7c8b6f; /* quiet secondary */
-  --sage-dim: rgba(124, 139, 111, 0.14);
-  --success: #7c8b6f;
-  --highlight: #d99a5b;
-
-  /* Soft shadows give depth instead of heavy borders */
-  --shadow-sm: 0 1px 3px rgba(90, 80, 60, 0.06);
-  --shadow-md: 0 4px 16px rgba(90, 80, 60, 0.1);
-  --shadow-lg: 0 16px 48px rgba(50, 42, 32, 0.22);
-
-  /* Rounding scale */
-  --r-sm: 8px;
-  --r-md: 12px;
-  --r-lg: 16px;
-  --r-xl: 20px;
-  --r-pill: 999px;
-
-  /* Type — system fonts keep the extension self-contained. */
-  --font-display: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-    sans-serif;
-  --font-body: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-    sans-serif;
-  --font-reading: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-    sans-serif;
-  --font-mono: ui-monospace, "SF Mono", "Menlo", "Consolas", monospace;
-}
+/* Colour, type and spacing tokens live in tokens.css, which the side panel,
+   the settings page and the web dashboard all load. This file only styles the
+   panel itself. */
 
 /* ============================================================
    RESET & BASE
@@ -70,17 +32,28 @@
   box-sizing: border-box;
 }
 
+/* ============================================================
+   KEYBOARD FOCUS — page-level safety net
+   ============================================================ */
+/* Roughly twenty controls live in this panel and almost none of them had a
+   focus style, so a keyboard user could not tell where they were. This is the
+   single rule that gives every control a visible ring: :focus-visible keeps
+   it away from pointer users, and :where() keeps the specificity at zero so
+   a component can still opt into a different ring. */
+:where(a, button, input, textarea, select, [tabindex]):focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+
 html,
 body {
   height: 100%;
 }
 
 body {
-  font-family: var(--font-body);
   background: var(--bg);
   color: var(--text);
-  font-size: 14px;
-  line-height: 1.6;
   overflow-x: hidden;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
@@ -106,7 +79,7 @@ body {
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--accent);
+  background: var(--accent-solid);
 }
 
 /* ============================================================
@@ -114,7 +87,7 @@ body {
    ============================================================ */
 .header {
   flex-shrink: 0;
-  padding: 16px 20px 0;
+  padding: var(--sp-4) var(--sp-5) 0;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   box-shadow: var(--shadow-sm);
@@ -124,7 +97,7 @@ body {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--sp-3);
 }
 
 .header-top .video-info {
@@ -137,7 +110,7 @@ body {
   flex: 0 0 auto;
   flex-direction: column;
   align-items: flex-end;
-  gap: 8px;
+  gap: var(--sp-2);
 }
 
 .settings-btn,
@@ -150,7 +123,7 @@ body {
   background: var(--surface);
   color: var(--text-secondary);
   cursor: pointer;
-  font: 600 11px/1.4 var(--font-body);
+  font: 600 var(--fs-xs)/1.4 var(--font-sans);
 }
 
 .settings-btn:hover,
@@ -190,12 +163,6 @@ body {
   color: var(--accent-hover);
 }
 
-.sync-btn:focus-visible,
-.sync-account:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
 /* ============================================================
    TAB NAVIGATION — pill tabs on the white header.
    No background "track": the header is white and the content below is cream,
@@ -204,47 +171,53 @@ body {
    ============================================================ */
 .tabs {
   display: flex;
-  gap: 4px;
+  gap: var(--sp-1);
   margin-top: 14px;
-  padding-bottom: 12px;
+  padding-bottom: var(--sp-3);
 }
 
+/* One tab component for the whole product. The dashboard and this panel now
+   share the same geometry: a 40px hit target, a pill radius, a transparent
+   track with a terracotta fill for the active tab. */
 .tab {
   flex: 1;
-  min-width: 0; /* let tabs shrink so all five fit narrow panels */
-  padding: 8px 2px;
+  min-width: 0; /* let tabs shrink so all three fit narrow panels */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  min-height: 40px;
+  padding: var(--sp-2) 2px;
   text-align: center;
-  font-family: var(--font-body);
+  font-family: var(--font-sans);
   font-weight: 600;
-  font-size: 13px;
-  letter-spacing: -0.1px;
-  color: var(--text-muted);
-  background: none;
-  border: none;
+  font-size: var(--fs-md);
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: var(--r-pill);
   cursor: pointer;
   white-space: nowrap;
   transition:
     color 0.18s ease,
-    background 0.18s ease,
-    box-shadow 0.18s ease;
+    background 0.18s ease;
 }
 
 .tab:hover {
-  color: var(--text-secondary);
-  background: var(--surface-raised);
+  color: var(--text);
+  background: var(--accent-dim);
 }
 
 /* Active pill — terracotta fill on the white header */
 .tab.active {
-  color: #fff;
-  background: var(--accent);
-  box-shadow: 0 2px 8px rgba(200, 103, 79, 0.3);
+  color: var(--on-accent);
+  background: var(--accent-solid);
+  border-color: var(--accent-solid);
 }
 
 .tab.active:hover {
-  color: #fff;
-  background: var(--accent);
+  color: var(--on-accent);
+  background: var(--accent-hover);
 }
 
 /* ============================================================
@@ -252,7 +225,7 @@ body {
    ============================================================ */
 .content {
   flex: 1;
-  padding: 24px 20px 20px;
+  padding: var(--sp-6) var(--sp-5) var(--sp-5);
   overflow-y: auto;
 }
 
@@ -284,13 +257,13 @@ body {
   border-radius: var(--r-lg);
   border-left: 4px solid var(--accent);
   padding: 20px 22px;
-  margin-bottom: 24px;
+  margin-bottom: var(--sp-6);
   box-shadow: var(--shadow-md);
 }
 
 .summary-text {
-  font-family: var(--font-reading);
-  font-size: 15px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-xl);
   line-height: 1.7;
   color: var(--text);
 }
@@ -303,9 +276,9 @@ body {
 }
 
 .worth-label {
-  font-family: var(--font-display);
+  font-family: var(--font-sans);
   font-weight: 600;
-  font-size: 16px;
+  font-size: var(--fs-xl);
   letter-spacing: -0.2px;
   color: var(--accent);
   margin-bottom: 10px;
@@ -316,8 +289,8 @@ body {
 }
 
 .worth-item {
-  font-family: var(--font-reading);
-  font-size: 14px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-lg);
   line-height: 1.6;
   color: var(--text-secondary);
   padding: 11px 0 11px 26px;
@@ -325,13 +298,19 @@ body {
   position: relative;
 }
 
+/* The bullet is an inline SVG (masked so it inherits the accent colour),
+   not a character: a glyph would be a pictograph that renders differently
+   depending on the platform font. */
 .worth-item::before {
-  content: "→";
+  content: "";
   position: absolute;
   left: 0;
-  top: 11px;
+  top: 12px;
+  width: 13px;
+  height: 13px;
   color: var(--accent);
-  font-weight: 700;
+  background-color: currentColor;
+  mask: var(--icon-arrow-right) center / contain no-repeat;
 }
 
 .worth-item:last-child {
@@ -349,9 +328,9 @@ body {
 }
 
 .tag {
-  font-family: var(--font-body);
+  font-family: var(--font-sans);
   font-weight: 500;
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
   letter-spacing: 0.2px;
   padding: 5px 12px;
   border-radius: var(--r-pill);
@@ -403,13 +382,13 @@ body {
 }
 
 .transcript-mode-btn {
-  padding: 4px 8px;
+  padding: var(--sp-1) var(--sp-2);
   border: 0;
   border-radius: var(--r-pill);
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
-  font: 600 10.5px/1.3 var(--font-body);
+  font: 600 var(--fs-xs)/1.3 var(--font-sans);
 }
 
 .transcript-mode-btn:hover {
@@ -450,9 +429,9 @@ body {
 }
 
 .section-title {
-  font-family: var(--font-display);
+  font-family: var(--font-sans);
   font-weight: 600;
-  font-size: 18px;
+  font-size: var(--fs-2xl);
   letter-spacing: -0.3px;
   color: var(--text);
   margin-bottom: 14px;
@@ -460,9 +439,9 @@ body {
 
 /* Generic small button (enhance / copy / export / filters) */
 .enhance-btn {
-  font-family: var(--font-body);
+  font-family: var(--font-sans);
   font-weight: 600;
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
   padding: 6px 13px;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -506,9 +485,12 @@ body {
     box-shadow 0.18s ease;
 }
 
+/* The old ring was a 10% accent wash, which is 1.07:1 against the field
+   and effectively invisible. The border plus a solid halo is what a keyboard
+   user actually sees. */
 .transcript-search:focus-within {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-dim);
+  border-color: var(--focus-ring);
+  box-shadow: 0 0 0 3px var(--focus-halo);
 }
 
 .transcript-search-icon {
@@ -524,12 +506,12 @@ body {
 .transcript-search-input {
   min-width: 0;
   flex: 1;
-  padding: 8px 8px;
+  padding: var(--sp-2) var(--sp-2);
   border: 0;
   outline: 0;
   background: transparent;
   color: var(--text);
-  font: 500 12px/1.4 var(--font-body);
+  font: 500 var(--fs-sm)/1.4 var(--font-sans);
 }
 
 .transcript-search-input::placeholder {
@@ -553,11 +535,25 @@ body {
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  font: 600 15px/1 var(--font-body);
+  font: 600 var(--fs-xl)/1 var(--font-sans);
 }
 
 .transcript-search-clear[hidden] {
   display: none;
+}
+
+/* The search controls draw their icons as inline SVG, using the same stroke
+   treatment as the dashboard, so a character glyph never has to be guessed
+   at by the platform font. */
+.transcript-search-clear svg,
+.transcript-search-nav button svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .transcript-search-clear:hover,
@@ -575,7 +571,7 @@ body {
   min-width: 48px;
   padding: 0 7px;
   color: var(--text-muted);
-  font: 600 10.5px/1.2 var(--font-body);
+  font: 600 var(--fs-xs)/1.2 var(--font-sans);
   text-align: right;
   white-space: nowrap;
 }
@@ -601,7 +597,7 @@ body {
 .chapter-item {
   display: flex;
   align-items: flex-start;
-  gap: 12px;
+  gap: var(--sp-3);
   padding: 13px 15px;
   border: 1px solid var(--border);
   border-radius: var(--r-md);
@@ -619,7 +615,7 @@ body {
 
 .chapter-timestamp {
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
   font-weight: 500;
   color: var(--accent);
   min-width: 46px;
@@ -634,19 +630,19 @@ body {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--sp-1);
 }
 
 .chapter-title {
-  font-family: var(--font-reading);
-  font-size: 13.5px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-lg);
   font-weight: 600;
   color: var(--text);
 }
 
 .chapter-summary {
-  font-family: var(--font-reading);
-  font-size: 12.5px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-md);
   color: var(--text-secondary);
   line-height: 1.5;
 }
@@ -691,8 +687,8 @@ body {
 }
 
 .quote-text {
-  font-family: var(--font-reading);
-  font-size: 14px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-lg);
   line-height: 1.65;
   color: var(--text);
   margin-bottom: 10px;
@@ -700,34 +696,47 @@ body {
 
 .quote-text::before {
   content: "\201C";
-  font-family: var(--font-display);
+  font-family: var(--font-sans);
   font-weight: 600;
-  font-size: 34px;
+  font-size: var(--fs-5xl);
   color: var(--accent);
   line-height: 0;
   vertical-align: -10px;
-  margin-right: 4px;
+  margin-right: var(--sp-1);
 }
 
 .quote-meta {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--sp-2);
+}
+
+/* The script emits a quote timestamp, but nothing ever styled it, so it
+   rendered as body text next to the copy button. It now shares the
+   chapter/note timestamp pill. */
+.quote-timestamp {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  color: var(--accent);
+  background: var(--accent-dim);
+  padding: 3px 8px;
+  border-radius: var(--r-sm);
+  white-space: nowrap;
 }
 
 .quote-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-2);
 }
 
 /* One-click copy and save-note buttons on each quote */
 .quote-copy-btn,
 .quote-save-note-btn {
-  font-family: var(--font-body);
+  font-family: var(--font-sans);
   font-weight: 600;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   padding: 4px 11px;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -755,7 +764,7 @@ body {
 
 .transcript-entry {
   display: flex;
-  gap: 12px;
+  gap: var(--sp-3);
   padding: 11px 10px;
   border-radius: var(--r-sm);
   margin-bottom: 2px;
@@ -776,18 +785,18 @@ body {
 .transcript-search-highlight {
   padding: 1px 0;
   border-radius: 3px;
-  background: #f5d9a8;
-  color: inherit;
+  background: var(--highlight-soft);
+  color: var(--text);
 }
 
 .transcript-search-highlight.current {
   background: var(--highlight);
-  color: var(--text);
+  color: var(--on-highlight);
 }
 
 .transcript-time {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--accent);
   min-width: 46px;
   padding-top: 2px;
@@ -795,8 +804,8 @@ body {
 }
 
 .transcript-text {
-  font-family: var(--font-reading);
-  font-size: 13.5px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-lg);
   color: var(--text-secondary);
   line-height: 1.55;
 }
@@ -825,8 +834,10 @@ body {
   color: var(--text-muted);
 }
 
+/* A failed translation is a failure, not an accent: it now uses the
+   danger tone so it reads as a problem in both themes. */
 .translation-error {
-  color: var(--accent);
+  color: var(--danger);
 }
 
 .translation-retry-btn {
@@ -837,7 +848,7 @@ body {
   background: transparent;
   color: inherit;
   cursor: pointer;
-  font: 600 10px/1.4 var(--font-body);
+  font: 600 var(--fs-xs)/1.4 var(--font-sans);
 }
 
 @media (max-width: 390px) {
@@ -849,12 +860,12 @@ body {
 
 /* Enhanced transcript paragraphs */
 .transcript-paragraph {
-  font-family: var(--font-reading);
-  font-size: 14px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-lg);
   color: var(--text);
   line-height: 1.8;
-  margin-bottom: 16px;
-  padding-bottom: 16px;
+  margin-bottom: var(--sp-4);
+  padding-bottom: var(--sp-4);
   border-bottom: 1px solid var(--border);
 }
 
@@ -875,7 +886,7 @@ body {
   width: 40px;
   height: 2px;
   border-radius: var(--r-pill);
-  background: var(--accent);
+  background: var(--accent-solid);
   opacity: 0.4;
   animation: paraPulse 1.2s ease-in-out infinite;
 }
@@ -912,9 +923,20 @@ body {
   width: 40px;
   height: 2px;
   border-radius: var(--r-pill);
-  background: var(--accent);
+  background: var(--accent-solid);
   opacity: 0.4;
   animation: paraPulse 1.2s ease-in-out infinite;
+}
+
+/* The script marks a row whose translation failed; without a rule the
+   marker was invisible and the row looked identical to any other. */
+.transcript-entry.translation-failed {
+  background: var(--danger-dim);
+  box-shadow: inset 3px 0 0 var(--danger);
+}
+
+.transcript-entry.translation-failed .transcript-text {
+  color: var(--text-secondary);
 }
 
 .transcript-entry.translated {
@@ -939,18 +961,18 @@ body {
   left: 50%;
   transform: translateX(-50%);
   z-index: 100;
-  background: var(--accent);
-  color: white;
+  background: var(--accent-solid);
+  color: var(--on-accent);
   border: none;
   padding: 10px 22px;
   border-radius: var(--r-pill);
-  font-family: var(--font-body);
+  font-family: var(--font-sans);
   font-weight: 600;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   letter-spacing: 0.3px;
   cursor: pointer;
   transition: all 0.18s ease;
-  box-shadow: 0 6px 18px rgba(200, 103, 79, 0.4);
+  box-shadow: var(--shadow-accent-lg);
 }
 
 .follow-playback-btn:hover {
@@ -967,7 +989,7 @@ body {
   align-items: center;
   justify-content: center;
   min-height: 400px;
-  gap: 24px;
+  gap: var(--sp-6);
 }
 
 .loading-bar {
@@ -987,7 +1009,7 @@ body {
   width: 60%;
   height: 100%;
   border-radius: var(--r-pill);
-  background: var(--accent);
+  background: var(--accent-solid);
   animation: loading 1.5s ease-in-out infinite;
 }
 
@@ -1001,16 +1023,16 @@ body {
 }
 
 .loading-text {
-  font-family: var(--font-display);
+  font-family: var(--font-sans);
   font-weight: 600;
-  font-size: 16px;
+  font-size: var(--fs-xl);
   letter-spacing: -0.2px;
   color: var(--text-secondary);
 }
 
 .loading-subtext {
-  font-family: var(--font-body);
-  font-size: 12.5px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-md);
   color: var(--text-muted);
   text-align: center;
   line-height: 1.6;
@@ -1026,8 +1048,8 @@ body {
   justify-content: center;
   min-height: 300px;
   text-align: center;
-  gap: 16px;
-  padding: 20px;
+  gap: var(--sp-4);
+  padding: var(--sp-5);
 }
 
 .error-icon {
@@ -1037,43 +1059,43 @@ body {
   place-items: center;
   border: 1px solid var(--accent);
   border-radius: 50%;
-  font-family: var(--font-display);
-  font-size: 24px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-3xl);
   font-weight: 600;
   color: var(--accent);
   line-height: 1;
 }
 
 .error-title {
-  font-family: var(--font-display);
+  font-family: var(--font-sans);
   font-weight: 600;
-  font-size: 22px;
+  font-size: var(--fs-3xl);
   letter-spacing: -0.3px;
   color: var(--text);
 }
 
 .error-message {
-  font-family: var(--font-reading);
-  font-size: 13.5px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-lg);
   color: var(--text-secondary);
   line-height: 1.6;
   max-width: 280px;
 }
 
 .error-btn {
-  font-family: var(--font-body);
+  font-family: var(--font-sans);
   font-weight: 600;
-  font-size: 13px;
+  font-size: var(--fs-md);
   letter-spacing: 0.2px;
   padding: 12px 28px;
-  background: var(--accent);
-  color: white;
+  background: var(--accent-solid);
+  color: var(--on-accent);
   border: none;
   border-radius: var(--r-pill);
   cursor: pointer;
   transition: all 0.18s ease;
-  margin-top: 8px;
-  box-shadow: 0 4px 14px rgba(200, 103, 79, 0.3);
+  margin-top: var(--sp-2);
+  box-shadow: var(--shadow-accent);
 }
 
 .error-btn:hover {
@@ -1092,7 +1114,7 @@ body {
   min-height: 400px;
   text-align: center;
   gap: 22px;
-  padding: 40px 24px;
+  padding: var(--sp-8) var(--sp-6);
 }
 
 /* A soft terracotta tile with a CSS play mark, matching the brand. */
@@ -1100,8 +1122,8 @@ body {
   width: 84px;
   height: 84px;
   border-radius: var(--r-xl);
-  background: linear-gradient(145deg, #d2735a, #bd5740);
-  box-shadow: 0 12px 30px rgba(200, 103, 79, 0.35);
+  background: linear-gradient(145deg, var(--accent-solid), var(--accent-hover));
+  box-shadow: var(--shadow-accent-lg);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1112,21 +1134,21 @@ body {
   content: "";
   border-style: solid;
   border-width: 16px 0 16px 26px;
-  border-color: transparent transparent transparent #fff;
+  border-color: transparent transparent transparent var(--on-accent);
   margin-left: 6px;
 }
 
 .welcome-title {
-  font-family: var(--font-display);
+  font-family: var(--font-sans);
   font-weight: 600;
-  font-size: 26px;
+  font-size: var(--fs-4xl);
   letter-spacing: -0.4px;
   color: var(--text);
 }
 
 .welcome-desc {
-  font-family: var(--font-reading);
-  font-size: 13.5px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-lg);
   color: var(--text-secondary);
   line-height: 1.7;
   max-width: 270px;
@@ -1138,14 +1160,14 @@ body {
 .actions-bar {
   display: flex;
   gap: 9px;
-  margin-bottom: 24px;
+  margin-bottom: var(--sp-6);
 }
 
 .action-btn {
   flex: 1;
-  font-family: var(--font-body);
+  font-family: var(--font-sans);
   font-weight: 600;
-  font-size: 12.5px;
+  font-size: var(--fs-md);
   letter-spacing: 0.2px;
   padding: 11px 12px;
   background: var(--surface);
@@ -1172,12 +1194,12 @@ body {
 }
 
 .video-title {
-  font-family: var(--font-reading);
-  font-size: 13.5px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-lg);
   font-weight: 600;
   color: var(--text);
   line-height: 1.45;
-  margin-bottom: 4px;
+  margin-bottom: var(--sp-1);
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -1185,8 +1207,8 @@ body {
 }
 
 .video-channel {
-  font-family: var(--font-body);
-  font-size: 11.5px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-sm);
   color: var(--text-muted);
 }
 
@@ -1204,7 +1226,7 @@ body {
   background: var(--surface);
   transform: translateX(-50%);
   animation: selectionToolbarIn 0.15s ease;
-  box-shadow: 0 8px 24px rgba(50, 42, 32, 0.16);
+  box-shadow: var(--shadow-md);
 }
 
 /* Keep horizontal centering in every animation frame. The shared fadeIn
@@ -1222,9 +1244,9 @@ body {
 
 .explain-btn,
 .selection-note-btn {
-  font-family: var(--font-body);
+  font-family: var(--font-sans);
   font-weight: 600;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   letter-spacing: 0;
   flex: 1 1 50%;
   min-width: 72px;
@@ -1245,9 +1267,11 @@ body {
   color: var(--accent-hover);
 }
 
+/* The toolbar clips its overflow, so this ring is drawn inside the button
+   rather than outside it. */
 .explain-btn:focus-visible,
 .selection-note-btn:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
 }
 
@@ -1264,13 +1288,13 @@ body {
 .explain-modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(46, 42, 36, 0.55);
+  background: var(--scrim);
   backdrop-filter: blur(3px);
   z-index: 9999;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 20px;
+  padding: var(--sp-5);
   animation: fadeIn 0.2s ease;
 }
 
@@ -1290,22 +1314,22 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 20px;
+  padding: var(--sp-4) var(--sp-5);
   border-bottom: 1px solid var(--border);
   background: var(--surface-raised);
 }
 
 .explain-modal-title {
-  font-family: var(--font-display);
+  font-family: var(--font-sans);
   font-weight: 600;
-  font-size: 18px;
+  font-size: var(--fs-2xl);
   letter-spacing: -0.3px;
   color: var(--accent);
 }
 
 .explain-modal-close {
-  font-family: var(--font-body);
-  font-size: 16px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-xl);
   padding: 4px 10px;
   background: none;
   border: none;
@@ -1321,18 +1345,18 @@ body {
 }
 
 .explain-selected-text {
-  padding: 16px 20px;
+  padding: var(--sp-4) var(--sp-5);
   background: var(--accent-dim);
   border-bottom: 1px solid var(--border);
-  font-family: var(--font-reading);
-  font-size: 13px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-md);
   font-style: italic;
   color: var(--text-secondary);
   line-height: 1.5;
 }
 
 .explain-modal-content {
-  padding: 20px;
+  padding: var(--sp-5);
   overflow-y: auto;
   flex: 1;
 }
@@ -1341,31 +1365,31 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 16px;
-  padding: 20px;
+  gap: var(--sp-4);
+  padding: var(--sp-5);
   color: var(--text-muted);
-  font-family: var(--font-body);
-  font-size: 12.5px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-md);
 }
 
 .explain-text {
-  font-family: var(--font-reading);
-  font-size: 14px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-lg);
   line-height: 1.7;
   color: var(--text);
 }
 
 .explain-text p {
-  margin-bottom: 12px;
+  margin-bottom: var(--sp-3);
 }
 
 .explain-error {
-  font-family: var(--font-body);
-  font-size: 12.5px;
-  color: var(--accent);
-  padding: 16px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-md);
+  color: var(--danger);
+  padding: var(--sp-4);
   border-radius: var(--r-sm);
-  background: var(--accent-dim);
+  background: var(--danger-dim);
 }
 
 /* ============================================================
@@ -1383,7 +1407,7 @@ body {
 
 .notes-filter .enhance-btn {
   padding: 5px 12px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   border: none;
   background: none;
   color: var(--text-muted);
@@ -1395,29 +1419,30 @@ body {
 }
 
 .notes-filter .enhance-btn:focus-visible {
-  outline: 3px solid var(--accent-hover);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
 .notes-filter .enhance-btn.active {
-  background: var(--accent);
-  color: white;
-  box-shadow: 0 2px 6px rgba(200, 103, 79, 0.3);
+  background: var(--accent-solid);
+  color: var(--on-accent);
 }
 
+/* The release gate pins a literal white here, so the dark theme overrides
+   the text colour further down the file. */
 .notes-filter .enhance-btn.active:hover:not(:disabled) {
   background: var(--accent-hover);
   color: white;
 }
 
 .notes-filter .enhance-btn.active:focus-visible {
-  background: var(--accent);
-  color: white;
+  background: var(--accent-solid);
+  color: var(--on-accent);
 }
 
 .notes-intro {
-  font-family: var(--font-reading);
-  font-size: 13.5px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-lg);
   color: var(--text-muted);
   text-align: center;
   padding: 44px 20px;
@@ -1448,7 +1473,7 @@ body {
 
 .note-timestamp {
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
   color: var(--accent);
   background: var(--accent-dim);
   padding: 3px 9px;
@@ -1458,13 +1483,13 @@ body {
 }
 
 .note-timestamp:hover {
-  background: var(--accent);
-  color: white;
+  background: var(--accent-solid);
+  color: var(--on-accent);
 }
 
 .note-video-title {
-  font-family: var(--font-reading);
-  font-size: 11.5px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-sm);
   color: var(--text-muted);
   flex: 1;
   white-space: nowrap;
@@ -1498,7 +1523,7 @@ body {
 }
 
 .note-delete:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -1513,22 +1538,22 @@ body {
 }
 
 .note-text {
-  font-family: var(--font-reading);
-  font-size: 14px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-lg);
   line-height: 1.65;
   color: var(--text);
-  margin-bottom: 12px;
+  margin-bottom: var(--sp-3);
 }
 
 .note-actions {
   display: flex;
-  gap: 8px;
+  gap: var(--sp-2);
 }
 
 .note-action-btn {
-  font-family: var(--font-body);
+  font-family: var(--font-sans);
   font-weight: 600;
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
   padding: 6px 12px;
   background: var(--surface-raised);
   border: 1px solid var(--border);
@@ -1555,28 +1580,27 @@ body {
   border-radius: 8px;
   padding: 6px 8px;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-md);
   background: var(--surface);
   color: var(--text);
   resize: vertical;
 }
 .note-edit-actions {
   display: flex;
-  gap: 8px;
+  gap: var(--sp-2);
   align-items: center;
   margin-top: 6px;
 }
 .note-text { cursor: pointer; }
-.note-text:hover { outline: 1px dashed var(--border); outline-offset: 3px; border-radius: 6px; }
-
-
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 4px 8px;
-  font: inherit;
-  font-size: 13px;
-  background: var(--surface);
-  color: var(--text);
-  max-width: 220px;
+/* ============================================================
+   DARK THEME OVERRIDES
+   ============================================================ */
+/* The shared tokens already carry the whole dark palette, so there is exactly
+   one rule left to correct: the release gate pins a literal "color: white"
+   on the active notes filter, and white on the dark accent fill is 2.19:1.
+   The dark ink on that fill measures 7.97:1. */
+@media (prefers-color-scheme: dark) {
+  .notes-filter .enhance-btn.active:hover:not(:disabled) {
+    color: var(--on-accent);
+  }
 }
-
