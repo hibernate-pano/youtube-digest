@@ -40,6 +40,7 @@ function timedtextPayload(lines) {
 function loadWorker({
   timedtext = timedtextPayload(["A caption", "Another caption"]),
   timedtextStatus = 200,
+  timedtextResponder = null,
   supadata = null,
   hasSupadataKey = true,
 } = {}) {
@@ -70,6 +71,18 @@ function loadWorker({
       requests.push({ url: href, options });
 
       if (href.includes("timedtext")) {
+        // A page can answer one caption URL and not another. The responder
+        // says what this particular URL gets.
+        if (timedtextResponder) {
+          const answer = timedtextResponder(href);
+          if (answer) {
+            return {
+              ok: answer.status === 200,
+              status: answer.status,
+              json: async () => answer.payload || {},
+            };
+          }
+        }
         if (timedtextStatus !== 200) {
           return { ok: false, status: timedtextStatus, json: async () => ({}) };
         }
@@ -110,11 +123,11 @@ function loadWorker({
         close: () => Promise.resolve(),
       },
       scripting: {
-        executeScript: async ({ target, world, func }) => {
+        executeScript: async ({ target, world, func, args }) => {
           scriptedCalls.push({ target, world });
           // The page's own world: the worker asks the page what captions it
           // has, and the page answers.
-          const result = func();
+          const result = func(...(args || []));
           return [{ result }];
         },
       },
@@ -155,8 +168,30 @@ function loadWorker({
  *
  * The function the worker injects looks for the player response in three
  * places. The test plants it in the first one, which is the live player.
+ *
+ * A real page also remembers the caption requests it made. The URL of such
+ * a request carries the token YouTube checks, and the template URL in the
+ * track list does not, so this fake page can be told which requests the
+ * player already made.
+ *
+ * @param {Object} sandbox the worker's sandbox
+ * @param {Array|null} captionTracks the tracks in the player response
+ * @param {string} videoId the video the page is showing
+ * @param {Object} options
+ * @param {string[]} options.usedCaptionUrls the caption URLs the page used
+ * @param {string|null} options.playerLoadsTrack the URL the player requests
+ *   when it is asked to load a track
+ * @returns {{setOptionCalls: Array<Object>}} what the player was asked
  */
-function installFakePage(sandbox, captionTracks, videoId = "dQw4w9WgXcQ") {
+function installFakePage(
+  sandbox,
+  captionTracks,
+  videoId = "dQw4w9WgXcQ",
+  options = {},
+) {
+  const used = [...(options.usedCaptionUrls || [])];
+  const setOptionCalls = [];
+
   const page = {
     getPlayerResponse: () => ({
       videoDetails: { videoId },
@@ -166,17 +201,38 @@ function installFakePage(sandbox, captionTracks, videoId = "dQw4w9WgXcQ") {
               captionTracks: captionTracks.map((track) => ({
                 baseUrl: track.baseUrl,
                 languageCode: track.languageCode,
+                kind: track.kind,
               })),
             },
           }
         : undefined,
     }),
   };
+
+  if (options.withPlayer) {
+    page.setOption = (group, name, value) => {
+      setOptionCalls.push({ group, name, value });
+      if (
+        group === "captions" &&
+        (name === "track" || name === "load") &&
+        options.playerLoadsTrack
+      ) {
+        used.push(options.playerLoadsTrack);
+      }
+    };
+  }
+
   sandbox.document = {
     getElementById: (id) => (id === "movie_player" ? page : null),
     querySelectorAll: () => [],
   };
   sandbox.window = {};
+  sandbox.performance = {
+    getEntriesByType: (type) =>
+      type === "resource" ? used.map((name) => ({ name })) : [],
+  };
+
+  return { setOptionCalls };
 }
 
 /* ============================================================
@@ -471,5 +527,281 @@ test("the settings page says the Supadata key is optional", () => {
     read("options.html"),
     /data-i18n="supadataHelp"[\s\S]{0,200}?Optional\./,
     "the static page does not say the key is optional",
+  );
+});
+
+/* ============================================================
+   C: the URL the page's player actually used
+
+   The URL in the track list is a template. The player does not use it as
+   it is: it signs the request with a token and its own client identity,
+   and YouTube answers a template request with an empty body. So the
+   caption URL that the page already used is the one that carries the
+   subtitles.
+   ============================================================ */
+
+const USED_URL =
+  "https://www.youtube.com/api/timedtext?v=dQw4w9WgXcQ&lang=de-DE&pot=TOKEN&fmt=json3&c=WEB";
+
+test("the caption URL the page already used is the one that is fetched", async () => {
+  const worker = loadWorker();
+  installFakePage(
+    worker.sandbox,
+    [
+      {
+        baseUrl: "https://www.youtube.com/api/timedtext?v=dQw4w9WgXcQ&lang=en",
+        languageCode: "en",
+      },
+    ],
+    "dQw4w9WgXcQ",
+    { usedCaptionUrls: [USED_URL] },
+  );
+
+  const result = await worker.helpers.handleFetchTranscriptLocalFirst("dQw4w9WgXcQ", 7);
+
+  assert.equal(result.success, true, "the local path did not work");
+  assert.equal(result.source, "local");
+  const timedtext = worker.requests.filter((request) =>
+    request.url.includes("timedtext"),
+  );
+  assert.equal(timedtext.length, 1, "the captions were not fetched once");
+  assert.match(
+    timedtext[0].url,
+    /pot=TOKEN/,
+    "the template URL was fetched instead of the one the page used",
+  );
+});
+
+test("the page's URL is pointed at the track the product reads", async () => {
+  const worker = loadWorker();
+  installFakePage(
+    worker.sandbox,
+    [
+      {
+        baseUrl: "https://www.youtube.com/api/timedtext?v=dQw4w9WgXcQ&lang=en",
+        languageCode: "en",
+      },
+    ],
+    "dQw4w9WgXcQ",
+    { usedCaptionUrls: [USED_URL] },
+  );
+
+  await worker.helpers.handleFetchTranscriptLocalFirst("dQw4w9WgXcQ", 7);
+
+  const timedtext = worker.requests.find((request) =>
+    request.url.includes("timedtext"),
+  );
+  assert.match(
+    timedtext.url,
+    /lang=en/,
+    "the German track the player loaded was read instead of the English one",
+  );
+  assert.match(
+    timedtext.url,
+    /pot=TOKEN/,
+    "pointing the URL at another track threw the token away",
+  );
+});
+
+test("a translated variant is not asked for by name", async () => {
+  const worker = loadWorker();
+  installFakePage(
+    worker.sandbox,
+    [
+      {
+        baseUrl: "https://www.youtube.com/api/timedtext?v=dQw4w9WgXcQ&lang=en",
+        languageCode: "en",
+      },
+    ],
+    "dQw4w9WgXcQ",
+    {
+      usedCaptionUrls: [
+        "https://www.youtube.com/api/timedtext?v=dQw4w9WgXcQ&lang=en&variant=asr&pot=TOKEN",
+      ],
+    },
+  );
+
+  await worker.helpers.handleFetchTranscriptLocalFirst("dQw4w9WgXcQ", 7);
+
+  const timedtext = worker.requests.find((request) =>
+    request.url.includes("timedtext"),
+  );
+  assert.doesNotMatch(
+    timedtext.url,
+    /variant/,
+    "the translated variant was asked for by name, which answers with nothing",
+  );
+});
+
+test("a caption request without a token is not used", async () => {
+  const worker = loadWorker({
+    timedtextResponder: (url) =>
+      url.includes("c=WEB")
+        ? { status: 403, payload: {} }
+        : { status: 200, payload: timedtextPayload(["A caption"]) },
+  });
+  installFakePage(
+    worker.sandbox,
+    [
+      {
+        baseUrl: "https://www.youtube.com/api/timedtext?v=dQw4w9WgXcQ&lang=en",
+        languageCode: "en",
+      },
+    ],
+    "dQw4w9WgXcQ",
+    {
+      // A request the page made without the proof-of-origin token. It is not
+      // signed, so it cannot carry the captions.
+      usedCaptionUrls: [
+        "https://www.youtube.com/api/timedtext?v=dQw4w9WgXcQ&lang=de-DE&c=WEB",
+      ],
+    },
+  );
+
+  const result = await worker.helpers.handleFetchTranscriptLocalFirst("dQw4w9WgXcQ", 7);
+
+  assert.equal(result.success, true, "the local path did not work");
+  const timedtext = worker.requests.filter((request) =>
+    request.url.includes("timedtext"),
+  );
+  assert.ok(
+    timedtext.every((request) => !request.url.includes("c=WEB")),
+    "an unsigned caption request the page made was sent",
+  );
+});
+
+test("the page is asked to load the track when it has not used one yet", async () => {
+  const worker = loadWorker();
+  const { setOptionCalls } = installFakePage(
+    worker.sandbox,
+    [
+      {
+        baseUrl: "https://www.youtube.com/api/timedtext?v=dQw4w9WgXcQ&lang=en",
+        languageCode: "en",
+        kind: "asr",
+      },
+    ],
+    "dQw4w9WgXcQ",
+    {
+      withPlayer: true,
+      playerLoadsTrack:
+        "https://www.youtube.com/api/timedtext?v=dQw4w9WgXcQ&lang=en&kind=asr&pot=TOKEN2",
+    },
+  );
+
+  const result = await worker.helpers.handleFetchTranscriptLocalFirst("dQw4w9WgXcQ", 7);
+
+  assert.equal(result.success, true, "the local path did not work");
+  const trackCall = setOptionCalls.find(
+    (call) => call.group === "captions" && call.name === "track",
+  );
+  assert.ok(trackCall, "the page was never asked to load the track");
+  assert.equal(trackCall.value.languageCode, "en");
+  assert.equal(trackCall.value.kind, "asr");
+  const timedtext = worker.requests.find((request) =>
+    request.url.includes("timedtext"),
+  );
+  assert.match(
+    timedtext.url,
+    /pot=TOKEN2/,
+    "the URL the player made was not the one that was fetched",
+  );
+});
+
+test("a caption request for another video is not used", async () => {
+  const worker = loadWorker();
+  const { setOptionCalls } = installFakePage(
+    worker.sandbox,
+    [
+      {
+        baseUrl: "https://www.youtube.com/api/timedtext?v=dQw4w9WgXcQ&lang=en",
+        languageCode: "en",
+      },
+    ],
+    "dQw4w9WgXcQ",
+    {
+      withPlayer: true,
+      usedCaptionUrls: [
+        "https://www.youtube.com/api/timedtext?v=otherVideo&lang=en&pot=TOKEN",
+      ],
+    },
+  );
+
+  await worker.helpers.handleFetchTranscriptLocalFirst("dQw4w9WgXcQ", 7);
+
+  const timedtext = worker.requests.find((request) =>
+    request.url.includes("timedtext"),
+  );
+  assert.doesNotMatch(
+    timedtext.url,
+    /otherVideo/,
+    "the captions of another video were fetched",
+  );
+  assert.ok(
+    setOptionCalls.some(
+      (call) => call.group === "captions" && call.name === "track",
+    ),
+    "the page was not asked to load the track",
+  );
+});
+
+test("when the page's URL answers with nothing, the template URL is tried", async () => {
+  const worker = loadWorker({
+    timedtextResponder: (url) =>
+      url.includes("pot=TOKEN")
+        ? { status: 403, payload: {} }
+        : { status: 200, payload: timedtextPayload(["A caption"]) },
+  });
+  installFakePage(
+    worker.sandbox,
+    [
+      {
+        baseUrl: "https://www.youtube.com/api/timedtext?v=dQw4w9WgXcQ&lang=en",
+        languageCode: "en",
+      },
+    ],
+    "dQw4w9WgXcQ",
+    { usedCaptionUrls: [USED_URL] },
+  );
+
+  const result = await worker.helpers.handleFetchTranscriptLocalFirst("dQw4w9WgXcQ", 7);
+
+  assert.equal(result.success, true, "the fallback URL was not tried");
+  assert.equal(result.transcript[0].text, "A caption");
+  const timedtext = worker.requests.filter((request) =>
+    request.url.includes("timedtext"),
+  );
+  assert.equal(timedtext.length, 3, "the template URL was not tried as well");
+  assert.ok(
+    timedtext.some((request) => !request.url.includes("pot=TOKEN")),
+    "the template URL was never tried",
+  );
+});
+
+test("the paid path takes over when the page has no caption URL at all", async () => {
+  const worker = loadWorker({ timedtextStatus: 403 });
+  installFakePage(
+    worker.sandbox,
+    [
+      {
+        baseUrl: "https://www.youtube.com/api/timedtext?v=dQw4w9WgXcQ&lang=en",
+        languageCode: "en",
+      },
+    ],
+    "dQw4w9WgXcQ",
+    {
+      withPlayer: true,
+      playerLoadsTrack:
+        "https://www.youtube.com/api/timedtext?v=dQw4w9WgXcQ&lang=en&pot=TOKEN3",
+    },
+  );
+
+  const result = await worker.helpers.handleFetchTranscriptLocalFirst("dQw4w9WgXcQ", 7);
+
+  assert.equal(result.success, true, "the paid path did not take over");
+  assert.equal(
+    worker.requests.filter((request) => request.url.includes("supadata")).length,
+    1,
+    "the paid path was not used",
   );
 });

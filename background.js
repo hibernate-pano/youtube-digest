@@ -880,8 +880,15 @@ async function getPlayerVideoDetails(tabId) {
  * Runs in the page's MAIN world, where YouTube's player object lives. A
  * content script lives in an isolated world and cannot see it.
  *
+ * The URL in the track list is a template. The player does not use it as it
+ * is: it signs a request with a proof-of-origin token and its own client
+ * identity, and YouTube answers a template request with an empty body. The
+ * URL the player actually used is the one that carries the captions, and
+ * the page remembers it in its own resource timing list. That URL comes
+ * back with the tracks.
+ *
  * @param {number} tabId the YouTube tab to read
- * @returns {Promise<{videoId: string, tracks: Array<{baseUrl: string, languageCode: string}>}|null>}
+ * @returns {Promise<{videoId: string, tracks: Array<{baseUrl: string, languageCode: string, kind: string}>, usedUrl: string|null}|null>}
  */
 async function readCaptionTracksFromTab(tabId) {
   try {
@@ -931,8 +938,31 @@ async function readCaptionTracksFromTab(tabId) {
               ?.captionTracks;
           if (!Array.isArray(tracks) || tracks.length === 0) return null;
 
+          const videoId = String(playerResponse?.videoDetails?.videoId || "");
+
+          // The caption request the page already made, if it made one. The
+          // token in it is what YouTube checks, so a request without it is
+          // not worth anything.
+          let usedUrl = null;
+          try {
+            const entries = performance.getEntriesByType("resource");
+            for (let index = entries.length - 1; index >= 0; index -= 1) {
+              const name = entries[index]?.name || "";
+              if (!name.includes("/api/timedtext")) continue;
+              const url = new URL(name);
+              if (videoId && url.searchParams.get("v") !== videoId) continue;
+              if (!url.searchParams.get("pot")) continue;
+              usedUrl = url.toString();
+              break;
+            }
+          } catch (error) {
+            // A page without resource timing has no used URL. The template
+            // URL is still tried further down.
+          }
+
           return {
-            videoId: String(playerResponse?.videoDetails?.videoId || ""),
+            videoId,
+            usedUrl,
             tracks: tracks
               .filter(
                 (track) => typeof track.baseUrl === "string" && track.baseUrl,
@@ -940,6 +970,7 @@ async function readCaptionTracksFromTab(tabId) {
               .map((track) => ({
                 baseUrl: track.baseUrl,
                 languageCode: track.languageCode || "",
+                kind: track.kind || "",
               })),
           };
         } catch (error) {
@@ -958,14 +989,121 @@ async function readCaptionTracksFromTab(tabId) {
 }
 
 /**
+ * Asks the page to load a caption track and waits for the request it makes.
+ *
+ * The player only asks YouTube for the captions when it needs them, and a
+ * user who never turns captions on never gets a caption request. The player
+ * can be asked to load one, and the request it makes is the URL that works.
+ *
+ * Runs in the page's MAIN world, where the player object lives.
+ *
+ * @param {number} tabId the YouTube tab to ask
+ * @param {{videoId: string, languageCode: string, kind: string}} request
+ * @returns {Promise<string|null>} the caption URL the page used, or null
+ */
+async function loadCaptionUrlInTab(tabId, request) {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: "MAIN",
+      args: [request],
+      func: async (wanted) => {
+        const videoId = String(wanted?.videoId || "");
+        const findUsed = () => {
+          try {
+            const entries = performance.getEntriesByType("resource");
+            for (let index = entries.length - 1; index >= 0; index -= 1) {
+              const name = entries[index]?.name || "";
+              if (!name.includes("/api/timedtext")) continue;
+              const url = new URL(name);
+              if (videoId && url.searchParams.get("v") !== videoId) continue;
+              if (!url.searchParams.get("pot")) continue;
+              return url.toString();
+            }
+          } catch (error) {
+            // No resource timing, no used URL.
+          }
+          return null;
+        };
+
+        let used = findUsed();
+        if (used) return used;
+
+        const player = document.getElementById("movie_player");
+        if (!player) return null;
+        // A player without options cannot be asked. Waiting for a request
+        // that will never come would only delay the fallback.
+        if (typeof player.setOption !== "function") return null;
+
+        // Ask the player to load the track. The caption display is left
+        // alone: the user did not ask for captions on their video, and
+        // switching them on would be a change nobody asked for.
+        try {
+          player.setOption("captions", "load", true);
+        } catch (error) {
+          // Not every player build has this option.
+        }
+        try {
+          player.setOption("captions", "track", {
+            languageCode: wanted?.languageCode || "",
+            kind: wanted?.kind || "",
+          });
+        } catch (error) {
+          // Not every player build has this option.
+        }
+
+        const deadline = Date.now() + 4000;
+        while (Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 200));
+          used = findUsed();
+          if (used) return used;
+        }
+        return null;
+      },
+    });
+    return results?.[0]?.result || null;
+  } catch (error) {
+    debugLog("[YouTube Digest BG] Caption request failed:", error.message);
+    return null;
+  }
+}
+
+/**
+ * Points a caption URL at a specific track.
+ *
+ * The language and the kind are not part of the signed part of the URL, so
+ * the URL the page used can be pointed at another track. The player loads
+ * whatever track it likes best, which is often not the English one this
+ * product reads.
+ *
+ * @param {string} url the caption URL the page used
+ * @param {{languageCode: string, kind: string}} track the track to read
+ * @returns {string} the URL for that track
+ */
+function captionUrlForTrack(url, track) {
+  try {
+    const parsed = new URL(url);
+    if (track.languageCode) parsed.searchParams.set("lang", track.languageCode);
+    if (track.kind) parsed.searchParams.set("kind", track.kind);
+    else parsed.searchParams.delete("kind");
+    // A variant is a translated version of another track. Asking for it by
+    // name is what makes the request answer with nothing.
+    parsed.searchParams.delete("variant");
+    return parsed.toString();
+  } catch (error) {
+    return url;
+  }
+}
+
+/**
  * Picks the caption track to use.
  *
  * English comes first, because that is the language the product reads and
  * translates from. A track in any other language is better than no track at
  * all, so the first one is the fallback.
  *
- * @param {Array<{baseUrl: string, languageCode: string}>} tracks
- * @returns {{baseUrl: string, languageCode: string}|null}
+ * @param {Array<{baseUrl: string, languageCode: string, kind: string}>} tracks
+ * @returns {{baseUrl: string, languageCode: string, kind: string}|null}
  */
 function pickCaptionTrack(tracks) {
   if (!Array.isArray(tracks) || tracks.length === 0) return null;
@@ -1162,10 +1300,38 @@ async function tryLocalTranscript(tabId, expectedVideoId) {
 
   const track = pickCaptionTrack(captionTracks.tracks);
   if (!track) return null;
-  return await fetchTimedtextTranscript(
-    track.baseUrl,
-    track.languageCode || null,
-  );
+
+  // The URL in the track list is a template, and YouTube answers a
+  // template request with an empty body. The URL the page's own player
+  // used is the one that carries the captions. If the page has not used
+  // one yet, ask it to make one.
+  let usedUrl = captionTracks.usedUrl || null;
+  if (!usedUrl) {
+    usedUrl = await loadCaptionUrlInTab(tabId, {
+      videoId: pageVideoId,
+      languageCode: track.languageCode || "",
+      kind: track.kind || "",
+    });
+  }
+
+  // The track the product wants first, then the track the player picked,
+  // then the template. One of them answers; the others are free to fail.
+  const candidates = [];
+  if (usedUrl) {
+    const wanted = captionUrlForTrack(usedUrl, track);
+    candidates.push(wanted);
+    if (wanted !== usedUrl) candidates.push(usedUrl);
+  }
+  candidates.push(track.baseUrl);
+
+  for (const url of candidates) {
+    const transcript = await fetchTimedtextTranscript(
+      url,
+      track.languageCode || null,
+    );
+    if (transcript) return transcript;
+  }
+  return null;
 }
 
 /**
@@ -2667,6 +2833,8 @@ globalThis.__YTD_TRANSLATION_TESTING__ = {
   transcriptFailureCacheKey,
   tryLocalTranscript,
   readCaptionTracksFromTab,
+  loadCaptionUrlInTab,
+  captionUrlForTrack,
   pickCaptionTrack,
   parseTimedtextJson3,
   buildTranscriptResult,
