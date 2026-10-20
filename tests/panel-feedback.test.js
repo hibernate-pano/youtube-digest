@@ -842,3 +842,18 @@ test("a quote that did not save says why", async () => {
   const message = panel.el("panelToastText").textContent;
   assert.match(message, /storage is full/i, "the reason is not explained");
 });
+
+test("the video the panel just read is cached for next time", async () => {
+  const panel = createPanel({ sendMessageImpl: workerRouter() });
+
+  panel.helpers.startDigest("videoA", "https://www.youtube.com/watch?v=videoA");
+  await flush();
+
+  const cached = panel.storage.local.values.digest_videoA;
+  assert.ok(cached, "the video was not cached, so the next visit costs a credit");
+  assert.ok(
+    Array.isArray(cached.transcript) && cached.transcript.length > 0,
+    "the cache has no transcript in it",
+  );
+  assert.ok(cached.timestamp, "the cache does not say when it was written");
+});
