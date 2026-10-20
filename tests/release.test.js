@@ -6,6 +6,55 @@ const path = require("node:path");
 const root = path.resolve(__dirname, "..");
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
 
+/**
+ * True for a host that lives on the user's own machine.
+ *
+ * A published extension that can reach a loopback port is a liability: any
+ * process listening there could be handed the user's saved notes and their
+ * GitHub session token. Local development does not need it in the shipped
+ * manifest, so the release gate keeps it out.
+ */
+function isLoopbackHost(host) {
+  const name = String(host || "").toLowerCase();
+  return (
+    name === "localhost" ||
+    name.endsWith(".localhost") ||
+    name === "0.0.0.0" ||
+    name === "::1" ||
+    name === "[::1]" ||
+    /^127\./.test(name)
+  );
+}
+
+/** The host a match pattern points at, or "" when it has none. */
+function hostOf(pattern) {
+  const match = /^(?:\*|https?|file|ftp):\/\/([^/]+)/i.exec(String(pattern));
+  if (!match) return "";
+  const authority = match[1];
+  if (authority.startsWith("[")) {
+    // An IPv6 literal such as [::1] or [::1]:8787.
+    const end = authority.indexOf("]");
+    return end === -1 ? authority : authority.slice(0, end + 1);
+  }
+  return authority.split(":")[0];
+}
+
+test("the released manifest never asks for a host on the user's own machine", () => {
+  const manifest = JSON.parse(read("manifest.json"));
+  const patterns = [
+    ...(manifest.host_permissions || []),
+    ...(manifest.optional_host_permissions || []),
+  ];
+
+  for (const pattern of patterns) {
+    assert.equal(
+      isLoopbackHost(hostOf(pattern)),
+      false,
+      `a published extension must not be allowed to reach ${pattern}`,
+    );
+  }
+});
+
 test("manifest uses minimized install-time permissions", () => {
   const manifest = JSON.parse(read("manifest.json"));
   const packageJson = JSON.parse(read("package.json"));
