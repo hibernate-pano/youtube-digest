@@ -15,7 +15,7 @@
 
 - [ ] 注册 Chrome Web Store 开发者账号($5 一次性):https://chrome.google.com/webstore/devconsole
 - [ ] 隐私政策 URL:https://ytd.panbo.space/privacy.html(已上线)
-- [ ] 打包好的 ZIP:仓库根目录 npm run package 生成 dist/youtube-digest-v1.4.0.zip
+- [ ] 打包好的 ZIP:仓库根目录 npm run package 生成 dist/youtube-digest-v1.5.0.zip
   - 注意:商店不接受根目录直接打包,需要 zip 内包含 manifest.json(我们的脚本已满足)
 
 ## 商品信息
