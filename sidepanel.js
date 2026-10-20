@@ -1575,7 +1575,7 @@ function renderAnalysisResults(analysis) {
     // chapter. The list item keeps its list semantics and stays clickable
     // for the mouse, and the click of the button bubbles up to it.
     li.innerHTML = `
-      <button class="chapter-timestamp" type="button" style="border: none;" aria-label="${escapeHtml(panelCopyFormat("jumpTo", { time: chapter.timestamp }))}">${escapeHtml(chapter.timestamp)}</button>
+      <button class="chapter-timestamp" type="button" style="border: none; cursor: pointer;" aria-label="${escapeHtml(panelCopyFormat("jumpTo", { time: chapter.timestamp }))}">${escapeHtml(chapter.timestamp)}</button>
       <div class="chapter-content">
         <span class="chapter-title">${renderLocalizedContent(chapter.title, "overview", `chapter-${index}-title`)}</span>
         <span class="chapter-summary">${renderLocalizedContent(chapter.summary || "", "overview", `chapter-${index}-summary`)}</span>
@@ -1609,7 +1609,7 @@ function renderAnalysisResults(analysis) {
     div.innerHTML = `
       <div class="quote-text">${renderLocalizedContent(quote.quote, "overview", `quote-${index}`)}</div>
       <div class="quote-meta">
-        <button class="quote-timestamp" type="button" style="border: none;" aria-label="${escapeHtml(panelCopyFormat("jumpTo", { time: quote.timestamp }))}">${escapeHtml(quote.timestamp)}</button>
+        <button class="quote-timestamp" type="button" style="border: none; cursor: pointer;" aria-label="${escapeHtml(panelCopyFormat("jumpTo", { time: quote.timestamp }))}">${escapeHtml(quote.timestamp)}</button>
         <div class="quote-actions">
           <button class="quote-save-note-btn" type="button" title="${escapeHtml(panelCopy("saveNote"))}">${escapeHtml(panelCopy("note"))}</button>
           <button class="quote-copy-btn" type="button" title="${escapeHtml(panelCopy("copyQuote"))}">${escapeHtml(panelCopy("copy"))}</button>
@@ -1769,7 +1769,7 @@ function renderTranscript() {
     // The timestamp is a real button, so a keyboard user can jump to the
     // moment and a screen reader hears a control instead of loose text.
     div.innerHTML = `
-      <button class="transcript-time" type="button" style="border: none; background: none; text-align: left; align-self: flex-start;" aria-label="${escapeHtml(panelCopyFormat("jumpTo", { time: timestamp }))}">${timestamp}</button>
+      <button class="transcript-time" type="button" style="border: none; background: none; text-align: left; align-self: flex-start; cursor: pointer;" aria-label="${escapeHtml(panelCopyFormat("jumpTo", { time: timestamp }))}">${timestamp}</button>
       <span class="transcript-text">${renderSubtitleInlineMarkup(group.text)}</span>
     `;
 
@@ -3779,7 +3779,7 @@ function renderTranscriptModeRows(segments, mode) {
     // The timestamp is a real button here too, so a translated transcript
     // is no less reachable with the keyboard than the original one.
     div.innerHTML = `
-      <button class="transcript-time" type="button" style="border: none; background: none; text-align: left; align-self: flex-start;" aria-label="${escapeHtml(panelCopyFormat("jumpTo", { time: timestamp }))}">${timestamp}</button>
+      <button class="transcript-time" type="button" style="border: none; background: none; text-align: left; align-self: flex-start; cursor: pointer;" aria-label="${escapeHtml(panelCopyFormat("jumpTo", { time: timestamp }))}">${timestamp}</button>
       ${renderTranscriptSegmentContent(segment, mode, cached, "")}
     `;
     const timeButton = div.querySelector(".transcript-time");
