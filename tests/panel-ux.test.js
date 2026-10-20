@@ -1199,6 +1199,13 @@ test("a second analysis for the same video joins the one on the wire", async () 
 
   const first = harness.helpers.triggerAnalysis();
   await harness.flush();
+
+  // The panel runs the digest for the same video again - a navigation
+  // refresh does exactly that - while the analysis is still working.
+  await harness.helpers.startDigest("videoA", VIDEO_URL);
+  await harness.flush();
+
+  // The user comes back to the Overview tab.
   const second = harness.helpers.triggerAnalysis();
   await harness.flush();
 

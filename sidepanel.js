@@ -72,6 +72,10 @@ let digestRunCount = 0;
 const transcriptLedger = new Map(); // videoId -> paid request
 const analysisLedger = new Map(); // videoId -> paid request
 
+// The ledgers live for the whole life of the panel document, so they are
+// kept small. The persistent digest cache still holds the older videos.
+const PAID_REQUEST_LEDGER_LIMIT = 20;
+
 /**
  * Runs a request that costs the user money and keeps it in the ledger.
  *
@@ -98,6 +102,13 @@ function startPaidRequest(ledger, videoId, send) {
     return result;
   });
   ledger.set(videoId, entry);
+
+  while (ledger.size > PAID_REQUEST_LEDGER_LIMIT) {
+    const oldest = ledger.keys().next().value;
+    if (oldest === undefined) break;
+    ledger.delete(oldest);
+  }
+
   return entry;
 }
 
@@ -2565,7 +2576,7 @@ async function applyAnalysisResult(videoId, ticket, analysisResult) {
     await saveToCache(videoId);
   } catch (error) {
     console.error("[YouTube Digest Panel] Analysis error:", error);
-    if (videoId !== currentVideoId) return;
+    if (videoId !== currentVideoId || ticket !== videoTicket) return;
     renderAnalysisFailure({ error: error.message });
   }
 }
