@@ -444,3 +444,25 @@ test("every string the dashboard shows exists in both languages", async () => {
     assert.ok(table["zh-CN"][key], `Missing Chinese copy for ${key}`);
   }
 });
+
+test("every page shows the product's mark in the browser tab", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const dashboardDir = path.resolve(__dirname, "..", "dashboard");
+  const icon = path.join(dashboardDir, "favicon.png");
+  assert.ok(fs.existsSync(icon), "the favicon is missing");
+  // It is the extension's own mark, so the tab looks like the product.
+  const extensionIcon = path.resolve(
+    __dirname,
+    "..",
+    "..",
+    "icons",
+    "icon48.png",
+  );
+  assert.deepEqual(fs.readFileSync(icon), fs.readFileSync(extensionIcon));
+
+  for (const page of ["index.html", "privacy.html"]) {
+    const markup = fs.readFileSync(path.join(dashboardDir, page), "utf8");
+    assert.match(markup, /<link rel="icon" href="\/favicon\.png" \/>/);
+  }
+});

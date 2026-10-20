@@ -307,6 +307,20 @@ var YTD_SETTINGS = (() => {
     return `https://www.youtube.com/watch?v=${normalized}`;
   }
 
+  /**
+   * The URL that starts the GitHub sign-in.
+   *
+   * The language travels with the request, because the page the user lands
+   * on after GitHub is served by the sync service, not by the extension.
+   * Without it, a reader who picked Chinese would be greeted in English.
+   */
+  function buildGithubLoginUrl(language, baseUrl) {
+    const base = String(baseUrl || "").replace(/\/+$/, "");
+    if (!base) throw new Error("The sync service URL is not configured.");
+    const normalized = normalizeUiLanguage(language);
+    return `${base}/api/auth/login?lang=${encodeURIComponent(normalized)}`;
+  }
+
   return {
     STORAGE_KEY,
     SERVER_BASE_URL,
@@ -329,6 +343,7 @@ var YTD_SETTINGS = (() => {
     SYNC_COPY,
     normalizeUiLanguage,
     translateSyncCopy,
+    buildGithubLoginUrl,
     PROVIDERS,
     KEY_FIELDS,
     getProvider,

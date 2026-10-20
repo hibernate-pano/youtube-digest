@@ -234,7 +234,13 @@
       return chosen;
     }
     const stored = readStoredLanguage();
-    if (stored) return normalizeLanguage(stored);
+    if (stored) {
+      // The choice can predate the cookie, so it is stored again: the
+      // server and the dashboard then speak the same language.
+      const chosen = normalizeLanguage(stored);
+      storeLanguage(chosen);
+      return chosen;
+    }
     return normalizeLanguage(navigator.language || "");
   }
 
@@ -253,6 +259,17 @@
     } catch (_error) {
       // Same as above: not being able to remember the choice is not a
       // reason to break the page.
+    }
+    // The sign-in page is rendered by the server, so the choice travels
+    // there in a cookie the server can read.
+    try {
+      document.cookie =
+        LANG_KEY +
+        "=" +
+        encodeURIComponent(value) +
+        "; path=/; max-age=31536000; samesite=lax";
+    } catch (_error) {
+      // A blocked cookie only costs the sign-in page its language.
     }
   }
 

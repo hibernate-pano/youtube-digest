@@ -551,7 +551,12 @@ const YTD_OPTIONS = (() => {
     }
 
     async function startGithubLogin() {
-      const loginUrl = settingsApi.SERVER_BASE_URL + "/api/auth/login";
+      // The sign-in page speaks the interface language the user picked, so
+      // the page after GitHub does not greet a Chinese reader in English.
+      const loginUrl = settingsApi.buildGithubLoginUrl(
+        currentLanguage,
+        settingsApi.SERVER_BASE_URL,
+      );
       const tab = await root.chrome.tabs.create({ url: loginUrl });
       const marker = settingsApi.SERVER_BASE_URL + "/auth/complete#access_token=";
       const onUpdated = (tabId, changeInfo, updatedTab) => {

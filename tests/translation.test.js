@@ -1594,7 +1594,7 @@ test("re-login replaces a dead session instead of short-circuiting", async () =>
   assert.equal(helpers.openedLoginTabs.length, 1);
   assert.equal(
     helpers.openedLoginTabs[0],
-    "https://sync.test/api/auth/login",
+    "https://sync.test/api/auth/login?lang=en",
   );
   // The dead session is dropped so the OAuth redirect can install a fresh one,
   // while the account's local notes survive untouched.
@@ -1602,6 +1602,24 @@ test("re-login replaces a dead session instead of short-circuiting", async () =>
   assert.equal(raw.ytd_github_session, undefined);
   assert.equal(raw.ytd_sync_expired, undefined);
   assert.equal(raw.ytd_notes_1001[0].id, "note_1");
+});
+
+test("the sign-in page is opened in the language the user picked", async () => {
+  // The page the user lands on after GitHub is served by the sync service,
+  // so the language has to travel with the request. Otherwise a Chinese
+  // reader is greeted in English right after signing in.
+  const storageMock = createStorageMock({
+    ytd_options_language: "zh-CN",
+    ytd_sync_expired: true,
+  });
+  const helpers = loadBackgroundHelpers({ storageMock });
+
+  await helpers.handleStartGithubLogin();
+  assert.equal(helpers.openedLoginTabs.length, 1);
+  assert.equal(
+    helpers.openedLoginTabs[0],
+    "https://sync.test/api/auth/login?lang=zh-CN",
+  );
 });
 
 test("a live session still short-circuits the login shortcut", async () => {

@@ -127,13 +127,30 @@
     } catch {
       // Nothing to do: the choice simply is not remembered.
     }
+    // The sign-in page is rendered by the server, so the choice has to
+    // travel there in a cookie the server can read.
+    try {
+      document.cookie =
+        LANG_KEY +
+        "=" +
+        encodeURIComponent(language) +
+        "; path=/; max-age=31536000; samesite=lax";
+    } catch {
+      // A blocked cookie only costs the next sign-in its language.
+    }
   }
 
   function detectLanguage() {
     const fromUrl = new URLSearchParams(window.location.search).get("lang");
     if (fromUrl) return normalizeLanguage(fromUrl);
     const stored = readStoredLanguage();
-    if (stored) return normalizeLanguage(stored);
+    if (stored) {
+      // The choice can predate the cookie, so it is stored again: the
+      // server and the page then speak the same language.
+      const chosen = normalizeLanguage(stored);
+      storeLanguage(chosen);
+      return chosen;
+    }
     return normalizeLanguage(window.navigator && window.navigator.language);
   }
 

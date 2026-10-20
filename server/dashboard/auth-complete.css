@@ -1,0 +1,115 @@
+/* The page that greets the user right after a GitHub sign-in.
+   It is the first thing the user sees after OAuth, so it uses the same
+   tokens as the rest of the product: the sign-in should not look like a
+   different website. The rules live in a same-origin file because the
+   page's own Content-Security-Policy forbids inline styles. */
+
+.auth-body {
+  margin: 0;
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px 20px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 460px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: var(--shadow-md);
+  padding: 32px 28px 24px;
+  text-align: center;
+}
+
+.auth-mark {
+  width: 56px;
+  height: 56px;
+  margin: 0 auto 18px;
+  border-radius: 16px;
+  display: grid;
+  place-items: center;
+  background: var(--accent-tint);
+  color: var(--accent);
+}
+
+.auth-mark svg {
+  width: 30px;
+  height: 30px;
+}
+
+.auth-card h1 {
+  margin: 0 0 10px;
+  font-size: 22px;
+  line-height: 1.35;
+  font-weight: 650;
+}
+
+.auth-card p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 15px;
+}
+
+.auth-note {
+  margin-top: 14px !important;
+  font-size: 13.5px !important;
+  color: var(--text-muted) !important;
+}
+
+.auth-lang {
+  margin-top: 26px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.auth-lang-label {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-right: 2px;
+}
+
+.lang-btn {
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  padding: 7px 13px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.lang-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.lang-btn:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.lang-btn[aria-pressed="true"] {
+  background: var(--accent-solid);
+  border-color: var(--accent-solid);
+  color: var(--on-accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lang-btn {
+    transition: none;
+  }
+}

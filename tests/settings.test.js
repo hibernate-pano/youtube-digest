@@ -120,6 +120,33 @@ test("legacy custom migration clears only the AI key and is idempotent", () => {
   assert.equal(configuredDeepSeek.aiApiKey, "new-deepseek-key");
 });
 
+test("the sign-in URL carries the interface language", () => {
+  // The page the user lands on after GitHub belongs to the sync service,
+  // so the language has to travel with the request.
+  assert.equal(
+    settings.buildGithubLoginUrl("zh-CN", "https://sync.test"),
+    "https://sync.test/api/auth/login?lang=zh-CN",
+  );
+  assert.equal(
+    settings.buildGithubLoginUrl("en", "https://sync.test"),
+    "https://sync.test/api/auth/login?lang=en",
+  );
+  // An unknown language falls back to English instead of being passed on.
+  assert.equal(
+    settings.buildGithubLoginUrl("klingon", "https://sync.test"),
+    "https://sync.test/api/auth/login?lang=en",
+  );
+  assert.equal(
+    settings.buildGithubLoginUrl(undefined, "https://sync.test/"),
+    "https://sync.test/api/auth/login?lang=en",
+  );
+  // A missing server URL is a configuration error, not a broken link.
+  assert.throws(
+    () => settings.buildGithubLoginUrl("en", ""),
+    /sync service URL is not configured/,
+  );
+});
+
 test("Supadata receives a canonical YouTube URL", () => {
   assert.equal(
     settings.canonicalYouTubeUrl("ydTeb_I0b94"),

@@ -423,6 +423,16 @@ test("OAuth login honors only same-origin redirect paths", async () => {
   assert.match(joined, /ytd_oauth_redirect=%2Fdashboard/);
   assert.match(joined, /HttpOnly/);
 
+  // A sign-in that asks for a language carries it along as a third cookie,
+  // so the landing page can greet the reader in the right language.
+  const withLanguage = await api(
+    env,
+    "GET",
+    "/api/auth/login?redirect=/dashboard&lang=zh-CN",
+  );
+  const languageCookies = withLanguage.response.headers.getSetCookie().join("\n");
+  assert.match(languageCookies, /ytd_oauth_lang=zh-CN/);
+
   const evil = await api(env, "GET", "/api/auth/login?redirect=https://evil.example");
   const evilCookies = evil.response.headers.get("set-cookie") || "";
   assert.doesNotMatch(evilCookies, /ytd_oauth_redirect=/);
@@ -694,6 +704,164 @@ test("responses carry hardening headers", async () => {
   assert.equal(complete.response.headers.get("cache-control"), "no-store");
   assert.equal(complete.response.headers.get("referrer-policy"), "no-referrer");
   assert.equal(complete.response.headers.get("x-content-type-options"), "nosniff");
+});
+
+test("the sign-in landing page speaks the language the sign-in started in", async () => {
+  const env = makeEnv();
+  // The extension asks for the language the user picked in the settings.
+  const login = await api(env, "GET", "/api/auth/login?lang=zh-CN");
+  const cookies = login.response.headers.getSetCookie
+    ? login.response.headers.getSetCookie()
+    : [login.response.headers.get("set-cookie") || ""];
+  const joined = cookies.join("\n");
+  // The language has to survive the trip to GitHub and back, so it travels
+  // in a cookie next to the CSRF state.
+  assert.match(joined, /ytd_oauth_lang=zh-CN/);
+  assert.match(joined, /HttpOnly/);
+
+  // The callback carries it on to the landing page.
+  const originalExchange = require("../src/auth").exchangeCode;
+  const originalFetchUser = require("../src/auth").fetchGithubUser;
+  require("../src/auth").exchangeCode = async () => "gh-token";
+  require("../src/auth").fetchGithubUser = async () => ({
+    githubId: 1001,
+    login: "alice",
+    avatarUrl: "",
+  });
+  try {
+    const callback = new Request(
+      "https://test.example/api/auth/callback?code=abc&state=expected",
+      {
+        headers: {
+          cookie: "ytd_oauth_state=expected; ytd_oauth_lang=zh-CN",
+        },
+      },
+    );
+    const response = await worker.fetch(callback, env);
+    assert.equal(response.status, 302);
+    const location = response.headers.get("location") || "";
+    assert.match(location, /\/auth\/complete\?lang=zh-CN#access_token=/);
+    // The language cookie is spent, so a later sign-in starts fresh.
+    const cleared = response.headers.getSetCookie
+      ? response.headers.getSetCookie().join("\n")
+      : response.headers.get("set-cookie") || "";
+    assert.match(cleared, /ytd_oauth_lang=;/);
+  } finally {
+    require("../src/auth").exchangeCode = originalExchange;
+    require("../src/auth").fetchGithubUser = originalFetchUser;
+  }
+
+  // The page itself greets the reader in that language.
+  const page = await worker.fetch(
+    new Request("https://test.example/auth/complete?lang=zh-CN"),
+    env,
+  );
+  const html = await page.text();
+  assert.match(html, /lang="zh-CN"/);
+  assert.match(html, /已用 GitHub 登录/);
+  assert.doesNotMatch(html, /Signed in to GitHub/);
+});
+
+test("the landing page greets a reader in the language they chose in the dashboard", async () => {
+  const env = makeEnv();
+  // The dashboard remembers the choice in a cookie, so the server can
+  // greet a returning reader in their own language.
+  const page = await worker.fetch(
+    new Request("https://test.example/auth/complete", {
+      headers: { cookie: "ytd_dashboard_lang=zh-CN" },
+    }),
+    env,
+  );
+  const html = await page.text();
+  assert.match(html, /lang="zh-CN"/);
+  assert.match(html, /已用 GitHub 登录/);
+  // The page states its language, so the script does not have to guess it
+  // and the reader never sees the page change language under them.
+  assert.match(html, /<html lang="zh-CN" data-lang="zh-CN">/);
+
+  // The browser's own language does not win over the reader's choice.
+  const englishBrowser = await worker.fetch(
+    new Request("https://test.example/auth/complete", {
+      headers: {
+        cookie: "ytd_dashboard_lang=zh-CN",
+        "accept-language": "en-US,en;q=0.9",
+      },
+    }),
+    env,
+  );
+  assert.match(await englishBrowser.text(), /已用 GitHub 登录/);
+
+  // A sign-in started from the dashboard carries the choice to GitHub and
+  // back, so the landing page keeps it.
+  const login = await worker.fetch(
+    new Request("https://test.example/api/auth/login", {
+      headers: { cookie: "ytd_dashboard_lang=zh-CN" },
+    }),
+    env,
+  );
+  const cookies = login.headers.getSetCookie().join("\n");
+  assert.match(cookies, /ytd_oauth_lang=zh-CN/);
+});
+
+test("the landing page falls back to the language the browser asks for", async () => {
+  const env = makeEnv();
+  const chinese = await worker.fetch(
+    new Request("https://test.example/auth/complete", {
+      headers: { "accept-language": "zh-CN,zh;q=0.9,en;q=0.8" },
+    }),
+    env,
+  );
+  const chineseHtml = await chinese.text();
+  assert.match(chineseHtml, /lang="zh-CN"/);
+  assert.match(chineseHtml, /已用 GitHub 登录/);
+
+  const english = await worker.fetch(
+    new Request("https://test.example/auth/complete", {
+      headers: { "accept-language": "en-GB,en;q=0.9" },
+    }),
+    env,
+  );
+  const englishHtml = await english.text();
+  assert.match(englishHtml, /lang="en"/);
+  assert.match(englishHtml, /Signed in to GitHub/);
+  assert.doesNotMatch(englishHtml, /已用 GitHub 登录/);
+
+  // A language the page does not speak falls back to English rather than
+  // being reflected into the page.
+  const unknown = await worker.fetch(
+    new Request("https://test.example/auth/complete?lang=<script>"),
+    env,
+  );
+  const unknownHtml = await unknown.text();
+  assert.match(unknownHtml, /lang="en"/);
+  assert.doesNotMatch(unknownHtml, /<script>alert/);
+});
+
+test("the landing page offers a language switch and ships no inline code", async () => {
+  const env = makeEnv();
+  const page = await worker.fetch(
+    new Request("https://test.example/auth/complete"),
+    env,
+  );
+  const html = await page.text();
+
+  // The reader can fix the language without leaving the page.
+  assert.match(html, /id="langSwitch"/);
+  assert.match(html, /data-lang="zh-CN"/);
+  // The page loads only same-origin files, so its strict policy costs
+  // nothing and no inline script or style is needed.
+  assert.match(html, /<script src="\/auth-complete\.js"><\/script>/);
+  assert.match(html, /<link rel="stylesheet" href="\/auth-complete\.css" \/>/);
+  // The tab shows the product's own mark.
+  assert.match(html, /<link rel="icon" href="\/favicon\.png" \/>/);
+  assert.doesNotMatch(html, /<script>/);
+  assert.doesNotMatch(html, /style="/);
+  assert.doesNotMatch(html, /on(click|change|submit|load|input|error)\s*=/i);
+
+  const csp = page.headers.get("content-security-policy") || "";
+  assert.match(csp, /default-src 'self'/);
+  assert.match(csp, /script-src 'self'/);
+  assert.match(csp, /style-src 'self'/);
 });
 
 test("the dashboard ships a Content-Security-Policy", () => {

@@ -1890,6 +1890,26 @@ async function migrateLegacyLocalNotes(githubId) {
 }
 
 /**
+ * The interface language the user picked in the settings.
+ *
+ * The sign-in page greets the user after GitHub, so it has to speak their
+ * language. A missing, empty or broken value falls back to English.
+ */
+async function readInterfaceLanguage() {
+  const key =
+    (typeof YTD_SETTINGS !== "undefined" &&
+      YTD_SETTINGS.UI_LANGUAGE_STORAGE_KEY) ||
+    "ytd_options_language";
+  try {
+    const stored = await chrome.storage.local.get(key);
+    const language = String((stored && stored[key]) || "").trim();
+    return language.toLowerCase().startsWith("zh") ? "zh-CN" : "en";
+  } catch (error) {
+    return "en";
+  }
+}
+
+/**
  * Opens the OAuth login tab. The completion redirect is caught by the
  * persistent tabs.onUpdated listener registered at the bottom of this file.
  *
@@ -1908,7 +1928,13 @@ async function handleStartGithubLogin() {
     await chrome.storage.local.remove(YTD_SETTINGS.GITHUB_SESSION_KEY);
     await chrome.storage.local.remove(YTD_SETTINGS.SYNC_EXPIRED_KEY);
   }
-  const loginUrl = YTD_SETTINGS.SERVER_BASE_URL + "/api/auth/login";
+  // The sign-in page speaks the interface language the user picked, so the
+  // page after GitHub does not greet a Chinese reader in English.
+  const language = await readInterfaceLanguage();
+  const loginUrl = YTD_SETTINGS.buildGithubLoginUrl(
+    language,
+    YTD_SETTINGS.SERVER_BASE_URL,
+  );
   const tab = await chrome.tabs.create({ url: loginUrl });
   return { success: true, tabId: tab.id, replacedExpiredSession: !!session };
 }

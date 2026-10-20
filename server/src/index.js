@@ -90,15 +90,108 @@ function redirect(location) {
   });
 }
 
-const COMPLETE_PAGE = [
-  "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\" />",
-  "<title>YouTube Digest</title></head><body style=\"font-family: system-ui; max-width: 32em; margin: 4em auto; line-height: 1.6\">",
-  "<h1>Signed in to GitHub</h1>",
-  "<p>You can close this tab and return to YouTube Digest. Your notes, vocabulary, and review progress are saved to your own account.</p>",
-  "</body></html>",
-].join("");
+/**
+ * The words on the sign-in landing page. The page is built from this table
+ * and not from two copies of the markup, so the two languages cannot drift
+ * apart.
+ */
+const COMPLETE_COPY = {
+  en: {
+    title: "Signed in to GitHub · YouTube Digest",
+    signedIn: "Signed in to GitHub",
+    body: "You can close this tab and return to YouTube Digest. Your notes, vocabulary and review progress are saved to your own account.",
+    note: "Nothing was shared with anyone but the sync service you signed in to.",
+    languageLabel: "Language",
+  },
+  "zh-CN": {
+    title: "已用 GitHub 登录 · YouTube Digest",
+    signedIn: "已用 GitHub 登录",
+    body: "你可以关掉这个标签页，回到 YouTube Digest。你的笔记、生词和复习进度都保存在你自己的账户里。",
+    note: "除了你登录的同步服务，没有任何人拿到这些数据。",
+    languageLabel: "语言",
+  },
+};
+
+/**
+ * The sign-in landing page.
+ *
+ * The language is baked into the markup, so the reader never sees the page
+ * change language after it appears. The chosen language is also written to
+ * `data-lang`, which lets the script tell which language the server picked
+ * instead of guessing it a second time.
+ */
+function completePage(lang) {
+  const language = COMPLETE_COPY[lang] ? lang : "en";
+  const copy = COMPLETE_COPY[language];
+  return [
+    `<!doctype html><html lang="${language}" data-lang="${language}"><head><meta charset="utf-8" />`,
+    '<meta name="viewport" content="width=device-width, initial-scale=1" />',
+    '<link rel="icon" href="/favicon.png" />',
+    `<title>${copy.title}</title>`,
+    '<link rel="stylesheet" href="/tokens.css" />',
+    '<link rel="stylesheet" href="/auth-complete.css" />',
+    '</head><body class="auth-body">',
+    '<main class="auth-card">',
+    '<div class="auth-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></div>',
+    `<h1 data-i18n="signedIn">${copy.signedIn}</h1>`,
+    `<p data-i18n="body">${copy.body}</p>`,
+    `<p class="auth-note" data-i18n="note">${copy.note}</p>`,
+    '<div class="auth-lang">',
+    `<span class="auth-lang-label" data-i18n-aria-label="languageLabel">${copy.languageLabel}</span>`,
+    `<div class="lang-switch" id="langSwitch" role="group" data-i18n-aria-label="languageLabel" aria-label="${copy.languageLabel}">`,
+    '<button type="button" class="lang-btn" data-lang="en" aria-pressed="false">English</button>',
+    '<button type="button" class="lang-btn" data-lang="zh-CN" aria-pressed="false">简体中文</button>',
+    "</div></div>",
+    "</main>",
+    '<script src="/auth-complete.js"></script>',
+    "</body></html>",
+  ].join("");
+}
 
 const REDIRECT_COOKIE = "ytd_oauth_redirect";
+const LANG_COOKIE = "ytd_oauth_lang";
+// The dashboard remembers the language the reader picked in a cookie as
+// well as in localStorage, so the server can greet them in that language.
+const DASHBOARD_LANG_COOKIE = "ytd_dashboard_lang";
+
+/**
+ * The languages the landing page speaks. Anything else falls back to
+ * English, so a hand-edited query parameter cannot inject text.
+ */
+function normalizeLang(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (raw === "zh-CN") return "zh-CN";
+  const lower = raw.toLowerCase();
+  if (lower.startsWith("zh")) return "zh-CN";
+  if (lower.startsWith("en")) return "en";
+  return "";
+}
+
+/**
+ * The language the browser asked for. GitHub sends the user back to the
+ * Worker, not to the browser's own page, so the landing page has to ask the
+ * browser what it would have shown.
+ */
+function preferredLanguage(request) {
+  const header = request.headers.get("accept-language") || "";
+  for (const part of header.split(",")) {
+    const tag = part.split(";")[0].trim();
+    const lang = normalizeLang(tag);
+    if (lang) return lang;
+  }
+  return "en";
+}
+
+/**
+ * The language the reader picked in the dashboard. The dashboard stores it
+ * in a cookie next to its localStorage copy, so a returning reader is
+ * greeted in the language they chose.
+ */
+function chosenLanguage(request) {
+  const cookies = auth.parseCookies(request);
+  return normalizeLang(cookies[DASHBOARD_LANG_COOKIE]);
+}
 
 /**
  * Only same-origin paths starting with "/" (and not "//") may be used as
@@ -147,6 +240,25 @@ async function handleLogin(ctx) {
     }),
   );
   const postLoginPath = safeRedirectPath(url.searchParams.get("redirect"));
+  // The language has to survive the trip to GitHub and back, so an explicit
+  // choice travels in a short-lived cookie next to the CSRF state. The
+  // extension asks for the language the user picked in its settings; a
+  // sign-in started from the dashboard carries the choice the reader made
+  // there. A language that is only the browser's preference is not a
+  // choice, so it is not stored: it is asked for again on the way back.
+  const explicitLang =
+    normalizeLang(url.searchParams.get("lang")) || chosenLanguage(ctx.request);
+  if (explicitLang) {
+    response.headers.append(
+      "Set-Cookie",
+      auth.setCookie(LANG_COOKIE, explicitLang, {
+        httpOnly: true,
+        sameSite: "Lax",
+        path: "/",
+        maxAgeSeconds: 600,
+      }),
+    );
+  }
   if (postLoginPath) {
     response.headers.append(
       "Set-Cookie",
@@ -198,10 +310,30 @@ async function handleCallback(ctx) {
   );
   const postLoginPath = safeRedirectPath(cookies[REDIRECT_COOKIE]);
   const completePath = postLoginPath || "/auth/complete";
-  const response = redirect(origin + completePath + "#access_token=" + token);
+  // The landing page speaks the language the sign-in started in. An
+  // explicit choice is written into the URL as well, so the page and the
+  // script that switches it can never disagree. A language that is only
+  // the browser's preference is not written down: the page states it in
+  // its own markup instead. Other pages (the dashboard) pick their own
+  // language and are left alone.
+  const explicitLang =
+    normalizeLang(cookies[LANG_COOKIE]) ||
+    normalizeLang(cookies[DASHBOARD_LANG_COOKIE]);
+  const lang = explicitLang || preferredLanguage(ctx.request);
+  const query =
+    completePath === "/auth/complete" && explicitLang
+      ? "?lang=" + encodeURIComponent(lang)
+      : "";
+  const response = redirect(
+    origin + completePath + query + "#access_token=" + token,
+  );
   response.headers.append(
     "Set-Cookie",
     auth.setCookie(STATE_COOKIE, "", { httpOnly: true, sameSite: "Lax", path: "/", maxAgeSeconds: 0 }),
+  );
+  response.headers.append(
+    "Set-Cookie",
+    auth.setCookie(LANG_COOKIE, "", { httpOnly: true, sameSite: "Lax", path: "/", maxAgeSeconds: 0 }),
   );
   if (postLoginPath) {
     response.headers.append(
@@ -212,10 +344,22 @@ async function handleCallback(ctx) {
   return response;
 }
 
-async function handleComplete() {
-  return new Response(COMPLETE_PAGE, {
+async function handleComplete(ctx) {
+  const url = new URL(ctx.request.url);
+  const lang =
+    normalizeLang(url.searchParams.get("lang")) ||
+    chosenLanguage(ctx.request) ||
+    preferredLanguage(ctx.request);
+  return new Response(completePage(lang), {
     headers: Object.assign(
-      { "Content-Type": "text/html; charset=utf-8" },
+      {
+        "Content-Type": "text/html; charset=utf-8",
+        // The page loads only same-origin scripts and styles, so the strict
+        // policy costs it nothing. It also blocks the script Cloudflare's
+        // edge injects into served HTML, which is the point.
+        "Content-Security-Policy":
+          "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; object-src 'none'",
+      },
       HARDENING_HEADERS,
     ),
   });
