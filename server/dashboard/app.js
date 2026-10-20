@@ -360,9 +360,18 @@
     paintLangSwitch();
     renderAll();
     renderReview({ preserveReveal: true });
-    // A message that is still on screen has to change with the page.
+    // A message that is still on screen has to change with the page. The
+    // "no retry" decision travels with it: a message that cannot be retried
+    // must not grow a retry button just because the reader changed the
+    // language.
     if (statusState.key) {
-      statusLine(copy(statusState.key, statusState.params), statusState.isError);
+      statusLine(
+        copy(statusState.key, statusState.params),
+        statusState.isError,
+        statusState.key,
+        statusState.params,
+        { retry: !statusState.noRetry },
+      );
     }
   }
 
@@ -391,18 +400,22 @@
   // A message the copy table owns is remembered by key, so a language
   // change can put it back in the new language instead of leaving one
   // English sentence behind.
-  const statusState = { key: null, params: {}, isError: false };
+  const statusState = { key: null, params: {}, isError: false, noRetry: false };
 
   function statusLine(message, isError, key, params, options) {
     statusState.key = key || null;
     statusState.params = params || {};
     statusState.isError = !!isError;
+    // The decision is remembered, not just applied: the status line is
+    // redrawn when the language changes, and a message that cannot be
+    // retried must not grow a retry button on the way.
+    statusState.noRetry = !!(options && options.retry === false);
     const el = $("statusLine");
     el.textContent = message || "";
     el.classList.toggle("error", !!isError);
     // A retry button that cannot succeed is worse than no button: it
     // invites the reader to press it and see the same failure again.
-    if (isError && !(options && options.retry === false)) {
+    if (isError && !statusState.noRetry) {
       const retry = document.createElement("button");
       retry.type = "button";
       retry.className = "ghost-btn";

@@ -541,3 +541,21 @@ test("a token with this page's nonce is accepted and the nonce is spent", async 
   // The nonce cannot be used twice.
   assert.equal(window.sessionStorage.getItem("ytd_dashboard_login_nonce"), null);
 });
+
+test("a refused sign-in keeps its message, and its lack of a retry, when the language changes", async () => {
+  const { window } = await bootDashboard({
+    signedIn: false,
+    hash: "https://ytd.example/#access_token=forged-token",
+  });
+  const status = $(window, "statusLine");
+  assert.match(status.textContent, /did not come from this page/);
+  // A retry cannot make a refused sign-in accepted, so there is none.
+  assert.equal(status.querySelector("button"), null);
+
+  // The reader changes the language. The message has to be said again in
+  // the new language - and it must not grow a retry button on the way.
+  langButton(window, "zh-CN").click();
+  await settle(window);
+  assert.match(status.textContent, /不是从本页面发起的/);
+  assert.equal(status.querySelector("button"), null);
+});
