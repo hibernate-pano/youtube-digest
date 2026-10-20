@@ -1552,3 +1552,42 @@ test("every control in the panel has a visible focus ring", () => {
     "the search container draws the ring",
   );
 });
+
+/* ============================================================
+   C. A note that did not save says why
+   ============================================================ */
+
+test("a note from the selection toolbar that did not save says why", async () => {
+  const harness = await createLoadedHarness({
+    sendMessageImpl: async (message) => {
+      if (message.action === "saveNote") {
+        return {
+          success: false,
+          error: "The device storage is full: the note could not be saved.",
+          code: "STORAGE_QUOTA_EXCEEDED",
+        };
+      }
+      return undefined;
+    },
+  });
+
+  harness.selectText("First caption", transcriptRange(harness, "First caption"));
+  await harness.fire("mouseup");
+
+  const noteButton = harness.document.querySelector(".selection-note-btn");
+  assert.ok(noteButton, "the selection toolbar has no note button");
+  harness.dispatch(noteButton, "click");
+  await harness.flush();
+
+  const toast = harness.el("panelToastText");
+  assert.match(
+    toast.textContent,
+    /storage is full/i,
+    "the reason the note was lost is not on screen",
+  );
+  assert.doesNotMatch(
+    toast.textContent,
+    /STORAGE_QUOTA_EXCEEDED/,
+    "the code reached the user",
+  );
+});

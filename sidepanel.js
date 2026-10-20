@@ -202,6 +202,14 @@ const PANEL_COPY = {
     errorCodeAiHardTimeout: "The AI provider took too long. Try again.",
     errorCodeSyncSessionExpired:
       "The GitHub session expired, so the cloud backup stopped. Sign in again to resume it.",
+    errorCodeSyncRequestTimeout:
+      "The sync service did not answer in time. Check your connection and try again.",
+    errorCodeTranscriptRequestTimeout:
+      "The transcript service did not answer in time. Try again in a moment.",
+    errorCodeStorageQuotaExceeded:
+      "This device's storage is full, so the change was not saved. Free some space in YouTube Digest Settings and try again.",
+    cacheNotSaved:
+      "This device's storage is full, so this video was not cached. Free some space in YouTube Digest Settings and try again.",
     toastDismiss: "Dismiss",
     toastDismissTitle: "Dismiss this notice",
     serviceErrorTitle: "YouTube Digest could not start",
@@ -219,6 +227,7 @@ const PANEL_COPY = {
     noTranscriptTitle: "No transcript found",
     noTranscriptMessage: "No subtitles found for this video.",
     emptyTranscriptTitle: "Empty transcript",
+    transcriptTimeoutTitle: "The transcript service did not answer",
     emptyTranscriptMessage:
       "Supadata returned an empty transcript for this video.",
     outOfCreditsTitle: "Out of credits",
@@ -413,6 +422,14 @@ const PANEL_COPY = {
     errorCodeAiHardTimeout: "AI 服务响应超时了，请重试。",
     errorCodeSyncSessionExpired:
       "GitHub 登录已过期，云端备份已经停止。重新登录即可恢复。",
+    errorCodeSyncRequestTimeout:
+      "同步服务没有在规定时间内响应。请检查网络后重试。",
+    errorCodeTranscriptRequestTimeout:
+      "字幕服务没有在规定时间内响应。请稍等一下再试。",
+    errorCodeStorageQuotaExceeded:
+      "这台设备的存储空间已满，这次改动没有保存。请在 YouTube Digest 设置里清理空间后重试。",
+    cacheNotSaved:
+      "这台设备的存储空间已满，这个视频没有被缓存。请在 YouTube Digest 设置里清理空间后重试。",
     toastDismiss: "关闭",
     toastDismissTitle: "关闭这条提示",
     serviceErrorTitle: "YouTube Digest 无法启动",
@@ -428,6 +445,7 @@ const PANEL_COPY = {
     noTranscriptTitle: "没有找到字幕",
     noTranscriptMessage: "这个视频没有可用的字幕。",
     emptyTranscriptTitle: "字幕为空",
+    transcriptTimeoutTitle: "字幕服务没有响应",
     emptyTranscriptMessage: "Supadata 返回了空字幕。",
     outOfCreditsTitle: "额度已用完",
     outOfCreditsMessage: "Supadata 额度已用完，请前往 dash.supadata.ai 充值。",
@@ -607,6 +625,9 @@ const PANEL_ERROR_CODE_COPY = {
   AI_IDLE_TIMEOUT: "errorCodeAiIdleTimeout",
   AI_HARD_TIMEOUT: "errorCodeAiHardTimeout",
   SYNC_SESSION_EXPIRED: "errorCodeSyncSessionExpired",
+  SYNC_REQUEST_TIMEOUT: "errorCodeSyncRequestTimeout",
+  TRANSCRIPT_REQUEST_TIMEOUT: "errorCodeTranscriptRequestTimeout",
+  STORAGE_QUOTA_EXCEEDED: "errorCodeStorageQuotaExceeded",
 };
 
 function normalizePanelLanguage(language) {
@@ -671,6 +692,25 @@ function panelFailureMessage(result) {
   if (copyKey) return panelCopy(copyKey);
   if (code && /^[A-Z][A-Z0-9_]*$/.test(code)) return panelCopy("errorMessage");
   return code || panelCopy("errorMessage");
+}
+
+/**
+ * Picks the sentence a failed note save is shown with.
+ *
+ * A note that did not save is a note the user lost, so the reason matters
+ * more than the mechanics. Our own code comes first: a code is the same in
+ * every language, and the sentence that explains it can be translated. A
+ * message is only used when there is no code to go by, and a message that is
+ * really a code in disguise is replaced by the generic sentence.
+ */
+function noteSaveFailureMessage(result) {
+  const code = String(result?.code || "").trim();
+  if (code && PANEL_ERROR_CODE_COPY[code]) {
+    return panelCopy(PANEL_ERROR_CODE_COPY[code]);
+  }
+  const message = String(result?.error || "").trim();
+  if (message && !/^[A-Z][A-Z0-9_]*$/.test(message)) return message;
+  return panelCopy("couldNotSave");
 }
 
 /**
@@ -2403,6 +2443,9 @@ async function saveQuoteAsNote(quote, btn) {
       loadNotes(currentVideoId);
     } else {
       console.error("[YouTube Digest] Save quote as note failed:", result.error);
+      // The button says "Error" for a second and a half, which nobody reads.
+      // The note is gone, so the reason is said out loud.
+      announceAlert(noteSaveFailureMessage(result));
       btn.textContent = panelCopy("errorTitle");
       setTimeout(() => {
         btn.textContent = originalText;
@@ -2411,6 +2454,7 @@ async function saveQuoteAsNote(quote, btn) {
     }
   } catch (error) {
     console.error("[YouTube Digest] Save quote as note error:", error);
+    announceAlert(panelCopy("couldNotSave"));
     btn.textContent = panelCopy("errorTitle");
     setTimeout(() => {
       btn.textContent = originalText;
@@ -3141,6 +3185,21 @@ function showTranscriptError(result) {
       showError(
         panelCopy("emptyTranscriptTitle"),
         result?.message || panelCopy("emptyTranscriptMessage"),
+      );
+      return;
+    case "TRANSCRIPT_REQUEST_TIMEOUT":
+      // A timeout is not a missing subtitle. Telling the user this video has
+      // no captions sends them looking for a problem that is not there.
+      showError(
+        panelCopy("transcriptTimeoutTitle"),
+        panelCopy("errorCodeTranscriptRequestTimeout"),
+        {
+          buttonLabel: panelCopy("retry"),
+          action: () => {
+            void retryTranscript();
+          },
+          secondaryAction: goToWelcome,
+        },
       );
       return;
     default:
@@ -3928,6 +3987,9 @@ function setupExplainFeature() {
       });
 
       if (!result?.success) {
+        // The reason is kept: a note that did not save is a note the user
+        // lost, and "Error" on a button is not a reason.
+        announceAlert(noteSaveFailureMessage(result));
         throw new Error(result?.error || "Could not save note");
       }
 
@@ -4310,7 +4372,13 @@ async function saveToCache(videoId) {
       timestamp: Date.now(),
     };
 
-    await chrome.storage.local.set({ [`digest_${videoId}`]: cacheData });
+    const stored = await writeDigestCache(videoId, cacheData);
+    if (!stored) {
+      // The video is not cached, so the next visit pays for the transcript
+      // again. Saying so is cheaper than a user who wonders why.
+      announceAlert(panelCopy("cacheNotSaved"));
+      return;
+    }
     debugLog(
       "Saved to cache:",
       videoId,
@@ -4318,10 +4386,59 @@ async function saveToCache(videoId) {
     );
 
     // Evict old entries if we have more than 20 videos cached
-    await evictOldCacheEntries(20);
+    await evictOldCacheEntries(LIBRARY_MAX_ENTRIES);
   } catch (error) {
     console.error("Cache save error:", error);
   }
+}
+
+/**
+ * Writes a cached digest, making room when the device storage is full.
+ *
+ * A full storage used to be a silent failure: the write threw, the catch
+ * logged it, and the user was told nothing while their video was not
+ * cached. The cached digests go first, because they are the only thing in
+ * the store that can be fetched again. Half of them are dropped first; if
+ * that is not enough, all of them are.
+ *
+ * @param {string} videoId the video the digest belongs to
+ * @param {Object} cacheData the digest to store
+ * @returns {Promise<boolean>} whether the digest made it into the store
+ */
+async function writeDigestCache(videoId, cacheData) {
+  const key = `digest_${videoId}`;
+  const write = () => chrome.storage.local.set({ [key]: cacheData });
+
+  try {
+    await write();
+    return true;
+  } catch (error) {
+    if (!isStorageQuotaError(error)) throw error;
+  }
+
+  for (const cap of [Math.floor(LIBRARY_MAX_ENTRIES / 2), 0]) {
+    await evictOldCacheEntries(cap);
+    try {
+      await write();
+      return true;
+    } catch (error) {
+      if (!isStorageQuotaError(error)) throw error;
+    }
+  }
+  return false;
+}
+
+/**
+ * Tells a full storage apart from every other failure.
+ *
+ * Only a full storage can be helped by freeing room; every other failure
+ * has to be reported as it is.
+ */
+function isStorageQuotaError(error) {
+  if (typeof YTD_SETTINGS !== "undefined" && YTD_SETTINGS.isQuotaExceededError) {
+    return YTD_SETTINGS.isQuotaExceededError(error);
+  }
+  return false;
 }
 
 /**
@@ -4760,6 +4877,8 @@ async function saveQuickNote() {
   button.disabled = true;
   button.textContent = panelCopy("saving");
 
+  let saved = false;
+  let reason = null;
   const seconds = await getCurrentPlaybackSeconds();
 
   try {
@@ -4779,15 +4898,21 @@ async function saveQuickNote() {
     });
 
     if (!result?.success) {
+      // The reason is kept, because the catch below cannot tell a full
+      // storage from anything else.
+      reason = noteSaveFailureMessage(result);
       throw new Error(result?.error || "Could not save note");
     }
 
+    saved = true;
     input.value = "";
     announceStatus(panelCopy("quickNoteSaved"));
     await loadNotes(currentNotesFilterVideoId);
   } catch (error) {
     console.error("[YouTube Digest] Quick note error:", error);
-    announceAlert(panelCopy("couldNotSave"));
+    // The note did save and the list refresh failed: saying "could not save"
+    // then would be a lie, so the failure stays quiet.
+    if (!saved) announceAlert(reason || panelCopy("couldNotSave"));
   } finally {
     button.disabled = false;
     button.textContent = original;
@@ -6369,6 +6494,10 @@ globalThis.__YTD_PANEL_TESTING__ = {
   showToast,
   hideToast,
   panelFailureMessage,
+  noteSaveFailureMessage,
+  saveQuoteAsNote,
+  writeDigestCache,
+  saveToCache,
   formatRelativeTime,
   renderSummaryGate,
   hideSummaryGate,
@@ -6394,6 +6523,11 @@ globalThis.__YTD_PANEL_TESTING__ = {
   showState,
   loadNotes,
   refreshNotesCurrentTime,
+  setCurrentVideo: (videoId, videoUrl) => {
+    onVideoChanged(videoId);
+    currentVideoUrl = videoUrl || "";
+    return currentVideoId;
+  },
   setTranscriptMode: (mode) => {
     currentTranscriptMode = DISPLAY_LANGUAGE_MODES.has(mode)
       ? mode

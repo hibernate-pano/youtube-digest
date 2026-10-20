@@ -18,7 +18,7 @@ const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
    assertion is about what the user ends up seeing.
    ============================================================ */
 
-function createStorageArea(initial = {}) {
+function createStorageArea(initial = {}, options = {}) {
   const values = { ...initial };
   return {
     values,
@@ -32,6 +32,11 @@ function createStorageArea(initial = {}) {
       return result;
     },
     async set(items) {
+      // A device can run out of room. The tests need to be able to say so.
+      if (typeof options.onSet === "function") {
+        const failure = options.onSet(items);
+        if (failure) throw failure;
+      }
       Object.assign(values, items);
     },
     async remove(keys) {
@@ -94,6 +99,7 @@ function createPanel({
   local = {},
   session = {},
   language = "en",
+  onLocalSet = null,
 } = {}) {
   const dom = new JSDOM(read("sidepanel.html"), {
     url: "chrome-extension://test/sidepanel.html",
@@ -108,7 +114,7 @@ function createPanel({
     script.remove();
   }
 
-  const localArea = createStorageArea(local);
+  const localArea = createStorageArea(local, { onSet: onLocalSet });
   const sessionArea = createStorageArea(session);
   localArea.values.ytd_options_language = language;
 
@@ -630,4 +636,210 @@ test("the first control of the Words tab is the review", () => {
     "reviewCard",
     "a keyboard user still has to walk past the word list to reach the review",
   );
+});
+
+// ============================================================
+// G: a lost note and a lost cache are both said out loud
+// ============================================================
+
+/**
+ * The failure Chrome raises when the device storage is full.
+ */
+function quotaError() {
+  const error = new Error(
+    "QUOTA_BYTES quota exceeded: the storage is full.",
+  );
+  error.name = "QuotaExceededError";
+  return error;
+}
+
+test("a note that did not save says why, in the user's language", async () => {
+  const panel = createPanel({
+    sendMessageImpl: workerRouter({
+      saveNote: {
+        success: false,
+        error: "The device storage is full: the note could not be saved.",
+        code: "STORAGE_QUOTA_EXCEEDED",
+      },
+    }),
+  });
+  await panel.boot();
+  panel.helpers.setCurrentVideo("video-1", "https://youtu.be/video-1");
+
+  panel.el("quickNoteInput").value = "a sentence worth keeping";
+  await panel.helpers.saveQuickNote();
+  await flush();
+
+  const message = panel.el("panelToastText").textContent;
+  assert.doesNotMatch(message, /STORAGE_QUOTA_EXCEEDED/, "the code reached the user");
+  assert.match(message, /storage is full/i, "the reason is not explained");
+});
+
+test("a note that did not save for any other reason still says something", async () => {
+  const panel = createPanel({
+    sendMessageImpl: workerRouter({
+      saveNote: { success: false, error: "Something broke" },
+    }),
+  });
+  await panel.boot();
+  panel.helpers.setCurrentVideo("video-1", "https://youtu.be/video-1");
+
+  panel.el("quickNoteInput").value = "a sentence worth keeping";
+  await panel.helpers.saveQuickNote();
+  await flush();
+
+  const message = panel.el("panelToastText").textContent;
+  assert.ok(message.trim().length > 5, "the failure says nothing at all");
+});
+
+test("a note that did save is not announced as a failure", async () => {
+  const panel = createPanel({
+    sendMessageImpl: workerRouter({
+      saveNote: { success: true, note: { id: "note-1" } },
+      getNotes: { success: true, notes: [] },
+    }),
+  });
+  await panel.boot();
+
+  panel.helpers.setCurrentVideo("video-1", "https://youtu.be/video-1");
+  const input = panel.el("quickNoteInput");
+  input.value = "a sentence worth keeping";
+  await panel.helpers.saveQuickNote();
+  await flush();
+
+  assert.equal(
+    panel.el("panelToastText").textContent,
+    "Note saved.",
+    "a saved note was announced as a failure",
+  );
+});
+
+test("a cached video makes room for itself when the storage is full", async () => {
+  let panel = null;
+  panel = createPanel({
+    sendMessageImpl: workerRouter(),
+    local: {
+      digest_old: { videoTitle: "Old", timestamp: Date.now() - 1000 },
+      digest_newer: { videoTitle: "Newer", timestamp: Date.now() - 500 },
+    },
+    // The store is full as long as both old digests are still in it. A
+    // write only goes through once the panel has made room.
+    onLocalSet: () => {
+      const digests = Object.keys(panel.storage.local.values).filter((key) =>
+        key.startsWith("digest_"),
+      );
+      return digests.length >= 2 ? quotaError() : null;
+    },
+  });
+
+  const stored = await panel.helpers.writeDigestCache("videoX", {
+    videoTitle: "A video",
+    timestamp: Date.now(),
+  });
+
+  assert.equal(stored, true, "the digest was not saved even though room was freed");
+  assert.ok(panel.storage.local.values.digest_videoX, "the digest is not in the store");
+  assert.equal(
+    Object.keys(panel.storage.local.values).filter((key) =>
+      key.startsWith("digest_"),
+    ).length,
+    1,
+    "the room that was freed was not freed",
+  );
+});
+
+test("a cache that cannot be saved at all is announced", async () => {
+  const panel = createPanel({
+    sendMessageImpl: workerRouter(),
+    onLocalSet: () => quotaError(),
+  });
+
+  const stored = await panel.helpers.writeDigestCache("videoX", {
+    videoTitle: "A video",
+    timestamp: Date.now(),
+  });
+
+  assert.equal(stored, false, "the cache pretends to be saved");
+});
+
+test("a timeout is not told as a missing subtitle", async () => {
+  const panel = createPanel({ sendMessageImpl: workerRouter() });
+
+  panel.helpers.showTranscriptError({ error: "TRANSCRIPT_REQUEST_TIMEOUT" });
+
+  const title = panel.el("errorTitle").textContent;
+  const message = panel.el("errorMessage").textContent;
+  assert.doesNotMatch(message, /TRANSCRIPT_REQUEST_TIMEOUT/, "the code reached the user");
+  assert.doesNotMatch(
+    title,
+    /no transcript found/i,
+    "a timeout is titled as a missing subtitle",
+  );
+  assert.match(message, /did not answer/i, "the timeout is not explained");
+});
+
+test("the new failure codes have a sentence in both languages", async () => {
+  const english = createPanel({ sendMessageImpl: workerRouter() });
+  const chinese = createPanel({ sendMessageImpl: workerRouter(), language: "zh-CN" });
+  await chinese.helpers.loadPanelLanguage();
+
+  const codes = [
+    "SYNC_REQUEST_TIMEOUT",
+    "TRANSCRIPT_REQUEST_TIMEOUT",
+    "STORAGE_QUOTA_EXCEEDED",
+  ];
+
+  // Every code has to say something about its own subject. A generic
+  // "something went wrong" would pass a length check and tell the user
+  // nothing at all.
+  const subjects = {
+    SYNC_REQUEST_TIMEOUT: /sync service/i,
+    TRANSCRIPT_REQUEST_TIMEOUT: /transcript service/i,
+    STORAGE_QUOTA_EXCEEDED: /storage/i,
+  };
+
+  for (const code of codes) {
+    const englishText = english.helpers.panelFailureMessage({ error: code });
+    assert.notEqual(englishText, code, `${code} is shown as a code`);
+    assert.ok(englishText.trim().length > 10, `${code} has no English sentence`);
+    assert.match(
+      englishText,
+      subjects[code],
+      `${code} does not say what went wrong`,
+    );
+
+    const chineseText = chinese.helpers.panelFailureMessage({ error: code });
+    assert.notEqual(chineseText, code, `${code} is shown as a code in Chinese`);
+    assert.ok(chineseText.trim().length > 4, `${code} has no Chinese sentence`);
+    assert.notEqual(
+      chineseText,
+      englishText,
+      `${code} says the same thing in both languages`,
+    );
+  }
+});
+
+test("a quote that did not save says why", async () => {
+  const panel = createPanel({
+    sendMessageImpl: workerRouter({
+      saveNote: {
+        success: false,
+        error: "The device storage is full: the note could not be saved.",
+        code: "STORAGE_QUOTA_EXCEEDED",
+      },
+    }),
+  });
+  await panel.boot();
+  panel.helpers.setCurrentVideo("video-1", "https://youtu.be/video-1");
+
+  const button = panel.document.createElement("button");
+  panel.document.body.appendChild(button);
+  await panel.helpers.saveQuoteAsNote(
+    { timestampSeconds: 12, quote: "a quote worth keeping" },
+    button,
+  );
+  await flush();
+
+  const message = panel.el("panelToastText").textContent;
+  assert.match(message, /storage is full/i, "the reason is not explained");
 });
