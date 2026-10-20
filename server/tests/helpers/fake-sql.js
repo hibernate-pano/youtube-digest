@@ -23,6 +23,172 @@ function compile(strings, values) {
   return sql;
 }
 
+// ============================================================
+// Reading the statement
+//
+// The `starred` column is tri-state: the client may send true, false, or
+// nothing at all, and the store resolves that with `coalesce`. The fake used
+// to hardcode the *correct* answer ("a null parameter keeps the stored
+// flag"), which meant a statement that said something else still behaved
+// correctly here: rewriting `coalesce($starred, notes.starred)` as
+// `coalesce($starred, false)` in the production SQL left the whole suite
+// green, even though that statement clears every favourite on every update.
+//
+// The semantics are now read out of the statement text, so the fake follows
+// whatever the production code actually asks for.
+// ============================================================
+
+/**
+ * Splits a comma separated list, ignoring commas inside parentheses.
+ * Each part keeps its position so a bound parameter can be looked up.
+ */
+function splitTopLevel(text, baseOffset = 0) {
+  const parts = [];
+  let depth = 0;
+  let start = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (character === "(") depth += 1;
+    else if (character === ")") depth -= 1;
+    else if (character === "," && depth === 0) {
+      parts.push({ text: text.slice(start, index), start: baseOffset + start });
+      start = index + 1;
+    }
+  }
+  parts.push({ text: text.slice(start), start: baseOffset + start });
+  return parts.filter((part) => part.text.trim().length > 0);
+}
+
+/** The index of the parameter bound at `position` in the compiled statement. */
+function valueIndexAt(sql, position) {
+  return sql.slice(0, position).split(PLACEHOLDER).length - 1;
+}
+
+/** The offset of the parenthesis that closes the one at `openIndex`. */
+function matchingParen(sql, openIndex) {
+  let depth = 0;
+  for (let index = openIndex; index < sql.length; index += 1) {
+    if (sql[index] === "(") depth += 1;
+    else if (sql[index] === ")") {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return sql.length;
+}
+
+/**
+ * The column list and the value list of an INSERT statement.
+ */
+function insertValues(sql) {
+  const match = /insert\s+into\s+[a-z_]+\s*\(/i.exec(sql);
+  if (!match) return null;
+  const columnsStart = match.index + match[0].length;
+  const columnsEnd = matchingParen(sql, columnsStart - 1);
+  const valuesMatch = /\bvalues\s*\(/i.exec(sql.slice(columnsEnd));
+  if (!valuesMatch) return null;
+  const valuesStart = columnsEnd + valuesMatch.index + valuesMatch[0].length;
+  const valuesEnd = matchingParen(sql, valuesStart - 1);
+  return {
+    columns: splitTopLevel(sql.slice(columnsStart, columnsEnd), columnsStart),
+    expressions: splitTopLevel(sql.slice(valuesStart, valuesEnd), valuesStart),
+  };
+}
+
+/**
+ * The `set` list of an update: either the statement's own list or, for an
+ * upsert, the conflict branch that decides what an existing row keeps.
+ */
+function setClause(sql, mode) {
+  const pattern =
+    mode === "conflict"
+      ? /\bdo\s+update\s+set\s+/i
+      : /\bupdate\s+[a-z_]+\s+set\s+/i;
+  const match = pattern.exec(sql);
+  if (!match) return null;
+  const start = match.index + match[0].length;
+  const rest = sql.slice(start);
+  const stop = /\breturning\b|\bwhere\b/i.exec(rest);
+  const end = stop ? start + stop.index : sql.length;
+  return { text: sql.slice(start, end), start };
+}
+
+/**
+ * The expression a `set` list assigns to one column.
+ */
+function assignmentFor(clause, column) {
+  for (const part of splitTopLevel(clause.text)) {
+    const match = new RegExp("^\\s*" + column + "\\s*=\\s*", "i").exec(part.text);
+    if (match) {
+      return {
+        expression: part.text.slice(match[0].length).trim(),
+        position: clause.start + part.start + match[0].length,
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * Resolves the value of the `starred` column the way Postgres would.
+ *
+ * @param {string} expression the SQL expression bound to the column.
+ * @param {unknown} parameter the value bound to the placeholder inside it.
+ * @param {boolean} stored the value the column already holds.
+ */
+function resolveStarred(expression, parameter, stored) {
+  const text = expression.trim();
+  if (text === PLACEHOLDER) return truthy(parameter);
+
+  const coalesce = /^coalesce\s*\(\s*__VAL__\s*,\s*([\s\S]+?)\s*\)$/i.exec(text);
+  if (!coalesce) {
+    throw new Error("FakeSql: unsupported starred expression -> " + text);
+  }
+  if (parameter !== null && parameter !== undefined) return truthy(parameter);
+
+  const fallback = coalesce[1].trim().toLowerCase();
+  if (fallback === "true") return true;
+  if (fallback === "false") return false;
+  if (fallback === "null") return null;
+  // A column reference (`notes.starred` or `starred`) keeps the stored flag.
+  return stored;
+}
+
+/**
+ * Resolves the `starred` column from the statement itself.
+ *
+ * @param {string} sql the compiled statement.
+ * @param {"insert"|"conflict"|"update"} mode which part of the statement
+ *   decides the value.
+ * @param {boolean} stored the value the column already holds.
+ * @param {unknown[]} values the bound parameters.
+ */
+function resolveStarredFromSql(sql, mode, stored, values) {
+  if (mode === "insert") {
+    const insert = insertValues(sql);
+    if (!insert) return stored;
+    const index = insert.columns.findIndex(
+      (column) => column.text.trim().toLowerCase() === "starred",
+    );
+    if (index === -1) return stored;
+    const expression = insert.expressions[index];
+    if (!expression) return stored;
+    const parameter = expression.text.includes(PLACEHOLDER)
+      ? values[valueIndexAt(sql, expression.start)]
+      : undefined;
+    return resolveStarred(expression.text, parameter, stored);
+  }
+
+  const clause = setClause(sql, mode);
+  if (!clause) return stored;
+  const assignment = assignmentFor(clause, "starred");
+  if (!assignment) return stored;
+  const parameter = assignment.expression.includes(PLACEHOLDER)
+    ? values[valueIndexAt(sql, assignment.position)]
+    : undefined;
+  return resolveStarred(assignment.expression, parameter, stored);
+}
+
 /**
  * The table a statement targets. INSERTs name their table after `into` and
  * carry no `from` clause, so both shapes have to be recognized for the
@@ -201,11 +367,11 @@ class FakeSql {
       return [{ count }];
     }
     if (lowered.includes("insert into users")) return this.handleUsers(lowered, values);
-    if (lowered.includes("insert into notes")) return this.handleNotes(lowered, values);
-    if (lowered.includes("update notes set starred")) return this.handleNotes(lowered, values);
-    if (lowered.includes("update notes set")) return this.handleNotes(lowered, values);
-    if (lowered.includes("delete from notes")) return this.handleNotes(lowered, values);
-    if (lowered.includes("from notes")) return this.handleNotes(lowered, values);
+    if (lowered.includes("insert into notes")) return this.handleNotes(sql, values);
+    if (lowered.includes("update notes set starred")) return this.handleNotes(sql, values);
+    if (lowered.includes("update notes set")) return this.handleNotes(sql, values);
+    if (lowered.includes("delete from notes")) return this.handleNotes(sql, values);
+    if (lowered.includes("from notes")) return this.handleNotes(sql, values);
     if (lowered.includes("insert into vocabulary")) return this.handleVocabulary(lowered, values);
     if (lowered.includes("update vocabulary")) return this.handleVocabulary(lowered, values);
     if (lowered.includes("delete from vocabulary")) return this.handleVocabulary(lowered, values);
@@ -414,9 +580,10 @@ class FakeSql {
     ).map(projectReview);
   }
 
-  handleNotes(lowered, values) {
+  handleNotes(sql, values) {
+    const lowered = sql.toLowerCase();
     if (lowered.includes("insert into notes")) {
-      const [userId, clientId, videoId, videoTitle, channelName, seconds, quote, note, starred] =
+      const [userId, clientId, videoId, videoTitle, channelName, seconds, quote, note] =
         values;
       const existing = [...this.notes.values()].find(
         (row) => sameId(row.user_id, userId) && row.client_id === clientId,
@@ -428,9 +595,14 @@ class FakeSql {
         existing.timestamp_seconds = seconds;
         existing.quote = quote;
         existing.note = note;
-        // `coalesce($starred, notes.starred)`: a null param keeps the stored
-        // flag, mirroring Postgres.
-        if (starred !== null) existing.starred = truthy(starred);
+        // The conflict branch of the upsert decides what happens to the
+        // stored flag, so that is the branch the fake follows.
+        existing.starred = resolveStarredFromSql(
+          sql,
+          "conflict",
+          existing.starred,
+          values,
+        );
         existing.updated_at = new Date().toISOString();
         return [noteRow(existing)];
       }
@@ -444,7 +616,9 @@ class FakeSql {
         timestamp_seconds: seconds,
         quote: quote,
         note: note,
-        starred: starred === null ? false : truthy(starred),
+        // A brand-new row takes the column default, so the fallback of the
+        // statement is resolved against that default.
+        starred: resolveStarredFromSql(sql, "insert", false, values),
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };
@@ -460,10 +634,10 @@ class FakeSql {
     }
 
     if (lowered.includes("update notes set starred")) {
-      const [starred, noteId, userId] = values;
+      const [, noteId, userId] = values;
       const row = this.notes.get(noteId);
       if (!row || !sameId(row.user_id, userId)) return [];
-      row.starred = truthy(starred);
+      row.starred = resolveStarredFromSql(sql, "update", row.starred, values);
       row.updated_at = new Date().toISOString();
       return [noteRow(row)];
     }
@@ -472,28 +646,28 @@ class FakeSql {
       // The sparse update is built from a hardcoded column whitelist, so the
       // fake reads the SET clause to know which columns to write and which
       // values belong to the where clause.
-      const setClause = lowered.slice(
-        lowered.indexOf("update notes set") + "update notes set".length,
-        lowered.indexOf(" where "),
-      );
-      const columns = [];
-      for (const part of setClause.split(",")) {
-        const name = /^\s*([a-z_]+)\s*=/.exec(part);
-        if (name) columns.push(name[1]);
-      }
+      const clause = setClause(sql, "update");
+      const assignments = clause
+        ? splitTopLevel(clause.text).map((part) => {
+            const name = /^\s*([a-z_]+)\s*=/.exec(part.text);
+            return name ? { column: name[1], position: clause.start + part.start } : null;
+          })
+        : [];
       const where = lowered.slice(lowered.indexOf(" where ") + " where ".length);
       const noteId = /id = __val__/.test(where) ? values[values.length - 2] : values[values.length - 1];
       const userId = values[values.length - 1];
       const row = this.notes.get(noteId);
       if (!row || !sameId(row.user_id, userId)) return [];
-      // `starred = coalesce($1, starred)`: a null param keeps the stored flag.
-      columns.forEach((column, index) => {
+      assignments.forEach((assignment, index) => {
+        if (!assignment) return;
         const value = values[index];
-        if (column === "starred") {
-          if (value !== null) row.starred = truthy(value);
+        if (assignment.column === "starred") {
+          // `starred = coalesce($1, starred)`: a null param keeps the stored
+          // flag. The statement decides, not this helper.
+          row.starred = resolveStarredFromSql(sql, "update", row.starred, values);
           return;
         }
-        const target = NOTE_COLUMN_MAP[column];
+        const target = NOTE_COLUMN_MAP[assignment.column];
         if (target) row[target] = value;
       });
       row.updated_at = new Date().toISOString();
