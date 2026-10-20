@@ -75,20 +75,32 @@ function loadSidepanelHelpers({
   return sandbox.__YTD_TRANSCRIPT_TESTING__;
 }
 
+/**
+ * A stand-in for chrome.storage that behaves like the real one: the values
+ * are copied on the way in and on the way out.
+ *
+ * The real storage clones what it keeps. A mock that hands back the very
+ * array it was given would let a list that was read before an upload change
+ * under the caller's feet, and a bug that loses a note in the browser would
+ * stay invisible in the test.
+ */
 function createStorageMock(initial = {}) {
   const values = { ...initial };
+  const copy = (value) => structuredClone(value);
   return {
     async get(keys) {
-      if (keys === null) return { ...values };
+      if (keys === null) return copy(values);
       const requested = Array.isArray(keys) ? keys : [keys];
       const result = {};
       for (const key of requested) {
-        if (Object.hasOwn(values, key)) result[key] = values[key];
+        if (Object.hasOwn(values, key)) result[key] = copy(values[key]);
       }
       return result;
     },
     async set(items) {
-      Object.assign(values, items);
+      for (const [key, value] of Object.entries(items)) {
+        values[key] = copy(value);
+      }
     },
     async remove(keys) {
       for (const key of Array.isArray(keys) ? keys : [keys]) {
@@ -1224,7 +1236,8 @@ test("a failed sync never hands the signed-out notes to the next account", async
   });
 
   // Alice signs in, but the upload fails.
-  const login = await helpers.completeGithubLogin("token-alice", null);
+  const aliceNonce = await helpers.startPendingLogin();
+  const login = await helpers.completeGithubLogin("token-alice", null, aliceNonce);
   assert.equal(login.success, false, "the failed sync is reported");
   const afterAlice = await storageMock.get(null);
   assert.equal(
@@ -1241,7 +1254,8 @@ test("a failed sync never hands the signed-out notes to the next account", async
   // Bob signs in on the same device.
   syncFails = false;
   requests.length = 0;
-  const bobLogin = await helpers.completeGithubLogin("token-bob", null);
+  const bobNonce = await helpers.startPendingLogin();
+  const bobLogin = await helpers.completeGithubLogin("token-bob", null, bobNonce);
   assert.equal(bobLogin.success, true, JSON.stringify(bobLogin));
   const afterBob = await storageMock.get(null);
   assert.equal(
@@ -1592,9 +1606,11 @@ test("re-login replaces a dead session instead of short-circuiting", async () =>
   assert.equal(started.replacedExpiredSession, true);
   assert.equal(typeof started.tabId, "number");
   assert.equal(helpers.openedLoginTabs.length, 1);
-  assert.equal(
+  assert.ok(
+    helpers.openedLoginTabs[0].startsWith(
+      "https://sync.test/api/auth/login?lang=en",
+    ),
     helpers.openedLoginTabs[0],
-    "https://sync.test/api/auth/login?lang=en",
   );
   // The dead session is dropped so the OAuth redirect can install a fresh one,
   // while the account's local notes survive untouched.
@@ -1616,9 +1632,11 @@ test("the sign-in page is opened in the language the user picked", async () => {
 
   await helpers.handleStartGithubLogin();
   assert.equal(helpers.openedLoginTabs.length, 1);
-  assert.equal(
+  // The URL carries the language and the nonce of this sign-in: the nonce
+  // is what makes the returned token ours.
+  assert.match(
     helpers.openedLoginTabs[0],
-    "https://sync.test/api/auth/login?lang=zh-CN",
+    /^https:\/\/sync\.test\/api\/auth\/login\?lang=zh-CN&nonce=[A-Za-z0-9_-]{16,64}$/,
   );
 });
 
@@ -2102,5 +2120,124 @@ test("a note without any text still finds the transcript line", async () => {
     requests.length,
     0,
     "the cached transcript was not used",
+  );
+});
+
+test("a sign-in that does not carry this device's nonce is refused", async () => {
+  // A link that carries somebody else's token must not switch the account
+  // on this device: it would move the notes saved here into that account,
+  // where the sender of the link can read them.
+  const storageMock = createStorageMock({});
+  const helpers = loadBackgroundHelpers({
+    storageMock,
+    fetchImpl: async (url) => {
+      if (String(url).endsWith("/api/me")) {
+        return {
+          ok: true,
+          json: async () => ({
+            user: { id: "1", githubId: 1001, login: "alice" },
+          }),
+        };
+      }
+      return { ok: true, json: async () => ({ notes: [], vocabulary: [] }) };
+    },
+  });
+
+  const withoutNonce = await helpers.completeGithubLogin(
+    "token-alice",
+    null,
+    "",
+  );
+  assert.equal(withoutNonce.success, false);
+
+  const wrongNonce = await helpers.completeGithubLogin(
+    "token-alice",
+    null,
+    "0123456789abcdef0123",
+  );
+  assert.equal(wrongNonce.success, false);
+
+  const stored = await storageMock.get(null);
+  assert.equal(
+    stored.ytd_github_session,
+    undefined,
+    "no session may be created from a sign-in that is not ours",
+  );
+
+  // The nonce is spent: the same sign-in cannot be completed twice.
+  const nonce = await helpers.startPendingLogin();
+  const first = await helpers.completeGithubLogin("token-alice", null, nonce);
+  assert.equal(first.success, true, JSON.stringify(first));
+  const replay = await helpers.completeGithubLogin("token-bob", null, nonce);
+  assert.equal(replay.success, false, "the nonce cannot be used twice");
+});
+
+test("a note saved while another one is being uploaded is not lost", async () => {
+  // The upload takes time. A note saved in the meantime must still be there
+  // when the upload finishes: the upload may not write back the list it
+  // read before it started, because that list knows nothing about the note
+  // the user saved while it was running.
+  const storageMock = createStorageMock({
+    ytd_github_session: {
+      token: "token-alice",
+      login: "alice",
+      githubId: 1001,
+      savedAt: Date.now(),
+    },
+  });
+  let uploadStarted = false;
+  let signalStarted;
+  const started = new Promise((resolve) => {
+    signalStarted = resolve;
+  });
+  let releasePush;
+  const gate = new Promise((resolve) => {
+    releasePush = resolve;
+  });
+  const helpers = loadBackgroundHelpers({
+    storageMock,
+    fetchImpl: async (url, options) => {
+      if (
+        options.method === "POST" &&
+        String(url).endsWith("/api/notes") &&
+        !uploadStarted
+      ) {
+        // Only the first upload hangs; the second one goes through, so the
+        // note saved during the first upload is really saved.
+        uploadStarted = true;
+        signalStarted();
+        await gate;
+      }
+      return { ok: true, json: async () => ({ note: { id: "cloud-1" } }) };
+    },
+  });
+
+  const first = helpers.saveNoteToStorage({
+    id: "note-1",
+    text: "the first note",
+    videoId: "abc123xyz",
+    createdAt: 1,
+  });
+  // Wait until the upload of the first note is really running.
+  await started;
+  // The user saves a second note while the first one is still uploading.
+  await helpers.saveNoteToStorage({
+    id: "note-2",
+    text: "the second note",
+    videoId: "abc123xyz",
+    createdAt: 2,
+  });
+  releasePush();
+  await first;
+
+  const stored = await storageMock.get(null);
+  // Array.from, not storedList.map: the list was built inside the extension's
+  // own realm, and an array from another realm is not deep-equal to one from
+  // this one even when they hold the same values.
+  const ids = Array.from(stored.ytd_notes_1001 || [], (note) => note.id).sort();
+  assert.deepEqual(
+    ids,
+    ["note-1", "note-2"],
+    "the note saved during the upload must still be there",
   );
 });

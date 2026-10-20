@@ -431,13 +431,12 @@ class MemoryStore {
         this.reviews.delete(reviewKey(userId, key));
       }
     }
-    // The account row is kept as a revocation tombstone: bumping the token
-    // version invalidates every token issued before the deletion, so the
-    // deleted account can never act again.
-    for (const user of this.users.values()) {
-      if (String(user.id) === String(userId)) {
-        user.tokenVersion = (user.tokenVersion || 0) + 1;
-      }
+    // The account row goes too: "delete my account and all my data" has to
+    // mean the GitHub identity as well, not only the notes. Deleting it
+    // revokes every token the account issued, because the token names an
+    // account that no longer exists.
+    for (const [key, user] of [...this.users.entries()]) {
+      if (String(user.id) === String(userId)) this.users.delete(key);
     }
     return before;
   }
@@ -839,11 +838,13 @@ class NeonStore {
     await this.sql`
       delete from vocabulary where user_id = ${userId}
     `;
-    // The account row is kept as a revocation tombstone: bumping the token
-    // version invalidates every token issued before the deletion, so the
-    // deleted account can never act again.
+    // The account row goes too: "delete my account and all my data" has
+    // to mean the GitHub identity as well, not only the notes. The rows
+    // above are already gone, and deleting the account revokes every token
+    // it issued: the account can no longer be found, so the token that
+    // names it is refused.
     await this.sql`
-      update users set token_version = token_version + 1 where id = ${userId}
+      delete from users where id = ${userId}
     `;
     return Number(result[0].count) || 0;
   }

@@ -527,48 +527,30 @@ const YTD_OPTIONS = (() => {
       }
     }
 
-    async function finalizeGithubLogin(token, tabId) {
-      try {
-        const profile = await fetchGithubProfile(token);
-        if (!profile) throw new Error("Profile unavailable");
-        await storage.set({
-          [settingsApi.GITHUB_SESSION_KEY]: {
-            token,
-            login: profile.login,
-            githubId: profile.githubId,
-            savedAt: Date.now(),
-          },
-        });
-        renderGithubSignedIn(profile.login);
-        try {
-          await root.chrome?.tabs?.remove?.(tabId);
-        } catch (_error) {
-          // The tab may already be closed by the user.
-        }
-      } catch (_error) {
-        setStatus(githubStatus, "githubLoginFailed");
-      }
-    }
-
     async function startGithubLogin() {
       // The sign-in page speaks the interface language the user picked, so
       // the page after GitHub does not greet a Chinese reader in English.
+      //
+      // The nonce ties the sign-in to this browser. The sync service hands
+      // it back with the token, and the background only accepts a token
+      // that carries it: a link with somebody else's token in it would
+      // otherwise sign the user into that account and move their notes
+      // there.
+      const nonce = settingsApi.createLoginNonce();
+      const session = root.chrome?.storage?.session;
+      if (session) {
+        await session.set({
+          [settingsApi.PENDING_LOGIN_NONCE_KEY]: nonce,
+        });
+      }
       const loginUrl = settingsApi.buildGithubLoginUrl(
         currentLanguage,
         settingsApi.SERVER_BASE_URL,
+        nonce,
       );
-      const tab = await root.chrome.tabs.create({ url: loginUrl });
-      const marker = settingsApi.SERVER_BASE_URL + "/auth/complete#access_token=";
-      const onUpdated = (tabId, changeInfo, updatedTab) => {
-        const url =
-          (updatedTab && updatedTab.url) ||
-          (changeInfo && changeInfo.url) ||
-          "";
-        if (tabId !== tab.id || !url.startsWith(marker)) return;
-        root.chrome.tabs.onUpdated.removeListener(onUpdated);
-        finalizeGithubLogin(url.slice(marker.length), tabId);
-      };
-      root.chrome.tabs.onUpdated.addListener(onUpdated);
+      await root.chrome.tabs.create({ url: loginUrl });
+      // The background finishes the sign-in and says so; this page only
+      // shows the result.
     }
 
     async function logoutGithub() {
@@ -655,6 +637,17 @@ const YTD_OPTIONS = (() => {
 
     async function loadOptions() {
       void loadGithubAccount();
+      // The background completes the sign-in and announces it. Without this
+      // the page would sit on "sign in" while the sign-in had already
+      // succeeded.
+      root.chrome?.runtime?.onMessage?.addListener?.((message) => {
+        if (!message || typeof message !== "object") return;
+        if (message.action === "githubLoginChanged") {
+          void loadGithubAccount();
+        } else if (message.action === "githubLoginFailed") {
+          setStatus(githubStatus, "githubLoginFailed");
+        }
+      });
       try {
         applyLanguage(await readPreferredLanguage(storage));
       } catch (_error) {

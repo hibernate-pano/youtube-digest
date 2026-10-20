@@ -7,6 +7,11 @@
   const TOKEN_KEY = "ytd_dashboard_token";
   const LANG_KEY = "ytd_dashboard_lang";
   const LOGIN_PATH = "/api/auth/login?redirect=/";
+  // The sign-in is tied to the page that started it. The sync service hands
+  // the nonce back with the token, and a token that arrives without the
+  // matching nonce is not ours: it would quietly sign the reader into
+  // somebody else's account.
+  const NONCE_KEY = "ytd_dashboard_login_nonce";
   const STATE = { token: "", user: null, notes: [], vocabulary: [] };
 
   // The three learning states a saved word can be in. The label is what the
@@ -105,6 +110,8 @@
       accountDeleted: "Account deleted. Sorry to see you go.",
       signedOut: "Signed out. Your data stays in your account.",
       sessionExpired: "Session expired. Sign in again.",
+      signInNotOurs:
+        "This sign-in did not come from this page, so it was not accepted. Please sign in again.",
       requestFailed: "Request failed ({status})",
       copyFailed: "Could not copy: {message}",
       confirmDeleteNote: "Delete this note?",
@@ -184,6 +191,7 @@
       accountDeleted: "账号已删除。很遗憾你要离开。",
       signedOut: "已退出登录。你的数据仍保留在账号里。",
       sessionExpired: "登录状态已过期，请重新登录。",
+      signInNotOurs: "这次登录不是从本页面发起的，因此没有被接受。请重新登录。",
       requestFailed: "请求失败（{status}）",
       copyFailed: "复制失败：{message}",
       confirmDeleteNote: "确定删除这条笔记吗？",
@@ -385,14 +393,16 @@
   // English sentence behind.
   const statusState = { key: null, params: {}, isError: false };
 
-  function statusLine(message, isError, key, params) {
+  function statusLine(message, isError, key, params, options) {
     statusState.key = key || null;
     statusState.params = params || {};
     statusState.isError = !!isError;
     const el = $("statusLine");
     el.textContent = message || "";
     el.classList.toggle("error", !!isError);
-    if (isError) {
+    // A retry button that cannot succeed is worse than no button: it
+    // invites the reader to press it and see the same failure again.
+    if (isError && !(options && options.retry === false)) {
       const retry = document.createElement("button");
       retry.type = "button";
       retry.className = "ghost-btn";
@@ -422,7 +432,11 @@
     const data = await response.json().catch(() => null);
     if (response.status === 401) {
       signOut();
-      throw new Error(copy("sessionExpired"));
+      // The session is gone for good. Signing in again is the way out, so
+      // the message must not offer a retry that cannot work.
+      const error = new Error(copy("sessionExpired"));
+      error.noRetry = true;
+      throw error;
     }
     if (!response.ok) {
       throw new Error(
@@ -828,12 +842,87 @@
     }
   }
 
+  /**
+   * A random value that ties a sign-in to this page.
+   *
+   * The sync service gives the nonce back with the token. A token that
+   * arrives without it is refused: without this, a crafted link could
+   * switch the reader to another account and show that account's notes.
+   */
+  function createLoginNonce() {
+    const bytes = new Uint8Array(16);
+    window.crypto.getRandomValues(bytes);
+    let nonce = "";
+    for (const byte of bytes) nonce += byte.toString(16).padStart(2, "0");
+    return nonce;
+  }
+
+  function readPendingNonce() {
+    try {
+      return window.sessionStorage.getItem(NONCE_KEY) || "";
+    } catch {
+      // Private mode can refuse to store anything. The sign-in then does
+      // not complete, and the reader is asked to try again.
+      return "";
+    }
+  }
+
+  function clearPendingNonce() {
+    try {
+      window.sessionStorage.removeItem(NONCE_KEY);
+    } catch {
+      // Nothing to do: the nonce is already gone.
+    }
+  }
+
+  /**
+   * Puts the nonce into the sign-in links.
+   *
+   * The link stays a link: the nonce is added when the reader presses it,
+   * so the button works the same way with the mouse and with the keyboard.
+   */
+  function prepareSignInLinks() {
+    document.querySelectorAll('a[href^="/api/auth/login"]').forEach((link) => {
+      const base = link.getAttribute("href") || LOGIN_PATH;
+      link.addEventListener("click", () => {
+        const nonce = createLoginNonce();
+        try {
+          window.sessionStorage.setItem(NONCE_KEY, nonce);
+        } catch {
+          // Without storage the nonce cannot come back, so the sign-in is
+          // left as it is. It will be refused on the way back, which is the
+          // honest outcome.
+          return;
+        }
+        const separator = base.includes("?") ? "&" : "?";
+        link.setAttribute("href", base + separator + "nonce=" + encodeURIComponent(nonce));
+      });
+    });
+  }
+
   async function boot() {
-    // OAuth completes with #access_token=... on this page.
+    // OAuth completes with #access_token=... on this page. The token is only
+    // ours when the nonce that came with it is the one this page produced
+    // when the reader pressed "Sign in": a link that carries somebody else's
+    // token carries no nonce of ours, and it is refused.
     const match = location.hash.match(/access_token=([^&]+)/);
     if (match) {
-      localStorage.setItem(TOKEN_KEY, decodeURIComponent(match[1]));
+      const nonceMatch = location.hash.match(/nonce=([^&]+)/);
+      const expected = readPendingNonce();
+      const received = nonceMatch ? decodeURIComponent(nonceMatch[1]) : "";
       history.replaceState(null, "", location.pathname);
+      clearPendingNonce();
+      if (!expected || !received || received !== expected) {
+        // Not our sign-in. The reader stays signed out, the button is right
+        // there, and the reason is said once without a retry that cannot
+        // work.
+        showSignedOut();
+        statusLine(copy("signInNotOurs"), true, "signInNotOurs", null, {
+          retry: false,
+        });
+        return;
+      }
+      localStorage.setItem(TOKEN_KEY, decodeURIComponent(match[1]));
     }
     STATE.token = localStorage.getItem(TOKEN_KEY) || "";
     if (!STATE.token) {
@@ -847,7 +936,18 @@
       await loadAll();
     } catch (error) {
       showSignedOut();
-      statusLine(error.message, true);
+      // An expired session is not a broken page: the reader is signed out
+      // and the sign-in button is right there. It is said calmly, without
+      // the red error colour of a failure.
+      if (error.noRetry) {
+        // The key is remembered, so a language change puts the sentence
+        // back in the new language instead of leaving English behind.
+        statusLine(error.message, false, "sessionExpired", null, {
+          retry: false,
+        });
+      } else {
+        statusLine(error.message, true);
+      }
     }
   }
 
@@ -857,6 +957,7 @@
     language = detectLanguage();
     applyCopy();
     paintLangSwitch();
+    prepareSignInLinks();
 
     $("refreshBtn").addEventListener("click", () => {
       void loadAll();

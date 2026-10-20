@@ -5,9 +5,17 @@
 const jwt = require("./jwt");
 
 class HttpError extends Error {
-  constructor(status, message) {
+  /**
+   * @param {number} status the HTTP status to answer with
+   * @param {string} message the message the client may see
+   * @param {Record<string, string>} [headers] extra response headers, used
+   *   for the few errors that have to change the browser's state (clearing a
+   *   cookie that must not be reused)
+   */
+  constructor(status, message, headers) {
     super(message);
     this.status = status;
+    this.headers = headers || null;
   }
 }
 

@@ -67,28 +67,30 @@ async function recordDroppedVocabulary(count) {
 
 async function saveNoteToStorage(note) {
   const namespace = await notesNamespace();
-  const result = await chrome.storage.local.get(namespace);
-  const notes = result[namespace] || [];
-  notes.unshift(note); // Add to beginning (newest first)
+  await withNamespaceLock(namespace, async () => {
+    const result = await chrome.storage.local.get(namespace);
+    const notes = result[namespace] || [];
+    notes.unshift(note); // Add to beginning (newest first)
 
-  // Keep only the most recent notes to prevent storage bloat. The cap lives
-  // in settings.js as MAX_LOCAL_NOTES, so the panel can show the same number
-  // the store enforces instead of a second copy that drifts.
-  const MAX_NOTES = YTD_SETTINGS.MAX_LOCAL_NOTES;
-  let dropped = 0;
-  if (notes.length > MAX_NOTES) {
-    dropped = notes.length - MAX_NOTES;
-    notes.splice(MAX_NOTES);
-    // A note that vanishes without a word is a note the user lost. The drop
-    // is recorded so the panel can say so out loud, and it is logged so it
-    // is never a silent truncation.
-    await recordDroppedNotes(dropped);
-    console.warn(
-      `[YouTube Digest] ${dropped} note(s) were dropped: the local store keeps the newest ${MAX_NOTES}.`,
-    );
-  }
+    // Keep only the most recent notes to prevent storage bloat. The cap lives
+    // in settings.js as MAX_LOCAL_NOTES, so the panel can show the same number
+    // the store enforces instead of a second copy that drifts.
+    const MAX_NOTES = YTD_SETTINGS.MAX_LOCAL_NOTES;
+    let dropped = 0;
+    if (notes.length > MAX_NOTES) {
+      dropped = notes.length - MAX_NOTES;
+      notes.splice(MAX_NOTES);
+      // A note that vanishes without a word is a note the user lost. The drop
+      // is recorded so the panel can say so out loud, and it is logged so it
+      // is never a silent truncation.
+      await recordDroppedNotes(dropped);
+      console.warn(
+        `[YouTube Digest] ${dropped} note(s) were dropped: the local store keeps the newest ${MAX_NOTES}.`,
+      );
+    }
 
-  await chrome.storage.local.set({ [namespace]: notes });
+    await chrome.storage.local.set({ [namespace]: notes });
+  });
 
   // Cloud mirror: best-effort, never blocks the local save.
   const session = await getGithubSession();
@@ -100,11 +102,14 @@ async function saveNoteToStorage(note) {
         // Remember the server id. Without it the next full sync treats the
         // note as never synced and pushes it again, and the favorite flag
         // would travel with it even though the user never touched it here.
-        note.cloudId = cloudId;
+        // Only this note is written back: another note may have been saved
+        // while the upload was running, and writing the whole list from
+        // before the upload would drop it.
+        const changes = { cloudId };
         if (typeof note.starred === "boolean") {
-          note.starredSynced = note.starred;
+          changes.starredSynced = note.starred;
         }
-        await chrome.storage.local.set({ [namespace]: notes });
+        await patchStoredItem(namespace, note.id, changes);
         // The note is on the server again. A delete of this note that was
         // still on its way is older than the note itself and must not be
         // applied to it - otherwise a note the user re-created would be
@@ -131,13 +136,17 @@ async function handleUpdateNote(noteId, text) {
     const cleanText = String(text || "").trim().slice(0, 20000);
     if (!cleanText) return { success: false, error: "EMPTY_NOTE" };
     const namespace = await notesNamespace();
-    const notes = await readLocalNotes(namespace);
-    const note = notes.find((candidate) => candidate.id === noteId);
+    const note = await withNamespaceLock(namespace, async () => {
+      const notes = await readLocalNotes(namespace);
+      const found = notes.find((candidate) => candidate.id === noteId);
+      if (!found) return null;
+      found.text = cleanText;
+      found.rawText = cleanText;
+      found.updatedAt = Date.now();
+      await writeLocalNotes(namespace, notes);
+      return found;
+    });
     if (!note) return { success: false, error: "Note not found" };
-    note.text = cleanText;
-    note.rawText = cleanText;
-    note.updatedAt = Date.now();
-    await writeLocalNotes(namespace, notes);
     const session = await getGithubSession();
     if (session) {
       try {
@@ -152,17 +161,19 @@ async function handleUpdateNote(noteId, text) {
           const pushed = await pushNoteToCloud(session, note, payload);
           const cloudId = pushed && pushed.note && pushed.note.id;
           if (cloudId) {
-            note.cloudId = cloudId;
-            await writeLocalNotes(namespace, notes);
+            // Only this note is written back: another note may have been
+            // saved while the upload was running.
+            await patchStoredItem(namespace, noteId, { cloudId });
           }
         }
         // Only a payload that carried the flag can move the baseline: when
         // the flag was left out, the server kept its own value, and that is
         // what the next local change has to be measured against.
         if (payload.starred !== undefined && typeof note.starred === "boolean") {
-          note.starredSynced = note.starred;
-          note.starredDirty = false;
-          await writeLocalNotes(namespace, notes);
+          await patchStoredItem(namespace, noteId, {
+            starredSynced: note.starred,
+            starredDirty: false,
+          });
         }
       } catch (error) {
         reportSyncSessionExpired(error);
@@ -188,12 +199,16 @@ async function handleSetNoteStarred(noteId, starred) {
   try {
     const next = starred === true;
     const namespace = await notesNamespace();
-    const notes = await readLocalNotes(namespace);
-    const note = notes.find((candidate) => candidate.id === noteId);
+    const note = await withNamespaceLock(namespace, async () => {
+      const notes = await readLocalNotes(namespace);
+      const found = notes.find((candidate) => candidate.id === noteId);
+      if (!found) return null;
+      found.starred = next;
+      found.starredDirty = true;
+      await writeLocalNotes(namespace, notes);
+      return found;
+    });
     if (!note) return { success: false, error: "Note not found" };
-    note.starred = next;
-    note.starredDirty = true;
-    await writeLocalNotes(namespace, notes);
     const session = await getGithubSession();
     if (session) {
       try {
@@ -206,12 +221,17 @@ async function handleSetNoteStarred(noteId, starred) {
         } else {
           const pushed = await pushNoteToCloud(session, note);
           const cloudId = pushed && pushed.note && pushed.note.id;
-          if (cloudId) note.cloudId = cloudId;
+          if (cloudId) {
+            // Only this note is written back: another note may have been
+            // saved while the upload was running.
+            await patchStoredItem(namespace, noteId, { cloudId });
+          }
         }
         // The server confirmed the flag: it is the new baseline.
-        note.starredSynced = next;
-        note.starredDirty = false;
-        await writeLocalNotes(namespace, notes);
+        await patchStoredItem(namespace, noteId, {
+          starredSynced: next,
+          starredDirty: false,
+        });
       } catch (error) {
         reportSyncSessionExpired(error);
         console.warn("[YouTube Digest] Note star cloud sync failed:", error.message);
@@ -268,12 +288,15 @@ async function handleDeleteNote(noteId) {
       }
     }
     // The note disappears from this device now, whether or not the network
-    // is up.
-    const notes = await readLocalNotes(namespace);
-    await writeLocalNotes(
-      namespace,
-      notes.filter((note) => String(note.id) !== clientId),
-    );
+    // is up. The list is read again here: a note saved while the intent
+    // was being recorded must not be thrown away with it.
+    await withNamespaceLock(namespace, async () => {
+      const notes = await readLocalNotes(namespace);
+      await writeLocalNotes(
+        namespace,
+        notes.filter((note) => String(note.id) !== clientId),
+      );
+    });
   } catch (error) {
     // The note is still on the device, so the delete did not happen: the
     // intent is taken back, otherwise the next sync would delete a note
@@ -527,6 +550,77 @@ async function readLocalNotes(namespace) {
 
 async function writeLocalNotes(namespace, notes) {
   await chrome.storage.local.set({ [namespace]: notes });
+}
+
+/**
+ * One writer at a time for a stored list.
+ *
+ * Storage is read-modify-write: two saves that overlap each write the list
+ * they read, and the second one drops what the first one added. The lock
+ * keeps a read and its write together. The network calls stay outside it,
+ * so a slow server cannot hold up the next save.
+ */
+const namespaceLocks = new Map();
+
+function withNamespaceLock(namespace, action) {
+  const previous = namespaceLocks.get(namespace) || Promise.resolve();
+  const next = previous.then(action, action);
+  namespaceLocks.set(
+    namespace,
+    next.then(
+      () => {},
+      () => {},
+    ),
+  );
+  return next;
+}
+
+/**
+ * Writes one item back into a stored list, leaving the others alone.
+ *
+ * The list is read again after the network call, because another save may
+ * have happened in the meantime. Writing the list that was read before the
+ * call would throw that save away.
+ */
+async function patchStoredItem(namespace, id, changes) {
+  return withNamespaceLock(namespace, async () => {
+    const current = await chrome.storage.local.get(namespace);
+    const items = current[namespace] || [];
+    const index = items.findIndex((item) => item && item.id === id);
+    if (index === -1) return null;
+    items[index] = Object.assign({}, items[index], changes);
+    await chrome.storage.local.set({ [namespace]: items });
+    return items[index];
+  });
+}
+
+/**
+ * Writes a merged list without dropping what was saved meanwhile.
+ *
+ * The merge took a while, and the user may have saved a note in between.
+ * That note is not in the merged list, so writing the merged list as it is
+ * would throw the note away. Every item of the merge is written into the
+ * list as it is now, and the items the merge never saw are kept.
+ */
+async function reconcileStoredList(namespace, mergedItems, keyOf) {
+  return withNamespaceLock(namespace, async () => {
+    const current = await chrome.storage.local.get(namespace);
+    const items = current[namespace] || [];
+    const merged = new Map();
+    for (const item of mergedItems) merged.set(keyOf(item), item);
+    // The items the merge never saw were saved while it was running, so
+    // they are the newest ones and go first.
+    const unseen = items.filter((item) => !merged.has(keyOf(item)));
+    const mergedOnly = mergedItems.filter((item) =>
+      items.some((existing) => keyOf(existing) === keyOf(item)),
+    );
+    const added = mergedItems.filter(
+      (item) => !items.some((existing) => keyOf(existing) === keyOf(item)),
+    );
+    const next = unseen.concat(mergedOnly, added);
+    await chrome.storage.local.set({ [namespace]: next });
+    return next;
+  });
 }
 
 /**
@@ -1068,8 +1162,12 @@ async function runFullSync({
       console.warn("[YouTube Digest] Sync push failed (kept locally):", error.message);
     }
   }
-  await writeLocal(namespace, mergedItems);
-  return { success: true, synced: true, count: mergedItems.length };
+  // The merge was computed from a list that was read before the upload, so
+  // the user may have saved something in the meantime. The merged list is
+  // written into the list as it is now, and what the merge never saw is
+  // kept: a note saved during a sync must not disappear because of it.
+  const written = await reconcileStoredList(namespace, mergedItems, keyOfLocal);
+  return { success: true, synced: true, count: written.length };
 }
 
 async function fullSyncNotes() {
@@ -1384,10 +1482,6 @@ async function handleSaveVocabulary(entry) {
     const sentence = String(entry && entry.sentence || "").trim().slice(0, 4000);
     if (!term) return { success: false, error: "EMPTY_TERM" };
     const namespace = await vocabularyNamespace();
-    const items = await readLocalVocabulary(namespace);
-    const existingIndex = items.findIndex(
-      (item) => vocabKey(item) === term + "|" + sentence,
-    );
     const now = Date.now();
     const item = {
       id: "vocab_" + now + "_" + Math.floor(Math.random() * 1000),
@@ -1403,31 +1497,37 @@ async function handleSaveVocabulary(entry) {
       updatedAt: now,
       cloudId: "",
     };
-    if (existingIndex >= 0) {
-      const existing = items[existingIndex];
-      item.id = existing.id;
-      item.cloudId = existing.cloudId || "";
-      item.createdAt = existing.createdAt || now;
-      item.status = existing.status || "learning";
-      items[existingIndex] = item;
-    } else {
-      items.unshift(item);
-    }
-    // The cap lives in settings.js so the panel can show the same number the
-    // store enforces. A word that disappears without a word is a word the
-    // user lost, so the drop is recorded and logged - never a silent
-    // truncation.
-    const MAX_WORDS = YTD_SETTINGS.MAX_LOCAL_VOCABULARY;
-    let dropped = 0;
-    if (items.length > MAX_WORDS) {
-      dropped = items.length - MAX_WORDS;
-      items.splice(MAX_WORDS);
-      await recordDroppedVocabulary(dropped);
-      console.warn(
-        `[YouTube Digest] ${dropped} word(s) were dropped: the local store keeps the newest ${MAX_WORDS}.`,
+    await withNamespaceLock(namespace, async () => {
+      const items = await readLocalVocabulary(namespace);
+      const existingIndex = items.findIndex(
+        (candidate) => vocabKey(candidate) === term + "|" + sentence,
       );
-    }
-    await writeLocalVocabulary(namespace, items);
+      if (existingIndex >= 0) {
+        const existing = items[existingIndex];
+        item.id = existing.id;
+        item.cloudId = existing.cloudId || "";
+        item.createdAt = existing.createdAt || now;
+        item.status = existing.status || "learning";
+        items[existingIndex] = item;
+      } else {
+        items.unshift(item);
+      }
+      // The cap lives in settings.js so the panel can show the same number the
+      // store enforces. A word that disappears without a word is a word the
+      // user lost, so the drop is recorded and logged - never a silent
+      // truncation.
+      const MAX_WORDS = YTD_SETTINGS.MAX_LOCAL_VOCABULARY;
+      let dropped = 0;
+      if (items.length > MAX_WORDS) {
+        dropped = items.length - MAX_WORDS;
+        items.splice(MAX_WORDS);
+        await recordDroppedVocabulary(dropped);
+        console.warn(
+          `[YouTube Digest] ${dropped} word(s) were dropped: the local store keeps the newest ${MAX_WORDS}.`,
+        );
+      }
+      await writeLocalVocabulary(namespace, items);
+    });
     const session = await getGithubSession();
     if (session) {
       // The word is on the device again, so a delete of this word that is
@@ -1441,8 +1541,11 @@ async function handleSaveVocabulary(entry) {
           token: session.token,
           body: localVocabToCloudPayload(item),
         });
-        item.cloudId = (pushed && pushed.vocabulary && pushed.vocabulary.id) || item.cloudId;
-        await writeLocalVocabulary(namespace, items);
+        const cloudId =
+          (pushed && pushed.vocabulary && pushed.vocabulary.id) || item.cloudId;
+        // Only this word is written back: another word may have been saved
+        // while the upload was running.
+        await patchStoredItem(namespace, item.id, { cloudId });
       } catch (error) {
         reportSyncSessionExpired(error);
         console.warn("[YouTube Digest] Vocabulary cloud save failed:", error.message);
@@ -1661,8 +1764,13 @@ async function flushPendingVocabDeletes(session, pending, tombstones) {
 async function handleDeleteVocabulary(id) {
   try {
     const namespace = await vocabularyNamespace();
-    const items = await readLocalVocabulary(namespace);
-    const target = items.find((item) => item.id === id);
+    const { items, target } = await withNamespaceLock(namespace, async () => {
+      const stored = await readLocalVocabulary(namespace);
+      return {
+        items: stored,
+        target: stored.find((item) => item.id === id),
+      };
+    });
     const session = await getGithubSession();
     const wordKey = target ? vocabKey(target) : "";
     try {
@@ -1682,9 +1790,13 @@ async function handleDeleteVocabulary(id) {
         }
       }
       // The word disappears from this device now, whether or not the
-      // network is up.
-      const remaining = items.filter((item) => item.id !== id);
-      await writeLocalVocabulary(namespace, remaining);
+      // network is up. The list is read again here: a word saved while the
+      // intent was being recorded must not be thrown away with it.
+      await withNamespaceLock(namespace, async () => {
+        const current = await readLocalVocabulary(namespace);
+        const remaining = current.filter((item) => item.id !== id);
+        await writeLocalVocabulary(namespace, remaining);
+      });
     } catch (error) {
       // The word is still on the device, so the delete did not happen: the
       // intent is taken back, otherwise the next sync would delete a word
@@ -1931,12 +2043,66 @@ async function handleStartGithubLogin() {
   // The sign-in page speaks the interface language the user picked, so the
   // page after GitHub does not greet a Chinese reader in English.
   const language = await readInterfaceLanguage();
+  // The nonce ties the sign-in to this device. The sync service hands it
+  // back with the token, and a token that arrives without it is refused:
+  // a link carrying somebody else's token would otherwise switch the user
+  // to that account and hand it the notes saved here.
+  const nonce = await startPendingLogin();
   const loginUrl = YTD_SETTINGS.buildGithubLoginUrl(
     language,
     YTD_SETTINGS.SERVER_BASE_URL,
+    nonce,
   );
   const tab = await chrome.tabs.create({ url: loginUrl });
   return { success: true, tabId: tab.id, replacedExpiredSession: !!session };
+}
+
+/**
+ * Remembers the nonce of the sign-in this device is about to start.
+ *
+ * The nonce lives in the session store: it is only needed until the
+ * sign-in finishes, and it must not survive the browser closing.
+ */
+async function startPendingLogin() {
+  const nonce = YTD_SETTINGS.createLoginNonce();
+  const store = chrome.storage.session || chrome.storage.local;
+  try {
+    await store.set({ [YTD_SETTINGS.PENDING_LOGIN_NONCE_KEY]: nonce });
+  } catch (error) {
+    // Without a stored nonce the sign-in cannot be completed safely, so
+    // there is nothing to start.
+    return "";
+  }
+  return nonce;
+}
+
+/**
+ * Checks the nonce of a finished sign-in against the one this device asked
+ * for, and spends it.
+ *
+ * A sign-in without the matching nonce is not ours: it is a link somebody
+ * made, and accepting it would sign the user into somebody else's account.
+ * A nonce that does not match is left alone, so the real sign-in can still
+ * finish.
+ */
+async function consumePendingLoginNonce(received) {
+  const store = chrome.storage.session || chrome.storage.local;
+  let expected = "";
+  try {
+    const stored = await store.get(YTD_SETTINGS.PENDING_LOGIN_NONCE_KEY);
+    expected = String(
+      (stored && stored[YTD_SETTINGS.PENDING_LOGIN_NONCE_KEY]) || "",
+    );
+  } catch (error) {
+    return false;
+  }
+  if (!expected || !received || expected !== received) return false;
+  try {
+    await store.remove(YTD_SETTINGS.PENDING_LOGIN_NONCE_KEY);
+  } catch (error) {
+    // The nonce stays, but it can only be used once the sign-in matches.
+  }
+  return true;
 }
 
 /**
@@ -1944,8 +2110,17 @@ async function handleStartGithubLogin() {
  * Validates the token against /api/me, stores the session (never the token in
  * UI-visible surfaces), syncs the account's notes, and closes the login tab.
  */
-async function completeGithubLogin(token, tabId) {
+async function completeGithubLogin(token, tabId, nonce) {
   try {
+    // A token is only ours when it carries the nonce of the sign-in this
+    // device started. Without this check, any link with a token in it would
+    // sign the user into another account and move their notes there.
+    if (!(await consumePendingLoginNonce(nonce))) {
+      console.warn(
+        "[YouTube Digest] A sign-in without the matching nonce was ignored.",
+      );
+      return { success: false, error: "This sign-in did not come from the extension." };
+    }
     const data = await cloudFetch("/api/me", { token });
     const user = data && data.user;
     if (!user) throw new Error("GitHub profile unavailable");

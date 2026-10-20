@@ -45,6 +45,15 @@ var YTD_SETTINGS = (() => {
   const SUPPORTED_UI_LANGUAGES = new Set(["en", "zh-CN"]);
 
   /**
+   * Where the pending sign-in's nonce is kept.
+   *
+   * The nonce is only needed between asking for the sign-in and finishing
+   * it, so it lives in the session store: it is gone when the browser
+   * closes, and it is never part of the user's saved data.
+   */
+  const PENDING_LOGIN_NONCE_KEY = "ytd_pending_login_nonce";
+
+  /**
    * Local storage namespace for saved notes.
    *
    * The namespace depends on the signed-in account so one learner's notes
@@ -313,12 +322,37 @@ var YTD_SETTINGS = (() => {
    * The language travels with the request, because the page the user lands
    * on after GitHub is served by the sync service, not by the extension.
    * Without it, a reader who picked Chinese would be greeted in English.
+   *
+   * The nonce ties the sign-in to this client: the sync service hands it
+   * back with the token, and a token that arrives without it is not ours.
    */
-  function buildGithubLoginUrl(language, baseUrl) {
+  function buildGithubLoginUrl(language, baseUrl, nonce) {
     const base = String(baseUrl || "").replace(/\/+$/, "");
     if (!base) throw new Error("The sync service URL is not configured.");
     const normalized = normalizeUiLanguage(language);
-    return `${base}/api/auth/login?lang=${encodeURIComponent(normalized)}`;
+    const params = [`lang=${encodeURIComponent(normalized)}`];
+    const cleanNonce = String(nonce || "").trim();
+    if (/^[A-Za-z0-9_-]{16,64}$/.test(cleanNonce)) {
+      params.push(`nonce=${encodeURIComponent(cleanNonce)}`);
+    }
+    return `${base}/api/auth/login?${params.join("&")}`;
+  }
+
+  /**
+   * A random value that ties a sign-in to the client that started it.
+   *
+   * The sync service gives the nonce back with the token. A link that
+   * carries somebody else's token carries no nonce, so it is ignored:
+   * without this, a crafted link could switch the user to another account
+   * and hand that account the notes saved on this device.
+   */
+  function createLoginNonce() {
+    if (typeof crypto === "undefined" || !crypto.getRandomValues) return "";
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    let nonce = "";
+    for (const byte of bytes) nonce += byte.toString(16).padStart(2, "0");
+    return nonce;
   }
 
   return {
@@ -328,6 +362,7 @@ var YTD_SETTINGS = (() => {
     SYNC_SESSION_EXPIRED,
     SYNC_EXPIRED_KEY,
     UI_LANGUAGE_STORAGE_KEY,
+    PENDING_LOGIN_NONCE_KEY,
     NOTES_STORAGE_KEY,
     MAX_LOCAL_NOTES,
     NOTES_DROPPED_KEY,
@@ -344,6 +379,7 @@ var YTD_SETTINGS = (() => {
     normalizeUiLanguage,
     translateSyncCopy,
     buildGithubLoginUrl,
+    createLoginNonce,
     PROVIDERS,
     KEY_FIELDS,
     getProvider,

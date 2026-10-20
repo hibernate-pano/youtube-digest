@@ -1989,6 +1989,8 @@ globalThis.__YTD_TRANSLATION_TESTING__ = {
   handleGetGithubSession,
   handleLogoutGithub,
   completeGithubLogin,
+  startPendingLogin,
+  consumePendingLoginNonce,
   saveNoteToStorage,
   handleGetNotes,
   handleDeleteNote,
@@ -2017,7 +2019,21 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   const url = (tab && tab.url) || (changeInfo && changeInfo.url) || "";
   const marker = YTD_SETTINGS.SERVER_BASE_URL + "/auth/complete#access_token=";
   if (!url.startsWith(marker)) return;
-  const token = url.slice(marker.length);
+  // The fragment carries the token and the nonce of the sign-in: the token
+  // alone is not proof that this device asked for the sign-in.
+  const fragment = url.slice(marker.length);
+  const parts = fragment.split("&");
+  const token = parts[0];
+  let nonce = "";
+  for (const part of parts.slice(1)) {
+    if (part.startsWith("nonce=")) {
+      try {
+        nonce = decodeURIComponent(part.slice("nonce=".length));
+      } catch (error) {
+        nonce = "";
+      }
+    }
+  }
   if (!token) return;
-  void completeGithubLogin(token, tabId);
+  void completeGithubLogin(token, tabId, nonce);
 });

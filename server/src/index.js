@@ -33,7 +33,19 @@ const reviews = require("./routes/reviews");
 const meRoutes = require("./routes/me");
 
 const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days
-const STATE_COOKIE = "ytd_oauth_state";
+// The `__Host-` prefix makes the browser refuse a cookie that carries a
+// Domain attribute, so a sibling subdomain of panbo.space cannot plant a
+// cookie of the same name and take over the sign-in.
+const STATE_COOKIE = "__Host-ytd_oauth_state";
+const LANG_COOKIE = "__Host-ytd_oauth_lang";
+const REDIRECT_COOKIE = "__Host-ytd_oauth_redirect";
+// The nonce binds the token in the redirect to the client that asked for
+// the sign-in, so a link someone else made cannot log the user into the
+// wrong account.
+const NONCE_COOKIE = "__Host-ytd_oauth_nonce";
+// The dashboard remembers the language the reader picked in a cookie as
+// well as in localStorage, so the server can greet them in that language.
+const DASHBOARD_LANG_COOKIE = "ytd_dashboard_lang";
 
 // Simple per-worker rate limit for the public OAuth entry point. In-memory
 // and per-isolate (approximate across replicas), which is fine for abuse
@@ -41,6 +53,14 @@ const STATE_COOKIE = "ytd_oauth_state";
 const LOGIN_RATE_WINDOW_MS = 10 * 60 * 1000;
 const LOGIN_RATE_MAX = 20;
 const loginAttempts = new Map(); // ip -> [timestamps]
+// The callback is damped on its own budget: it is the point where the
+// service calls GitHub, and a separate bucket keeps a burst of sign-ins
+// from using up the budget of the other endpoint.
+const callbackLimiter = createRateLimiter({
+  windowMs: LOGIN_RATE_WINDOW_MS,
+  max: LOGIN_RATE_MAX,
+  maxKeys: 10_000,
+});
 
 function checkLoginRate(ip) {
   const now = Date.now();
@@ -148,12 +168,6 @@ function completePage(lang) {
   ].join("");
 }
 
-const REDIRECT_COOKIE = "ytd_oauth_redirect";
-const LANG_COOKIE = "ytd_oauth_lang";
-// The dashboard remembers the language the reader picked in a cookie as
-// well as in localStorage, so the server can greet them in that language.
-const DASHBOARD_LANG_COOKIE = "ytd_dashboard_lang";
-
 /**
  * The languages the landing page speaks. Anything else falls back to
  * English, so a hand-edited query parameter cannot inject text.
@@ -181,6 +195,18 @@ function preferredLanguage(request) {
     if (lang) return lang;
   }
   return "en";
+}
+
+/**
+ * The one-time nonce a client sends when it starts a sign-in.
+ *
+ * Only a random-looking value is accepted, and it is echoed back exactly
+ * as it came in, so nothing a stranger can type ends up in the redirect.
+ */
+function normalizeNonce(value) {
+  const raw = String(value || "").trim();
+  if (!/^[A-Za-z0-9_-]{16,64}$/.test(raw)) return "";
+  return raw;
 }
 
 /**
@@ -270,6 +296,22 @@ async function handleLogin(ctx) {
       }),
     );
   }
+  // The client that asks for the sign-in gets a one-time nonce back with
+  // the token. Without it, any link carrying a token would be accepted by
+  // the extension or the dashboard, and the user would be quietly logged
+  // into somebody else's account.
+  const nonce = normalizeNonce(url.searchParams.get("nonce"));
+  if (nonce) {
+    response.headers.append(
+      "Set-Cookie",
+      auth.setCookie(NONCE_COOKIE, nonce, {
+        httpOnly: true,
+        sameSite: "Lax",
+        path: "/",
+        maxAgeSeconds: 600,
+      }),
+    );
+  }
   return response;
 }
 
@@ -278,6 +320,12 @@ async function handleCallback(ctx) {
   // Checked before the GitHub code is exchanged: a missing secret would
   // otherwise fail *after* the code was already spent.
   requireJwtSecret(env);
+  // The callback is public, so it is damped like the login route: without
+  // this, anybody could use the service to hammer GitHub's token endpoint
+  // with the project's own OAuth client.
+  if (!callbackLimiter(clientIp(ctx.request))) {
+    throw new HttpError(429, "Too many sign-in attempts. Try again in a few minutes.");
+  }
   const url = new URL(ctx.request.url);
   const code = url.searchParams.get("code") || "";
   const state = url.searchParams.get("state") || "";
@@ -287,14 +335,30 @@ async function handleCallback(ctx) {
   if (!expectedState || expectedState !== state) {
     throw new HttpError(400, "OAuth state mismatch. Restart sign-in.");
   }
+  // The state is spent by this request, whether the exchange works or not.
+  // A state that survives a failed exchange could be replayed, and every
+  // replay is another request to GitHub on the project's behalf.
+  const spentState = {
+    "Set-Cookie": auth.setCookie(STATE_COOKIE, "", {
+      httpOnly: true,
+      sameSite: "Lax",
+      path: "/",
+      maxAgeSeconds: 0,
+    }),
+  };
   const origin = url.origin;
   const redirectUri = origin + "/api/auth/callback";
-  const accessToken = await auth.exchangeCode({
-    clientId: env.GITHUB_CLIENT_ID,
-    clientSecret: env.GITHUB_CLIENT_SECRET,
-    code,
-    redirectUri,
-  });
+  let accessToken;
+  try {
+    accessToken = await auth.exchangeCode({
+      clientId: env.GITHUB_CLIENT_ID,
+      clientSecret: env.GITHUB_CLIENT_SECRET,
+      code,
+      redirectUri,
+    });
+  } catch (error) {
+    throw new HttpError(400, "The sign-in could not be completed. Restart sign-in.", spentState);
+  }
   const githubUser = await auth.fetchGithubUser(accessToken);
   const user = await env.store.upsertUser(githubUser);
   const token = await signToken(
@@ -324,9 +388,18 @@ async function handleCallback(ctx) {
     completePath === "/auth/complete" && explicitLang
       ? "?lang=" + encodeURIComponent(lang)
       : "";
-  const response = redirect(
-    origin + completePath + query + "#access_token=" + token,
-  );
+  // The nonce that came with the sign-in goes back with the token, so the
+  // client can tell its own sign-in apart from a link somebody else made.
+  const nonce = normalizeNonce(cookies[NONCE_COOKIE]);
+  const fragment =
+    "#access_token=" + token + (nonce ? "&nonce=" + encodeURIComponent(nonce) : "");
+  const response = redirect(origin + completePath + query + fragment);
+  if (nonce) {
+    response.headers.append(
+      "Set-Cookie",
+      auth.setCookie(NONCE_COOKIE, "", { httpOnly: true, sameSite: "Lax", path: "/", maxAgeSeconds: 0 }),
+    );
+  }
   response.headers.append(
     "Set-Cookie",
     auth.setCookie(STATE_COOKIE, "", { httpOnly: true, sameSite: "Lax", path: "/", maxAgeSeconds: 0 }),
@@ -521,7 +594,15 @@ module.exports = {
       // schema details, so only our own messages reach the client.
       const message =
         error instanceof HttpError ? error.message || "Request failed." : "Internal server error.";
-      return json({ error: message }, status);
+      const response = json({ error: message }, status);
+      // A few errors have to change the browser's state as well, e.g. a
+      // one-time CSRF cookie that must not survive the request that spent it.
+      if (error instanceof HttpError && error.headers) {
+        for (const [name, value] of Object.entries(error.headers)) {
+          response.headers.append(name, value);
+        }
+      }
+      return response;
     }
   },
   async scheduled(event, env) {

@@ -132,7 +132,7 @@ test("login route redirects to GitHub and sets a state cookie", async () => {
   assert.match(location, /^https:\/\/github\.com\/login\/oauth\/authorize\?/);
   assert.match(location, /client_id=client-id/);
   const cookie = result.response.headers.get("set-cookie") || "";
-  assert.match(cookie, /ytd_oauth_state=/);
+  assert.match(cookie, /__Host-ytd_oauth_state=/);
   assert.match(cookie, /HttpOnly/);
   assert.match(cookie, /SameSite=Lax/);
 });
@@ -335,7 +335,7 @@ test("input validation caps lengths and rejects empty payloads", async () => {
 test("callback rejects mismatched OAuth state", async () => {
   const env = makeEnv();
   const request = new Request("https://test.example/api/auth/callback?code=abc&state=wrong", {
-    headers: { cookie: "ytd_oauth_state=expected" },
+    headers: { cookie: "__Host-ytd_oauth_state=expected" },
   });
   const response = await worker.fetch(request, env);
   assert.equal(response.status, 400);
@@ -419,8 +419,8 @@ test("OAuth login honors only same-origin redirect paths", async () => {
   // Both cookies must survive: a single Set-Cookie header would have been
   // overwritten by the second one (the bug that broke dashboard sign-in).
   assert.equal(setCookieHeaders.length, 2, joined);
-  assert.match(joined, /ytd_oauth_state=/);
-  assert.match(joined, /ytd_oauth_redirect=%2Fdashboard/);
+  assert.match(joined, /__Host-ytd_oauth_state=/);
+  assert.match(joined, /__Host-ytd_oauth_redirect=%2Fdashboard/);
   assert.match(joined, /HttpOnly/);
 
   // A sign-in that asks for a language carries it along as a third cookie,
@@ -431,19 +431,19 @@ test("OAuth login honors only same-origin redirect paths", async () => {
     "/api/auth/login?redirect=/dashboard&lang=zh-CN",
   );
   const languageCookies = withLanguage.response.headers.getSetCookie().join("\n");
-  assert.match(languageCookies, /ytd_oauth_lang=zh-CN/);
+  assert.match(languageCookies, /__Host-ytd_oauth_lang=zh-CN/);
 
   const evil = await api(env, "GET", "/api/auth/login?redirect=https://evil.example");
   const evilCookies = evil.response.headers.get("set-cookie") || "";
-  assert.doesNotMatch(evilCookies, /ytd_oauth_redirect=/);
+  assert.doesNotMatch(evilCookies, /__Host-ytd_oauth_redirect=/);
 
   const protoRelative = await api(env, "GET", "/api/auth/login?redirect=//evil.example");
   const protoCookies = protoRelative.response.headers.get("set-cookie") || "";
-  assert.doesNotMatch(protoCookies, /ytd_oauth_redirect=/);
+  assert.doesNotMatch(protoCookies, /__Host-ytd_oauth_redirect=/);
 
   const weird = await api(env, "GET", "/api/auth/login?redirect=/dash%0dboard");
   const weirdCookies = weird.response.headers.get("set-cookie") || "";
-  assert.doesNotMatch(weirdCookies, /ytd_oauth_redirect=/);
+  assert.doesNotMatch(weirdCookies, /__Host-ytd_oauth_redirect=/);
 });
 
 test("callback redirects to the stored same-origin path with the token", async () => {
@@ -451,7 +451,7 @@ test("callback redirects to the stored same-origin path with the token", async (
   const token = await signIn(env, 1001, "alice");
   const request = new Request("https://test.example/api/auth/callback?code=abc&state=expected", {
     headers: {
-      cookie: "ytd_oauth_state=expected; ytd_oauth_redirect=%2Fdashboard",
+      cookie: "__Host-ytd_oauth_state=expected; __Host-ytd_oauth_redirect=%2Fdashboard",
     },
   });
   // Stub the GitHub exchange so no network is needed.
@@ -657,7 +657,7 @@ test("a missing or short JWT secret is reported as a configuration error", async
 
     const callback = new Request(
       "https://test.example/api/auth/callback?code=abc&state=state-1",
-      { headers: { cookie: "ytd_oauth_state=state-1" } },
+      { headers: { cookie: "__Host-ytd_oauth_state=state-1" } },
     );
     const response = await worker.fetch(callback, env);
     assert.equal(response.status, 500);
@@ -716,7 +716,7 @@ test("the sign-in landing page speaks the language the sign-in started in", asyn
   const joined = cookies.join("\n");
   // The language has to survive the trip to GitHub and back, so it travels
   // in a cookie next to the CSRF state.
-  assert.match(joined, /ytd_oauth_lang=zh-CN/);
+  assert.match(joined, /__Host-ytd_oauth_lang=zh-CN/);
   assert.match(joined, /HttpOnly/);
 
   // The callback carries it on to the landing page.
@@ -733,7 +733,7 @@ test("the sign-in landing page speaks the language the sign-in started in", asyn
       "https://test.example/api/auth/callback?code=abc&state=expected",
       {
         headers: {
-          cookie: "ytd_oauth_state=expected; ytd_oauth_lang=zh-CN",
+          cookie: "__Host-ytd_oauth_state=expected; __Host-ytd_oauth_lang=zh-CN",
         },
       },
     );
@@ -745,7 +745,7 @@ test("the sign-in landing page speaks the language the sign-in started in", asyn
     const cleared = response.headers.getSetCookie
       ? response.headers.getSetCookie().join("\n")
       : response.headers.get("set-cookie") || "";
-    assert.match(cleared, /ytd_oauth_lang=;/);
+    assert.match(cleared, /__Host-ytd_oauth_lang=;/);
   } finally {
     require("../src/auth").exchangeCode = originalExchange;
     require("../src/auth").fetchGithubUser = originalFetchUser;
@@ -800,7 +800,7 @@ test("the landing page greets a reader in the language they chose in the dashboa
     env,
   );
   const cookies = login.headers.getSetCookie().join("\n");
-  assert.match(cookies, /ytd_oauth_lang=zh-CN/);
+  assert.match(cookies, /__Host-ytd_oauth_lang=zh-CN/);
 });
 
 test("the landing page falls back to the language the browser asks for", async () => {
@@ -954,7 +954,7 @@ test("the rate limiter releases a key once the window passes", () => {
 test("a malformed cookie is skipped instead of crashing the callback", async () => {
   const env = makeEnv();
   const request = new Request("https://test.example/api/auth/callback?code=abc&state=wrong", {
-    headers: { cookie: "ytd_oauth_state=%; other=1" },
+    headers: { cookie: "__Host-ytd_oauth_state=%; other=1" },
   });
   const response = await worker.fetch(request, env);
   assert.equal(response.status, 400);
@@ -1204,6 +1204,12 @@ test("deleting the account revokes the session token", async () => {
     body: { note: "after deletion", clientId: "ghost_1" },
   });
   assert.equal(write.status, 401);
+
+  // The GitHub identity is deleted as well. The promise is "my account and
+  // all my data", not only the notes.
+  const fresh = await signIn(env, 1001, "alice");
+  const notes = await api(env, "GET", "/api/notes", { token: fresh });
+  assert.deepEqual(notes.data.notes, []);
 });
 
 test("/api/sync rejects an unparseable since parameter", async () => {
@@ -1229,3 +1235,99 @@ test("the export reports whether rows were left out", async () => {
   assert.equal(exported.data.truncated.vocabulary, 0);
 });
 
+
+test("the sign-in token is bound to the client that asked for it", async () => {
+  const env = makeEnv();
+  const nonce = "aBcD1234efGh5678iJkL";
+  const login = await worker.fetch(
+    new Request("https://test.example/api/auth/login?nonce=" + nonce),
+    env,
+  );
+  const loginCookies = login.headers.getSetCookie().join("\n");
+  // The nonce is kept in a cookie the browser sends back on its own.
+  assert.match(loginCookies, /__Host-ytd_oauth_nonce=aBcD1234efGh5678iJkL/);
+  assert.match(loginCookies, /HttpOnly/);
+
+  const originalExchange = require("../src/auth").exchangeCode;
+  const originalFetchUser = require("../src/auth").fetchGithubUser;
+  require("../src/auth").exchangeCode = async () => "gh-token";
+  require("../src/auth").fetchGithubUser = async () => ({
+    githubId: 1001,
+    login: "alice",
+    avatarUrl: "",
+  });
+  try {
+    const callback = await worker.fetch(
+      new Request("https://test.example/api/auth/callback?code=abc&state=expected", {
+        headers: {
+          cookie:
+            "__Host-ytd_oauth_state=expected; __Host-ytd_oauth_nonce=" + nonce,
+        },
+      }),
+      env,
+    );
+    const location = callback.headers.get("location") || "";
+    // The nonce comes back with the token, so the client can tell its own
+    // sign-in apart from a link somebody else made.
+    assert.match(location, /#access_token=/);
+    assert.match(location, /&nonce=aBcD1234efGh5678iJkL$/);
+    // And it is spent with the sign-in.
+    assert.match(
+      callback.headers.getSetCookie().join("\n"),
+      /__Host-ytd_oauth_nonce=;/,
+    );
+  } finally {
+    require("../src/auth").exchangeCode = originalExchange;
+    require("../src/auth").fetchGithubUser = originalFetchUser;
+  }
+
+  // A sign-in that asked for no nonce gets no nonce: a link that carries a
+  // token but no nonce is not tied to any client, and the clients ignore it.
+  const plain = await worker.fetch(
+    new Request("https://test.example/api/auth/callback?code=abc&state=expected", {
+      headers: { cookie: "__Host-ytd_oauth_state=expected" },
+    }),
+    env,
+  );
+  assert.doesNotMatch(plain.headers.get("location") || "", /nonce=/);
+});
+
+test("a nonce that does not look random is ignored", async () => {
+  const env = makeEnv();
+  const login = await worker.fetch(
+    new Request(
+      "https://test.example/api/auth/login?nonce=" +
+        encodeURIComponent("<script>alert(1)</script>"),
+    ),
+    env,
+  );
+  assert.doesNotMatch(
+    login.headers.getSetCookie().join("\n"),
+    /__Host-ytd_oauth_nonce=/,
+  );
+});
+
+test("the sign-in state is spent even when the exchange fails", async () => {
+  const env = makeEnv();
+  const originalExchange = require("../src/auth").exchangeCode;
+  require("../src/auth").exchangeCode = async () => {
+    throw new Error("GitHub said no");
+  };
+  try {
+    const callback = await worker.fetch(
+      new Request("https://test.example/api/auth/callback?code=abc&state=expected", {
+        headers: { cookie: "__Host-ytd_oauth_state=expected" },
+      }),
+      env,
+    );
+    assert.equal(callback.status, 400);
+    // The state cannot be replayed: the cookie is cleared with the failure,
+    // so the same state cannot be used to ask GitHub again.
+    assert.match(
+      callback.headers.getSetCookie().join("\n"),
+      /__Host-ytd_oauth_state=;/,
+    );
+  } finally {
+    require("../src/auth").exchangeCode = originalExchange;
+  }
+});

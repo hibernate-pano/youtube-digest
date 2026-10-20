@@ -226,7 +226,8 @@ test("a word captured while signed out is still there after signing in", async (
   assert.equal(before.items.length, 1, "the word is not there before signing in");
 
   // Now the user signs in.
-  await sandbox.completeGithubLogin("alice-token", 1);
+  const aliceNonce = await sandbox.startPendingLogin();
+  await sandbox.completeGithubLogin("alice-token", 1, aliceNonce);
 
   const after = await sandbox.handleGetVocabulary();
   assert.equal(
@@ -272,7 +273,8 @@ test("signing in uploads the words that were captured while signed out", async (
     timestampSeconds: 42,
   });
 
-  await sandbox.completeGithubLogin("alice-token", 1);
+  const aliceNonce = await sandbox.startPendingLogin();
+  await sandbox.completeGithubLogin("alice-token", 1, aliceNonce);
 
   const pushed = requestsOf(calls, "POST").filter((call) =>
     String(call.url).includes("/api/vocabulary"),
@@ -316,13 +318,15 @@ test("the words of a signed-out account are not handed to the next account", asy
   });
 
   // Alice signs in, so the word becomes hers.
-  await sandbox.completeGithubLogin("alice-token", 1);
+  const aliceNonce = await sandbox.startPendingLogin();
+  await sandbox.completeGithubLogin("alice-token", 1, aliceNonce);
   const asAlice = await sandbox.handleGetVocabulary();
   assert.equal(asAlice.items.length, 1, "the word did not reach Alice");
 
   // Bob signs in on the same device.
   delete storage.ytd_github_session;
-  await sandbox.completeGithubLogin("bob-token", 2);
+  const bobNonce = await sandbox.startPendingLogin();
+  await sandbox.completeGithubLogin("bob-token", 2, bobNonce);
   const asBob = await sandbox.handleGetVocabulary();
   assert.equal(
     asBob.items.length,
@@ -360,7 +364,8 @@ test("a word that another account already took is not imported by the next one",
   });
 
   // Bob signs in on a device that still holds Alice's word.
-  await sandbox.completeGithubLogin("bob-token", 2);
+  const bobNonce = await sandbox.startPendingLogin();
+  await sandbox.completeGithubLogin("bob-token", 2, bobNonce);
 
   const asBob = await sandbox.handleGetVocabulary();
   assert.equal(
@@ -388,7 +393,8 @@ test("a word that another account already took is not imported by the next one",
       };
     },
   });
-  await aliceSandbox.completeGithubLogin("alice-token", 1);
+  const aliceNonce = await aliceSandbox.startPendingLogin();
+  await aliceSandbox.completeGithubLogin("alice-token", 1, aliceNonce);
   const asAlice = await aliceSandbox.handleGetVocabulary();
   assert.equal(
     asAlice.items.length,

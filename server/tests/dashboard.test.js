@@ -91,6 +91,14 @@ async function bootDashboard(options = {}) {
   const calls = [];
   window.fetch = async (path, init) => {
     calls.push({ path, init });
+    if (options.expired && path.includes("/api/me")) {
+      // The token in localStorage is no longer accepted.
+      return {
+        ok: false,
+        status: 401,
+        json: async () => ({ error: "Session expired." }),
+      };
+    }
     const body = path.includes("/api/me")
       ? { user: { login: "jasper-test", id: 1 } }
       : path.includes("/api/notes")
@@ -125,6 +133,10 @@ async function bootDashboard(options = {}) {
   }
   if (options.hash) {
     window.history.replaceState(null, "", options.hash);
+  }
+  if (options.pendingNonce) {
+    // The nonce the page kept when the reader pressed "Sign in".
+    window.sessionStorage.setItem("ytd_dashboard_login_nonce", options.pendingNonce);
   }
 
   window.eval(appJs);
@@ -465,4 +477,67 @@ test("every page shows the product's mark in the browser tab", () => {
     const markup = fs.readFileSync(path.join(dashboardDir, page), "utf8");
     assert.match(markup, /<link rel="icon" href="\/favicon\.png" \/>/);
   }
+});
+
+test("an expired session says so calmly and offers no retry that cannot work", async () => {
+  const { window } = await bootDashboard({ expired: true });
+  // The reader is signed out and the sign-in button is right there.
+  assert.equal($(window, "signedOut").hidden, false);
+  const status = $(window, "statusLine");
+  assert.match(status.textContent, /Session expired/);
+  // A retry cannot bring an expired session back, so there is none.
+  assert.equal(status.querySelector("button"), null);
+  // And it is not dressed up as a failure either.
+  assert.equal(status.classList.contains("error"), false);
+});
+
+test("the sign-in link carries a nonce this page can recognize", async () => {
+  const { window } = await bootDashboard({ signedIn: false });
+  const link = window.document.querySelector('a[href^="/api/auth/login"]');
+  assert.ok(link, "the signed-out page offers a sign-in link");
+  let href = "";
+  link.addEventListener("click", (event) => {
+    // The page's own listener runs first, so the link already carries the
+    // nonce by the time this one looks.
+    href = link.getAttribute("href");
+    event.preventDefault();
+  });
+  link.click();
+
+  const nonce = window.sessionStorage.getItem("ytd_dashboard_login_nonce");
+  assert.ok(nonce, "pressing sign-in leaves a nonce behind");
+  assert.ok(nonce.length >= 16, "the nonce is long enough to be a nonce");
+  assert.ok(
+    href.includes("nonce=" + encodeURIComponent(nonce)),
+    "the link carries the very nonce the page kept",
+  );
+  assert.ok(href.includes("redirect=/"), "the link still comes back here");
+});
+
+test("a token without this page's nonce is refused", async () => {
+  const { window } = await bootDashboard({
+    signedIn: false,
+    hash: "https://ytd.example/#access_token=somebody-elses-token",
+  });
+  // The token is not ours, so it is not kept. Otherwise a link in a chat
+  // message could sign the reader into another account.
+  assert.equal(window.localStorage.getItem("ytd_dashboard_token"), null);
+  assert.equal($(window, "signedOut").hidden, false);
+  assert.match(
+    $(window, "statusLine").textContent,
+    /did not come from this page/,
+  );
+});
+
+test("a token with this page's nonce is accepted and the nonce is spent", async () => {
+  const nonce = "0123456789abcdef0123456789abcdef";
+  const { window } = await bootDashboard({
+    signedIn: false,
+    pendingNonce: nonce,
+    hash:
+      "https://ytd.example/#access_token=my-own-token&nonce=" + nonce,
+  });
+  assert.equal(window.localStorage.getItem("ytd_dashboard_token"), "my-own-token");
+  // The nonce cannot be used twice.
+  assert.equal(window.sessionStorage.getItem("ytd_dashboard_login_nonce"), null);
 });
