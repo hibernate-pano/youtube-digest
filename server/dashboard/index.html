@@ -4,7 +4,13 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!-- The dashboard loads only same-origin scripts and styles and has no
-         inline handlers, so a strict policy costs it nothing. -->
+         inline handlers, so a strict policy costs it nothing.
+
+         Cloudflare's edge injects its own inline script (bot JavaScript
+         detection) and its analytics beacon into the served HTML. This
+         policy blocks both, which is the point: the browser console shows a
+         CSP violation for the injected script, and the page keeps working.
+         See server/SETUP.md for why the zone-level setting is not changed. -->
     <meta
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; object-src 'none'"

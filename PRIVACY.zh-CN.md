@@ -38,6 +38,12 @@ YouTube Digest 是一个只用 GitHub 登录、且需要用户自备 API Key 的
 - 退出登录后，令牌仍会留在本地直到你把它删掉；你的数据在服务器上会一直保留，直到你从扩展里删除它，或者把账户删掉。
 - 这个同步服务是可选的，且与 AI 和字幕处理相互独立：未登录时，笔记数据完全不会离开设备。
 
+### 中间的网络
+
+同步服务运行在 Cloudflare Workers 上，所以每个到达它的请求都会先经过 Cloudflare 的网络，才到达本仓库的代码。Cloudflare 会为了路由、防滥用和机器人管理处理请求的 IP 地址和 User-Agent，并且可能在返回应用之前先返回一个验证页面。这属于 Cloudflare 按自己的条款和隐私政策做的处理，不是 YouTube Digest 做的。
+
+`https://ytd.panbo.space` 上的网页控制台由同一个服务提供。它只加载自己的脚本和样式，不发送任何分析统计或行为追踪，并且设置了 Content-Security-Policy 策略来拦截第三方脚本。
+
 ### Supadata
 
 YouTube Digest 会把你的 Supadata API Key 和标准化的 YouTube 视频地址一起发送到 `https://api.supadata.ai`。Supadata 返回字幕和时间戳。获取字幕必须配置 Supadata Key。

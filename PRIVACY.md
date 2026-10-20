@@ -51,6 +51,19 @@ The service stores the following per account:
 - This sync service is optional and separate from AI and transcript processing:
   when you are not signed in, no note data leaves the device at all.
 
+### The network in between
+
+The sync service runs on Cloudflare Workers, so every request to it is handled by
+Cloudflare's network before it reaches the code in this repository. Cloudflare
+processes the request's IP address and user agent for routing, abuse prevention
+and bot management, and may serve a challenge page instead of the application.
+That is Cloudflare's own processing under its terms and privacy policy, not
+YouTube Digest's.
+
+The dashboard at `https://ytd.panbo.space` is served from the same
+service. It loads only its own scripts and styles, sends no analytics or
+telemetry, and sets a Content-Security-Policy that blocks third-party scripts.
+
 ### Supadata
 
 YouTube Digest sends the canonical YouTube video URL to `https://api.supadata.ai` with your Supadata API key. Supadata returns the transcript and timestamps. A Supadata key is required for transcript retrieval.

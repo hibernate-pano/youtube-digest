@@ -114,6 +114,27 @@ notes, favorites (starred notes), and vocabulary. Login uses
 `/api/auth/login?redirect=/` so the OAuth callback returns to the dashboard
 with the token in the URL fragment.
 
+## What Cloudflare's edge adds to the response
+
+The dashboard is served through Cloudflare, so the HTML that reaches the
+browser is not byte-for-byte the file in `server/dashboard/`. The edge injects
+its bot-detection script and, if zone Web Analytics is on, its beacon. The
+dashboard's Content-Security-Policy blocks both, which is deliberate: the
+browser console shows a CSP violation for the injected script and the page
+keeps working.
+
+The zone-level settings are deliberately **not** changed for this:
+
+- `panbo.space` also serves other sites (blog, coach, dashboard,
+  redbook, and so on). Turning off JavaScript Detections or Web Analytics on the
+  zone would change all of them.
+- If a hostname-scoped Configuration Rule is ever wanted instead, it is a
+  Cloudflare dashboard task: rule on `http.host eq "ytd.panbo.space"`,
+  settings `javascript_detections = off` and `web_analytics = off`.
+
+The privacy policy discloses the edge processing: Cloudflare sees the IP
+address and user agent of every request to the sync service.
+
 ## API summary
 
 | Method | Path | Purpose |
