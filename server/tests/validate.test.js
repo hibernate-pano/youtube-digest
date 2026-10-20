@@ -155,6 +155,31 @@ test("parseNotePatch treats the starred flag as tri-state", () => {
   );
 });
 
+test("parseNotePatch reads a null as 'not sent'", () => {
+  // A null is the wire form of "leave the stored value alone". Reading it
+  // as a value wiped data: `Number(null)` is 0, so a null timestamp
+  // became 0, and a null video id became an empty string.
+  const patch = parseNotePatch({
+    note: "edited",
+    videoId: null,
+    videoTitle: null,
+    channelName: null,
+    timestampSeconds: null,
+    quote: null,
+  });
+  assert.deepEqual(Object.keys(patch), ["note"]);
+});
+
+test("parseNotePatch refuses a patch that changes nothing", () => {
+  assert.equal(parseNotePatch({ note: null, timestampSeconds: null }), null);
+  assert.equal(parseNotePatch({}), null);
+});
+
+test("parseNotePatch still refuses an empty note", () => {
+  assert.equal(parseNotePatch({ note: "" }), null);
+  assert.equal(parseNotePatch({ note: "   " }), null);
+});
+
 // ============================================================
 // parseVocabulary
 // ============================================================

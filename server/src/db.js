@@ -230,6 +230,12 @@ class MemoryStore {
     // flag alone, so the two stores agree on what a note update does.
     const next = Object.assign({}, patch);
     if (typeof patch.starred !== "boolean") delete next.starred;
+    // A field the patch did not carry must not be written: `Object.assign`
+    // copies an explicit `undefined` too, which would blank the stored
+    // value instead of leaving it alone.
+    for (const key of Object.keys(next)) {
+      if (next[key] === undefined) delete next[key];
+    }
     // clientId is the sync identity key (`unique (user_id, client_id)`), so
     // it is immutable on edit: renaming it would make the next full sync
     // treat the note as deleted elsewhere and drop it.
@@ -585,8 +591,12 @@ class NeonStore {
     // hardcoded whitelist: no column name ever comes from the request.
     // `starred` keeps the tri-state rule: the column is only written when
     // the client actually sent a boolean, so an absent flag leaves the
-    // stored one alone.
-    const assignments = [{ before: "note = ", after: "", value: patch.note }];
+    // stored one alone. The note body follows the same rule: a patch that
+    // does not carry it leaves the stored text alone.
+    const assignments = [];
+    if (patch.note !== undefined) {
+      assignments.push({ before: "note = ", after: "", value: patch.note });
+    }
     if (patch.videoId !== undefined) {
       assignments.push({ before: "video_id = ", after: "", value: patch.videoId });
     }

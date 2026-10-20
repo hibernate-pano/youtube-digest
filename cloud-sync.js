@@ -34,6 +34,11 @@ async function saveNoteToStorage(note) {
           note.starredSynced = note.starred;
         }
         await chrome.storage.local.set({ [namespace]: notes });
+        // The note is on the server again. A delete of this note that was
+        // still on its way is older than the note itself and must not be
+        // applied to it - otherwise a note the user re-created would be
+        // eaten by a stale intent.
+        await removePendingDelete(session.githubId, note.id);
       }
     } catch (error) {
       reportSyncSessionExpired(error);
@@ -164,27 +169,73 @@ async function handleGetNotes(videoId) {
 }
 
 /**
- * Deletes a note locally (account-namespaced) and from the cloud when signed in
+ * Deletes a note locally (account-namespaced) and from the cloud when signed in.
+ *
+ * The delete is recorded as an intent BEFORE it is sent. A delete that only
+ * exists as a request can be lost - the device goes offline, the server
+ * refuses, the request fails - and then the note is gone from this device
+ * but still on the server. The next full sync sees a note the cloud has
+ * and the device does not, and pulls it back: the user deleted a note and
+ * it came back.
+ *
+ * The note leaves this device right away either way. The user asked for it
+ * to be gone, and making that wait for the network would leave the note
+ * they deleted in front of them.
  */
 async function handleDeleteNote(noteId) {
+  const clientId = String(noteId || "");
+  const session = await getGithubSession();
+  const namespace = await notesNamespace();
   try {
-    const namespace = await notesNamespace();
-    const result = await chrome.storage.local.get(namespace);
-    let notes = result[namespace] || [];
-    notes = notes.filter((n) => n.id !== noteId);
-    await chrome.storage.local.set({ [namespace]: notes });
-
-    const session = await getGithubSession();
-    if (session) {
-      await deleteNoteFromCloud(session, noteId).catch((error) => {
-        reportSyncSessionExpired(error);
-        console.warn("[YouTube Digest] Note cloud delete failed:", error.message);
-      });
+    if (session && clientId) {
+      // The intent is recorded BEFORE the note leaves the device: a worker
+      // that dies in between must not lose the delete.
+      const pending = await readPendingDeletes(session.githubId);
+      if (!pending.some((entry) => entry.clientId === clientId)) {
+        pending.push({ clientId, deletedAt: Date.now() });
+        await writePendingDeletes(session.githubId, pending);
+      }
     }
-    return { success: true };
+    // The note disappears from this device now, whether or not the network
+    // is up.
+    const notes = await readLocalNotes(namespace);
+    await writeLocalNotes(
+      namespace,
+      notes.filter((note) => String(note.id) !== clientId),
+    );
   } catch (error) {
+    // The note is still on the device, so the delete did not happen: the
+    // intent is taken back, otherwise the next sync would delete a note
+    // the user still sees.
+    if (session && clientId) {
+      await removePendingDelete(session.githubId, clientId);
+    }
     return { success: false, error: error.message };
   }
+
+  if (session && clientId) {
+    try {
+      await deleteNoteFromCloud(session, clientId);
+      // The server confirmed the delete: the intent has done its job.
+      await removePendingDelete(session.githubId, clientId);
+    } catch (error) {
+      if (isAlreadyGoneError(error)) {
+        // The server does not know the note: there is nothing left to
+        // delete, so the intent is done.
+        await removePendingDelete(session.githubId, clientId);
+      } else {
+        // The intent stays on the list and is sent again by the next
+        // sync. Until then the note is kept out of the merge, so it
+        // cannot come back.
+        reportSyncSessionExpired(error);
+        console.warn(
+          "[YouTube Digest] Note cloud delete failed (it is sent again on the next sync):",
+          error.message,
+        );
+      }
+    }
+  }
+  return { success: true };
 }
 
 // ============================================================
@@ -408,6 +459,162 @@ async function writeLocalNotes(namespace, notes) {
 }
 
 /**
+ * Storage key for the deletes that have not reached the server yet.
+ *
+ * The key is scoped to the account the notes belong to, exactly like the
+ * notes namespace: a delete recorded for one account must never be applied
+ * to another account's note.
+ */
+function pendingDeletesStorageKey(githubId) {
+  const id = String(githubId || "").trim();
+  return id ? "ytd_pending_deletes_" + id : "ytd_pending_deletes";
+}
+
+/**
+ * Reads the deletes that have not reached the server yet.
+ *
+ * They live in chrome.storage.local, so they survive a restart: the device
+ * can be closed before the next sync and the delete is still on its way.
+ *
+ * @param {string|number} githubId the account the deletes belong to.
+ * @returns {Promise<Array<{clientId: string, deletedAt: number}>>}
+ */
+async function readPendingDeletes(githubId) {
+  const key = pendingDeletesStorageKey(githubId);
+  try {
+    const stored = await chrome.storage.local.get(key);
+    const entries = stored[key];
+    if (!Array.isArray(entries)) return [];
+    return entries
+      .filter((entry) => entry && typeof entry.clientId === "string" && entry.clientId)
+      .map((entry) => ({ clientId: entry.clientId, deletedAt: Number(entry.deletedAt) || 0 }));
+  } catch (error) {
+    return [];
+  }
+}
+
+/**
+ * Writes the deletes that are still on their way.
+ *
+ * @param {string|number} githubId the account the deletes belong to.
+ * @param {Array<{clientId: string, deletedAt: number}>} entries
+ */
+async function writePendingDeletes(githubId, entries) {
+  const key = pendingDeletesStorageKey(githubId);
+  try {
+    await chrome.storage.local.set({ [key]: entries });
+  } catch (error) {
+    // Storage is full or unavailable. The note is already gone from this
+    // device; the delete that could not be recorded is sent again by the
+    // next sync of the note itself.
+    console.warn(
+      "[YouTube Digest] Pending note delete could not be stored:",
+      error.message,
+    );
+  }
+}
+
+/**
+ * Forgets a delete: the server confirmed it, or there was nothing to
+ * delete in the first place.
+ */
+async function removePendingDelete(githubId, clientId) {
+  const pending = await readPendingDeletes(githubId);
+  const remaining = pending.filter((entry) => entry.clientId !== clientId);
+  if (remaining.length === pending.length) return;
+  await writePendingDeletes(githubId, remaining);
+}
+
+/**
+ * True when the server's answer means "this note is not there any more".
+ *
+ * A note the server never knew is gone for good: there is nothing left to
+ * delete, and retrying the delete forever would keep a dead intent alive.
+ */
+function isAlreadyGoneError(error) {
+  return !!error && (error.status === 404 || error.status === 410);
+}
+
+/**
+ * Drops a pending delete: the note was written again, so the delete is
+ * older than the note and must not be applied to it.
+ *
+ * @param {Array<{clientId: string}>} pending the intents of this sync.
+ * @param {Map<string, number>} tombstones the deletes the merge keeps out.
+ * @param {string} clientId the note that was written again.
+ */
+function cancelPendingDelete(pending, tombstones, clientId) {
+  const id = String(clientId || "");
+  if (!id) return;
+  tombstones.delete(id);
+  const index = pending.findIndex((entry) => entry.clientId === id);
+  if (index >= 0) pending.splice(index, 1);
+}
+
+/**
+ * Cancels the delete of a note that was written again.
+ *
+ * The note is on the server again, so the delete that is still on its way
+ * is stale: it must not be applied to the note the user re-created.
+ *
+ * @param {Array<{clientId: string}>} pending the intents of this sync.
+ * @param {Map<string, number>} tombstones the deletes the merge keeps out.
+ * @param {object} item the note that was pushed.
+ * @param {(item: object) => string} keyOfLocal the key of a local item.
+ */
+function cancelPendingDeleteForPushed(pending, tombstones, item, keyOfLocal) {
+  const id = keyOfLocal ? keyOfLocal(item) : "";
+  if (!id) return;
+  if (!tombstones.has(id)) return;
+  cancelPendingDelete(pending, tombstones, id);
+}
+
+/**
+ * True when two lists of pending deletes hold the same notes in the same
+ * order. Used to avoid writing the same list over and over.
+ */
+function samePendingDeletes(a, b) {
+  if (a.length !== b.length) return false;
+  return a.every((entry, index) => entry.clientId === b[index].clientId);
+}
+
+/**
+ * Sends the deletes that have not reached the server yet.
+ *
+ * A delete the server confirms is done. A delete the server refuses
+ * because the note is not there any more is done too - there is nothing
+ * left to delete. Everything else - offline, a server error, a dead
+ * session - keeps the intent, and the next sync tries again.
+ */
+async function flushPendingDeletes(session, pending, tombstones) {
+  const remaining = [];
+  for (const entry of pending) {
+    try {
+      await deleteNoteFromCloud(session, entry.clientId);
+    } catch (error) {
+      if (!isAlreadyGoneError(error)) {
+        reportSyncSessionExpired(error);
+        console.warn(
+          "[YouTube Digest] Pending note delete failed (it is sent again on the next sync):",
+          error.message,
+        );
+        remaining.push(entry);
+        continue;
+      }
+    }
+    // Confirmed, or already gone: the intent has done its job.
+    tombstones.delete(entry.clientId);
+  }
+  // The list is written even when it is empty: a delete that was
+  // cancelled - because the note was written again - has to leave the
+  // storage too. A list that did not change is not written again.
+  const stored = await readPendingDeletes(session.githubId);
+  if (!samePendingDeletes(stored, remaining)) {
+    await writePendingDeletes(session.githubId, remaining);
+  }
+}
+
+/**
  * True when the favorite flag was changed on this device and the change has
  * not reached the server yet.
  *
@@ -557,12 +764,19 @@ function mergeNoteForSync(local, cloud, winner) {
  * `clock` carries the measured offset between the device clock and the
  * server clock; `mergeItem` can override how a conflicting pair is turned
  * into one row (the notes use it to merge the favorite flag on its own).
+ *
+ * `tombstones` holds the keys whose delete has not reached the server yet.
+ * They are kept out of the merge on both sides: the cloud copy must not be
+ * pulled down - that is exactly what brings a deleted note back - and a
+ * local copy that is still there is a note the user re-created after the
+ * delete, which the push then confirms to the server.
  */
 function mergeCollectionsForSync(
   localItems,
   cloudItems,
-  { keyOfLocal, keyOfCloud, toLocal, clock, mergeItem },
+  { keyOfLocal, keyOfCloud, toLocal, clock, mergeItem, tombstones },
 ) {
+  const deleted = tombstones instanceof Map ? tombstones : new Map();
   const cloudByKey = new Map();
   for (const cloud of cloudItems || []) {
     const key = keyOfCloud(cloud);
@@ -572,6 +786,38 @@ function mergeCollectionsForSync(
   for (const local of localItems || []) {
     const key = keyOfLocal(local);
     if (!key) continue;
+    if (deleted.has(key)) {
+      // The user deleted this note on this device and the delete has not
+      // reached the server yet. The cloud copy is not merged in: that is
+      // what brings a deleted note back.
+      //
+      // A local copy that is NEWER than the delete is a note the user
+      // re-created after the delete. It is kept and pushed, and the
+      // successful push cancels the pending delete.
+      const writtenAt = Number(local.updatedAt) || Number(local.createdAt) || 0;
+      if (writtenAt > deleted.get(key)) {
+        merged.set(key, {
+          source: "local",
+          item: local,
+          push: true,
+          updatedAt: writtenAt,
+        });
+      } else if (!local.cloudId) {
+        // A note the server has never seen: the delete that is on its way
+        // has nothing to delete there, so the note is pushed and the
+        // intent is dropped. Without this the note would be pushed and
+        // deleted again by the intent that follows.
+        merged.set(key, {
+          source: "local",
+          item: local,
+          push: true,
+          updatedAt: writtenAt,
+        });
+      }
+      // else: the note was deleted on this device and is not on the
+      // device any more: it goes away, just like a note deleted elsewhere.
+      continue;
+    }
     const cloud = cloudByKey.get(key);
     if (cloud) {
       const cloudMs = new Date(cloud.updatedAt).getTime();
@@ -614,6 +860,9 @@ function mergeCollectionsForSync(
   }
   for (const cloud of cloudByKey.values()) {
     const key = keyOfCloud(cloud);
+    // The delete of this note is still on its way: pulling the cloud copy
+    // down would bring the note back.
+    if (deleted.has(key)) continue;
     if (!merged.has(key)) {
       merged.set(key, {
         source: "cloud",
@@ -632,13 +881,14 @@ function mergeCollectionsForSync(
   return { mergedItems, toPush };
 }
 
-function mergeNotesForSync(localNotes, cloudNotes, clock) {
+function mergeNotesForSync(localNotes, cloudNotes, clock, tombstones) {
   const result = mergeCollectionsForSync(localNotes, cloudNotes, {
     keyOfLocal: (item) => (item && item.id ? String(item.id) : ""),
     keyOfCloud: (item) => (item && item.clientId ? String(item.clientId) : ""),
     toLocal: cloudToLocalNote,
     mergeItem: mergeNoteForSync,
     clock,
+    tombstones,
   });
   return { mergedNotes: result.mergedItems, toPush: result.toPush };
 }
@@ -681,6 +931,8 @@ async function runFullSync({
   readLocal,
   writeLocal,
   mergeItem,
+  tombstones,
+  onPushed,
 }) {
   const session = await getGithubSession();
   if (!session) return { success: true, synced: false, reason: "not signed in" };
@@ -718,6 +970,7 @@ async function runFullSync({
     toLocal,
     clock,
     mergeItem,
+    tombstones,
   });
   for (const item of toPush) {
     try {
@@ -740,6 +993,10 @@ async function runFullSync({
         item.starredSynced = item.starred;
         item.starredDirty = false;
       }
+      // The note is on the server again, so the delete that is still on
+      // its way is stale: it must not be applied to the note the user
+      // re-created.
+      if (onPushed) onPushed(item);
     } catch (error) {
       reportSyncSessionExpired(error);
       console.warn("[YouTube Digest] Sync push failed (kept locally):", error.message);
@@ -750,7 +1007,21 @@ async function runFullSync({
 }
 
 async function fullSyncNotes() {
-  return runFullSync({
+  const session = await getGithubSession();
+  if (!session) return { success: true, synced: false, reason: "not signed in" };
+  // The deletes that have not reached the server yet. Their notes are kept
+  // out of the merge, so the sync cannot bring them back, and they are
+  // sent again below.
+  const pending = await readPendingDeletes(session.githubId);
+  // The delete intents, with the moment they were recorded. The merge
+  // compares that moment with the note's own timestamp: a note that was
+  // written AFTER the delete is newer, and the write wins - the delete is
+  // stale and must not be applied to the note.
+  const tombstones = new Map();
+  for (const entry of pending) {
+    tombstones.set(entry.clientId, entry.deletedAt);
+  }
+  const result = await runFullSync({
     namespaceFor: (session) => YTD_SETTINGS.notesStorageKey(session.githubId),
     fetchPath: "/api/notes",
     pushPath: "/api/notes",
@@ -762,7 +1033,22 @@ async function fullSyncNotes() {
     readLocal: readLocalNotes,
     writeLocal: writeLocalNotes,
     mergeItem: mergeNoteForSync,
+    tombstones,
+    // A note that is written again is newer than the delete that is still
+    // on its way: the delete is dropped, so a note the user re-created is
+    // not eaten by a stale intent.
+    onPushed: (item) =>
+      cancelPendingDeleteForPushed(
+        pending,
+        tombstones,
+        item,
+        (candidate) => (candidate && candidate.id ? String(candidate.id) : ""),
+      ),
   });
+  // The deletes that are still on their way are sent again now - also when
+  // the pull failed, because the delete is a request of its own.
+  await flushPendingDeletes(session, pending, tombstones);
+  return result;
 }
 
 async function handleGetGithubSession() {

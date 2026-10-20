@@ -50,25 +50,51 @@ function parseNote(input) {
 }
 
 /**
+ * True when the client did not send a value for a field.
+ *
+ * `null` is the wire form of "not set": a client that patches a note and
+ * sends null for a field means "leave the stored value alone", not "write
+ * a value". Reading null as a value wiped data - `Number(null)` is 0, so a
+ * null timestamp became 0, and a null video id became an empty string that
+ * cut the note off from its video.
+ */
+function isNotSent(value) {
+  return value === null || value === undefined;
+}
+
+/**
  * Sparse parser for PATCH. Unlike parseNote it returns ONLY the fields the
  * client actually sent, so a partial update never zeroes the fields it left
  * out (video title, channel, timestamp, quote). `clientId` is deliberately
  * absent: it is the sync identity key and must stay immutable on edit.
+ *
+ * A field sent as null counts as not sent (see isNotSent), so the stored
+ * value survives the patch. A patch that changes nothing is not a patch and
+ * is refused.
  */
 function parseNotePatch(input) {
   if (!input || typeof input !== "object" || Array.isArray(input)) return null;
-  const note = cleanString(input.note, MAX_NOTE_LENGTH);
-  if (!note) return null;
-  const patch = { note };
-  if ("videoId" in input) patch.videoId = cleanVideoId(input.videoId);
-  if ("videoTitle" in input) patch.videoTitle = cleanString(input.videoTitle, MAX_VIDEO_TITLE_LENGTH);
-  if ("channelName" in input) patch.channelName = cleanString(input.channelName, MAX_CHANNEL_LENGTH);
-  if ("timestampSeconds" in input) {
+  const patch = {};
+  if (!isNotSent(input.note)) {
+    const note = cleanString(input.note, MAX_NOTE_LENGTH);
+    if (!note) return null;
+    patch.note = note;
+  }
+  if (!isNotSent(input.videoId)) patch.videoId = cleanVideoId(input.videoId);
+  if (!isNotSent(input.videoTitle)) {
+    patch.videoTitle = cleanString(input.videoTitle, MAX_VIDEO_TITLE_LENGTH);
+  }
+  if (!isNotSent(input.channelName)) {
+    patch.channelName = cleanString(input.channelName, MAX_CHANNEL_LENGTH);
+  }
+  if (!isNotSent(input.timestampSeconds)) {
     patch.timestampSeconds = cleanTimestampSeconds(input.timestampSeconds) ?? 0;
   }
-  if ("quote" in input) patch.quote = cleanString(input.quote, MAX_QUOTE_LENGTH);
+  if (!isNotSent(input.quote)) patch.quote = cleanString(input.quote, MAX_QUOTE_LENGTH);
   // Tri-state: only an explicit boolean touches the stored flag.
   if (typeof input.starred === "boolean") patch.starred = input.starred;
+  // Nothing to write: the request would only bump the timestamp.
+  if (Object.keys(patch).length === 0) return null;
   return patch;
 }
 
