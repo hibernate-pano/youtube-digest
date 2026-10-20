@@ -33,6 +33,51 @@ chrome.storage.local
     console.warn("[YouTube Digest] Could not restrict storage access:", error),
   );
 
+/**
+ * The YouTube content script is not a trusted context: it cannot read
+ * storage and cannot watch storage for changes. So it asks the background
+ * for the interface language, and the background tells it when the
+ * language changes.
+ */
+async function getUiLanguage() {
+  const key = YTD_SETTINGS.UI_LANGUAGE_STORAGE_KEY;
+  const stored = await chrome.storage.local.get(key);
+  return stored[key] || "en";
+}
+
+/**
+ * Tells the content scripts on open YouTube tabs that the interface
+ * language changed, so the buttons already on the page follow it.
+ */
+function notifyContentScriptsOfLanguage(language) {
+  try {
+    chrome.tabs
+      .query({ url: "https://www.youtube.com/*" })
+      .then((tabs) => {
+        (tabs || []).forEach((tab) => {
+          chrome.tabs
+            .sendMessage(tab.id, {
+              action: "uiLanguageChanged",
+              language,
+            })
+            .catch(() => {});
+        });
+      })
+      .catch(() => {});
+  } catch (error) {
+    // No tabs API: the page keeps the language it has until it reloads.
+  }
+}
+
+// The listener is optional chaining because a page without the storage event
+// must not stop the service worker from starting.
+chrome.storage.onChanged?.addListener((changes, areaName) => {
+  if (areaName !== "local") return;
+  const change = changes[YTD_SETTINGS.UI_LANGUAGE_STORAGE_KEY];
+  if (!change) return;
+  notifyContentScriptsOfLanguage(change.newValue);
+});
+
 async function getSettings() {
   const stored = await chrome.storage.local.get(YTD_SETTINGS.STORAGE_KEY);
   return YTD_SETTINGS.normalize(stored[YTD_SETTINGS.STORAGE_KEY]);
@@ -578,6 +623,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     )
       .then(sendResponse)
       .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (message.action === "getUiLanguage") {
+    getUiLanguage()
+      .then((language) => sendResponse({ success: true, language }))
+      .catch(() => sendResponse({ success: false, language: "en" }));
     return true;
   }
 
