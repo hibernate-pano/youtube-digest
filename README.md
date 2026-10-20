@@ -2,28 +2,33 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-Turn every YouTube video into a resource for deep learning. YouTube Digest brings transcripts, bilingual translation, AI overviews, explanations, and timestamped notes into one Chrome side panel, so you can study ideas and language without losing your place.
+Turn every YouTube video into a resource for deep learning. YouTube Digest brings transcripts, bilingual translation, AI summaries, explanations, timestamped notes, and a vocabulary notebook into one Chrome side panel, so you can study ideas and language without losing your place.
 
 - Turn captions into a readable, searchable learning resource.
 - Learn languages with the original transcript, a Simplified Chinese translation, or an aligned bilingual view.
-- Build understanding with an AI overview, chapters, key quotes, and selected-text explanations.
-- Navigate long videos by clicking timestamps in the transcript, overview, or notes.
+- Build understanding with an AI summary, chapters, key quotes, and selected-text explanations.
+- Navigate long videos by clicking timestamps in the transcript, summary, or notes.
 - Save polished timestamped notes for later study.
+- Build a vocabulary notebook from the transcript, with spaced review built in.
 - Read your notes, favorites and vocabulary on any device through the web dashboard that comes with the sync service.
 - Keep control of your data with your own API keys, local Chrome storage, and no analytics or telemetry.
 
-YouTube Digest is a bring-your-own-key project installed locally from GitHub. It is not available through the Chrome Web Store and does not include API credits. The extension has no analytics and no telemetry. If you sign in with GitHub, the optional sync feature mirrors your saved notes to this project's own sync service at `https://ytd.panbo.space`; without signing in, no note data leaves your device.
+YouTube Digest is a bring-your-own-key project installed locally from GitHub. It is not available through the Chrome Web Store and does not include API credits. The extension has no analytics and no telemetry. If you sign in with GitHub, the optional sync feature mirrors your saved notes and words to this project's own sync service at `https://ytd.panbo.space`; without signing in, no note or word data leaves your device.
 
-![YouTube Digest demo](YouTube%20Digest%20demo.png)
+![YouTube Digest demo](YouTube%20Digest%20demo.jpg)
 
-## New in v1.4.0
+## New in v1.5.0
 
-- Search transcript words or phrases and move through every match.
-- Use one Original, Chinese, or bilingual setting across Transcript, Overview, and Notes. New videos stay in Original by default.
-- Translate visible Overview and Notes content progressively in small cached batches.
+- The side panel is now five tabs: **Transcript**, **Summary**, **Notes**, **Words**, and **Library**. The old Overview tab is now Summary, and it carries a written summary of the video, not only a list of chapters.
+- Capture words from the transcript into a vocabulary notebook: select a word and save it, or let your AI provider pick the words worth learning out of a sentence. Each word keeps its meaning, its sentence, and the moment it came from.
+- Review your words on a schedule, with the same four grades the web dashboard uses.
+- The library keeps the videos you have read for 30 days, so opening one again costs nothing.
+- Search inside the transcript for words or phrases and move through every match.
+- Use one Original, Chinese, or bilingual setting across Transcript, Summary, and Notes. New videos stay in Original by default.
+- Translate visible Summary and Notes content progressively in small cached batches.
 - Explain selected transcript text or save it directly as a timestamped note.
 - Keep your transcript position across navigation, with the panel closing automatically outside YouTube video pages.
-- Sign in with GitHub to back up your notes to the project's sync service, and sign in again on any other device to pick them up.
+- Sign in with GitHub to back up your notes and words to the project's sync service, and sign in again on any other device to pick them up.
 - Click a note's text to correct it; the edit is saved locally and synced.
 - See a clear "Sync expired" chip when the GitHub session ends, and sign in again to resume the backup.
 
@@ -65,7 +70,7 @@ Because this is an unpacked extension, it does not update automatically. After d
 YouTube Digest needs a Supadata key and one API key from your chosen AI provider:
 
 1. A **Supadata API key** to retrieve YouTube transcripts.
-2. An **AI provider key** from DeepSeek, MiniMax (China), or OpenCode Go, for overviews, explanations, translation, and automatic note polishing.
+2. An **AI provider key** from DeepSeek, MiniMax (China), or OpenCode Go, for summaries, explanations, translation, and automatic note polishing.
 
 ### Get a Supadata API key
 
@@ -120,7 +125,7 @@ Keys and settings are stored in Chrome's local extension storage on your device.
 
 ## Optional GitHub sync
 
-Sign in with GitHub from Settings (or the **Sign in** button in the side panel) to back up your notes. Your notes are stored in this project's own database on `https://ytd.panbo.space`, a Cloudflare Worker backed by a Neon PostgreSQL database, and are linked to your GitHub account id. They are not written to your GitHub account, and no GitHub repository or gist is created. Every account's data is isolated server-side: the extension stores notes under an account-specific namespace, the server scopes every query by the verified token, and signing in with a different account shows that account's notes only. Sync is optional: without signing in, everything stays on this device exactly as before, and AI/transcript requests never involve the sync service. When signed in, saved notes mirror to the cloud automatically (idempotent by client id, newest edit wins) and appear on any device where you sign in with the same GitHub account.
+Sign in with GitHub from Settings (or the **Sign in** button in the side panel) to back up your notes and words. Your notes and words are stored in this project's own database on `https://ytd.panbo.space`, a Cloudflare Worker backed by a Neon PostgreSQL database, and are linked to your GitHub account id. They are not written to your GitHub account, and no GitHub repository or gist is created. Every account's data is isolated server-side: the extension stores notes and words under an account-specific namespace, the server scopes every query by the verified token, and signing in with a different account shows that account's data only. Sync is optional: without signing in, everything stays on this device exactly as before, and AI/transcript requests never involve the sync service. When signed in, saved notes and words mirror to the cloud automatically (idempotent, newest edit wins) and appear on any device where you sign in with the same GitHub account.
 
 ### The web dashboard
 
@@ -140,21 +145,24 @@ The dashboard is read-mostly on purpose: it is the place to *read* and *review* 
 2. Click the YouTube Digest extension icon to open the side panel.
 3. Read the timestamped transcript, or choose **Original**, **中文**, or **双语**.
 4. Search inside the transcript to find a word or phrase, and step through the matches.
-5. Open **Overview** when you want AI-generated chapters and key quotes.
+5. Open **Summary** when you want the AI-written summary, chapters, and key quotes. The tab says what the call costs before you spend anything.
 6. Select transcript text when you want an AI explanation, or save it as a note.
 7. Save a note from the player or a key quote, then revisit it from **Notes**. Click a note's text to correct it.
+8. Select a word in the transcript and choose **Word** to add it to your **Words** notebook, or open **Words** and let your AI provider pick the words worth learning out of a selected sentence.
 
 ## What works today
 
 - Google Chrome 116 or newer, using the Side Panel API.
 - Standard `youtube.com/watch` video pages.
 - Native subtitle tracks returned by Supadata. YouTube Digest prefers English when available, but may show another native language.
-- Original, Simplified Chinese, and aligned bilingual transcript views, with one content-language setting shared across Transcript, Overview, and Notes.
+- Original, Simplified Chinese, and aligned bilingual transcript views, with one content-language setting shared across Transcript, Summary, and Notes.
 - Transcript search for words or phrases, with previous and next buttons for every match.
-- AI overviews, selected-text explanations, translation, and automatic note polishing.
+- AI summaries, chapters, key quotes, selected-text explanations, translation, and automatic note polishing.
 - Timestamped notes saved from the player, a key quote, or selected transcript text, with click-to-edit correction and buttons to copy the note text or its timestamped link.
-- Local notes and a local cache for recent transcript and digest results.
-- Optional GitHub sync of your saved notes to the project's sync service, with one isolated data set per GitHub account.
+- A vocabulary notebook: capture a word from the transcript, keep its meaning, its sentence, and the moment it came from, and review it later on a schedule.
+- A library of the videos you have read, kept for 30 days so that opening one again costs no transcript credit.
+- Local notes, words, and a local cache for recent transcript and digest results.
+- Optional GitHub sync of your saved notes and words to the project's sync service, with one isolated data set per GitHub account.
 - DeepSeek V4 Flash, MiniMax M3, and OpenCode Go's DeepSeek V4 Flash for all published AI features. Other providers require a local code adaptation and are not supported by this published version.
 
 Shorts, live streams, private or access-restricted videos, and videos without an available native transcript may not work. Firefox, Safari, mobile browsers, and other Chromium browsers are not currently tested or supported.
@@ -204,8 +212,7 @@ YouTube Digest uses plain HTML, CSS, and JavaScript with no build step, so it is
 
 - Add more translation languages and let each person choose a learning language.
 - Create customized summary templates for lectures, interviews, tutorials, reviews, or research talks.
-- Wire up the vocabulary notebook. The sync backend and the web dashboard already have vocabulary and spaced-review support, but the extension side no longer captures words: the transcript "+ Word" button and the Words tab were removed, so nothing in the extension can save a word, its sentence, meaning, and video timestamp yet. Adding that capture flow is the missing piece.
-- Export notes and vocabulary to Markdown, CSV, Anki, or another study tool.
+- Let the words notebook export to Markdown, CSV, Anki, or another study tool.
 - Add personal topic filters that highlight the chapters most relevant to a goal.
 - Add optional local-model support for a different privacy and cost tradeoff.
 - Improve accessibility with keyboard navigation, font controls, and higher-contrast themes.
