@@ -21,7 +21,7 @@ async function recordDroppedNotes(count) {
     const stored = await chrome.storage.local.get(key);
     const previous = stored && stored[key];
     const total = Number(previous && previous.total) || 0;
-    await chrome.storage.local.set({
+    await setStorageWithRecovery({
       [key]: {
         total: total + count,
         lastCount: count,
@@ -49,7 +49,7 @@ async function recordDroppedVocabulary(count) {
     const stored = await chrome.storage.local.get(key);
     const previous = stored && stored[key];
     const total = Number(previous && previous.total) || 0;
-    await chrome.storage.local.set({
+    await setStorageWithRecovery({
       [key]: {
         total: total + count,
         lastCount: count,
@@ -63,6 +63,161 @@ async function recordDroppedVocabulary(count) {
       error.message,
     );
   }
+}
+
+/**
+ * Where the runtime records that cached videos were dropped to make room.
+ *
+ * The panel has its own notice for the cleanups it runs itself. This key is
+ * for the cleanup the runtime runs when the device's storage is full: the
+ * user has to hear about that one too, because a cached video they could
+ * still open is a video that disappeared.
+ */
+const STORAGE_RECLAIMED_KEY = "ytd_storage_reclaimed";
+
+/**
+ * How long a cached digest is kept.
+ *
+ * The panel hides a cached video after this long, so an entry this old is
+ * already gone as far as the user is concerned.
+ */
+const CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * Rough size of a stored value.
+ *
+ * The exact accounting belongs to Chrome; this only has to be good enough to
+ * decide how much room to free. An under-estimate costs one more round of
+ * eviction, an over-estimate frees a little more than needed.
+ */
+function estimateStorageBytes(value) {
+  try {
+    const json = JSON.stringify(value);
+    return typeof json === "string" ? json.length : 0;
+  } catch (error) {
+    return 0;
+  }
+}
+
+/**
+ * Frees room in the device's storage by dropping cached digests.
+ *
+ * A cached digest is a copy of something the user can fetch again. A note or
+ * a word is not. So when the storage is full, the cache goes first - and the
+ * oldest entry goes before the newest one, because the older a cache is, the
+ * less likely the user is to open it.
+ *
+ * @param {number} neededBytes roughly how much room the pending write needs
+ * @returns {Promise<{count: number, expired: number}>} what was dropped
+ */
+async function evictCachedDigests(neededBytes) {
+  let all;
+  try {
+    all = await chrome.storage.local.get(null);
+  } catch (error) {
+    return { count: 0, expired: 0 };
+  }
+  const now = Date.now();
+  const entries = Object.keys(all)
+    .filter((key) => key.startsWith("digest_"))
+    .map((key) => ({
+      key,
+      timestamp: Number(all[key] && all[key].timestamp) || 0,
+      bytes: estimateStorageBytes(all[key]),
+    }))
+    .sort((a, b) => a.timestamp - b.timestamp);
+  if (entries.length === 0) return { count: 0, expired: 0 };
+
+  const doomed = [];
+  let freed = 0;
+  for (const entry of entries) {
+    doomed.push(entry);
+    freed += entry.bytes;
+    // One entry always goes: the write that failed needs room, and an
+    // estimate of zero bytes must not turn into "nothing to free".
+    if (freed >= neededBytes) break;
+  }
+  try {
+    await chrome.storage.local.remove(doomed.map((entry) => entry.key));
+  } catch (error) {
+    return { count: 0, expired: 0 };
+  }
+  const expired = doomed.filter(
+    (entry) => now - entry.timestamp > CACHE_MAX_AGE_MS,
+  ).length;
+  return { count: doomed.length, expired };
+}
+
+/**
+ * Records that cached videos were dropped to make room.
+ *
+ * A failed write must not stop the save it was reporting on, so this one
+ * swallows its errors - the record is a courtesy, the save is not.
+ */
+async function recordStorageReclaimed(count) {
+  if (!count) return;
+  try {
+    // A plain write: the record is a courtesy, and a storage that is still
+    // full must not throw away another cached video just to note down that
+    // it threw one away already.
+    await chrome.storage.local.set({
+      [STORAGE_RECLAIMED_KEY]: { count, at: Date.now() },
+    });
+  } catch (error) {
+    // Storage full: the eviction itself is the important part.
+  }
+}
+
+/**
+ * Writes to the device's storage, and makes room when there is none.
+ *
+ * A full storage used to be a silent failure: the write threw, the caller
+ * logged it, and the user was told nothing while their note was not there.
+ * Two things change here. The cached digests go first, because they are the
+ * only thing in the store that can be fetched again, and the write is tried
+ * once more afterwards. If it still does not fit, the failure leaves with
+ * the reason code the surfaces turn into a sentence.
+ *
+ * @param {Object} items the values to write
+ * @returns {Promise<{evicted: number}>} how many cache entries were dropped
+ */
+async function setStorageWithRecovery(items) {
+  try {
+    await chrome.storage.local.set(items);
+    return { evicted: 0 };
+  } catch (error) {
+    if (!YTD_SETTINGS.isQuotaExceededError(error)) throw error;
+  }
+
+  const needed = estimateStorageBytes(items);
+  let evicted = 0;
+  let expired = 0;
+  // Three rounds: one for the estimate, and two more in case the estimate
+  // was too small. Each round frees at least what the write needs.
+  for (let round = 0; round < 3; round++) {
+    const dropped = await evictCachedDigests(needed);
+    if (dropped.count === 0) break;
+    evicted += dropped.count;
+    expired += dropped.expired;
+    try {
+      await chrome.storage.local.set(items);
+      await recordStorageReclaimed(evicted);
+      console.warn(
+        `[YouTube Digest] The device storage was full: ${evicted} cached video(s) were dropped to make room` +
+          (expired ? ` (${expired} of them were already expired).` : "."),
+      );
+      return { evicted };
+    } catch (error) {
+      if (!YTD_SETTINGS.isQuotaExceededError(error)) throw error;
+    }
+  }
+
+  const quotaError = new Error(
+    "The device storage is full: the note could not be saved.",
+  );
+  quotaError.code = YTD_SETTINGS.STORAGE_QUOTA_EXCEEDED;
+  quotaError.evicted = evicted;
+  throw quotaError;
 }
 
 async function saveNoteToStorage(note) {
@@ -89,7 +244,7 @@ async function saveNoteToStorage(note) {
       );
     }
 
-    await chrome.storage.local.set({ [namespace]: notes });
+    await setStorageWithRecovery({ [namespace]: notes });
   });
 
   // Cloud mirror: best-effort, never blocks the local save.
@@ -182,7 +337,10 @@ async function handleUpdateNote(noteId, text) {
     }
     return { success: true, note };
   } catch (error) {
-    return { success: false, error: error.message };
+    // The code travels with the message: a full storage and a failed edit
+    // are different problems, and the surface has to be able to tell them
+    // apart.
+    return { success: false, error: error.message, code: error.code };
   }
 }
 
@@ -239,7 +397,7 @@ async function handleSetNoteStarred(noteId, starred) {
     }
     return { success: true, note };
   } catch (error) {
-    return { success: false, error: error.message };
+    return { success: false, error: error.message, code: error.code };
   }
 }
 
@@ -255,7 +413,7 @@ async function handleGetNotes(videoId) {
 
     return { success: true, notes };
   } catch (error) {
-    return { success: false, error: error.message };
+    return { success: false, error: error.message, code: error.code };
   }
 }
 
@@ -304,7 +462,7 @@ async function handleDeleteNote(noteId) {
     if (session && clientId) {
       await removePendingDelete(session.githubId, clientId);
     }
-    return { success: false, error: error.message };
+    return { success: false, error: error.message, code: error.code };
   }
 
   if (session && clientId) {
@@ -441,12 +599,46 @@ async function cloudFetch(path, options) {
   const headers = { "Content-Type": "application/json" };
   if (token) headers.Authorization = "Bearer " + token;
   const requestStartedAt = Date.now();
-  const response = await fetch(YTD_SETTINGS.SERVER_BASE_URL + path, {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const data = await response.json().catch(() => null);
+  // The request runs under a deadline. A server that stops answering used to
+  // hang the whole sync: the service worker was suspended while it waited,
+  // and the user's notes simply stopped moving. The deadline is checked over
+  // the body as well, because a server that sends headers and then stalls is
+  // just as dead as one that never answers.
+  const { response, data } = await YTD_SETTINGS.withRequestTimeout(
+    async (signal) => {
+      const init = {
+        method,
+        headers,
+        body: body === undefined ? undefined : JSON.stringify(body),
+      };
+      if (signal) init.signal = signal;
+      const answer = await fetch(YTD_SETTINGS.SERVER_BASE_URL + path, init);
+      let payload = null;
+      try {
+        payload = await answer.json();
+      } catch (error) {
+        // A body that is not JSON is not fatal by itself: the status below
+        // decides what the failure means. A request the deadline aborted is
+        // fatal though - it has to surface as a timeout, not as an empty
+        // answer that looks like a success.
+        if (signal && signal.aborted) throw error;
+        payload = null;
+      }
+      return { response: answer, data: payload };
+    },
+    YTD_SETTINGS.CLOUD_REQUEST_TIMEOUT_MS,
+    () => {
+      // A timeout is not a dead session. The code keeps the two apart so the
+      // panel never sends the user to the sign-in screen for a slow server.
+      const error = new Error(
+        "The sync server did not answer within " +
+          Math.round(YTD_SETTINGS.CLOUD_REQUEST_TIMEOUT_MS / 1000) +
+          " seconds.",
+      );
+      error.code = YTD_SETTINGS.SYNC_REQUEST_TIMEOUT;
+      return error;
+    },
+  );
   const responseReceivedAt = Date.now();
   // Any response that carries the server's clock teaches the extension how
   // far its own clock is off. Measuring here means the offset is known
@@ -549,7 +741,7 @@ async function readLocalNotes(namespace) {
 }
 
 async function writeLocalNotes(namespace, notes) {
-  await chrome.storage.local.set({ [namespace]: notes });
+  await setStorageWithRecovery({ [namespace]: notes });
 }
 
 /**
@@ -589,7 +781,7 @@ async function patchStoredItem(namespace, id, changes) {
     const index = items.findIndex((item) => item && item.id === id);
     if (index === -1) return null;
     items[index] = Object.assign({}, items[index], changes);
-    await chrome.storage.local.set({ [namespace]: items });
+    await setStorageWithRecovery({ [namespace]: items });
     return items[index];
   });
 }
@@ -618,7 +810,7 @@ async function reconcileStoredList(namespace, mergedItems, keyOf) {
       (item) => !items.some((existing) => keyOf(existing) === keyOf(item)),
     );
     const next = unseen.concat(mergedOnly, added);
-    await chrome.storage.local.set({ [namespace]: next });
+    await setStorageWithRecovery({ [namespace]: next });
     return next;
   });
 }
@@ -667,7 +859,7 @@ async function readPendingDeletes(githubId) {
 async function writePendingDeletes(githubId, entries) {
   const key = pendingDeletesStorageKey(githubId);
   try {
-    await chrome.storage.local.set({ [key]: entries });
+    await setStorageWithRecovery({ [key]: entries });
   } catch (error) {
     // Storage is full or unavailable. The note is already gone from this
     // device; the delete that could not be recorded is sent again by the
@@ -1246,7 +1438,7 @@ async function readLocalVocabulary(namespace) {
 }
 
 async function writeLocalVocabulary(namespace, items) {
-  await chrome.storage.local.set({ [namespace]: items });
+  await setStorageWithRecovery({ [namespace]: items });
 }
 
 /**
@@ -1282,33 +1474,140 @@ async function readVocabularyClaim() {
 
 async function writeVocabularyClaim(owners) {
   try {
-    await chrome.storage.local.set({ [VOCABULARY_CLAIM_KEY]: { ids: owners } });
+    await setStorageWithRecovery({ [VOCABULARY_CLAIM_KEY]: { ids: owners } });
+    return true;
   } catch (error) {
-    // The claim is a safety net, not the primary guard: the bucket is
-    // already cleared when the import happens.
+    // The claim is the safety net that keeps another account from picking
+    // the words up, so a failed write has to be reported: the caller keeps
+    // the source copy instead of deleting it.
+    return false;
   }
+}
+
+/**
+ * Moves the items that were saved while signed out into the account that is
+ * signing in now.
+ *
+ * Without this, signing in moved the reading namespace away from what the
+ * user had just captured: the items were still in the device's storage, but
+ * the panel looked in the signed-in namespace and found nothing, and the
+ * cloud never saw them either. The user watched their work disappear at the
+ * moment they signed in.
+ *
+ * The import has to survive an interruption, because the browser can close
+ * the tab, the service worker can be suspended, or the device can run out of
+ * room at exactly the wrong moment. Three rules make it safe:
+ *
+ * - The ownership is recorded FIRST. An item that is not claimed yet could
+ *   be picked up by the next account that signs in, so the claim is written
+ *   before anything moves. When the claim cannot be written, nothing moves
+ *   at all: the items stay in the signed-out bucket, where the next sign-in
+ *   finds them again.
+ * - The copy into the account namespace is idempotent. The items are merged
+ *   by id, so running the import twice adds nothing the second time.
+ * - Only the items that were really moved leave the signed-out bucket. An
+ *   item that belongs to another account stays where it is: it is not this
+ *   account's to move, and deleting it would lose it for good.
+ *
+ * The order is therefore claim, copy, clean up. Every interruption leaves
+ * the items somewhere they can still be found, and never in two accounts.
+ *
+ * @param {Object} options
+ * @param {string} options.accountId the account that is signing in
+ * @param {string} options.label what the items are called ("notes", "words")
+ * @param {string} options.bucketKey the signed-out bucket
+ * @param {function(string): string} options.namespaceKeyFor the account bucket
+ * @param {function(): Promise<Object>} options.readClaim reads the ownership
+ * @param {function(Object): Promise<boolean>} options.writeClaim writes it
+ * @param {function(string): Promise<Array>} options.readBucket reads a bucket
+ * @param {function(string, Array): Promise<void>} options.writeBucket writes it
+ * @returns {Promise<number>} how many items were imported
+ */
+async function migrateLegacyBucket({
+  accountId,
+  label,
+  bucketKey,
+  namespaceKeyFor,
+  readClaim,
+  writeClaim,
+  readBucket,
+  writeBucket,
+}) {
+  const legacy = await readBucket(bucketKey);
+  if (!Array.isArray(legacy) || legacy.length === 0) return 0;
+  const owners = await readClaim();
+  const importable = legacy.filter((item) => {
+    if (!item || !item.id) return false;
+    const owner = owners[String(item.id)];
+    // An item this account already owns is importable again; an item that
+    // belongs to another account is not.
+    return !owner || owner === accountId;
+  });
+  if (importable.length === 0) {
+    // Every item in the bucket already belongs to another account.
+    console.warn(
+      `[YouTube Digest] The ${label} saved while signed out already belong to ` +
+        "another account and were not imported here.",
+    );
+    return 0;
+  }
+
+  // The ownership is recorded before anything moves. Without the claim an
+  // item could be handed to the next account that signs in, so a claim that
+  // cannot be written stops the whole import: the items stay in the
+  // signed-out bucket instead of being copied somewhere unprotected.
+  for (const item of importable) {
+    owners[String(item.id)] = accountId;
+  }
+  if (!(await writeClaim(owners))) {
+    console.warn(
+      `[YouTube Digest] The ${label} could not be marked as belonging to this ` +
+        "account, so they stay where they are.",
+    );
+    return 0;
+  }
+
+  // The copy into the account namespace. Merging by id keeps it idempotent:
+  // a run that was interrupted after the copy finds everything in place and
+  // adds nothing.
+  const namespace = namespaceKeyFor(accountId);
+  const current = await readBucket(namespace);
+  const byId = new Map(current.map((item) => [String(item.id), item]));
+  let added = 0;
+  for (const item of importable) {
+    if (item && item.id && !byId.has(String(item.id))) {
+      byId.set(String(item.id), item);
+      added += 1;
+    }
+  }
+  if (added > 0) await writeBucket(namespace, [...byId.values()]);
+
+  // Only the items that now live in the account namespace leave the
+  // signed-out bucket. The ones that belong to another account stay: they
+  // are not ours to move, and the old code deleted them along with the
+  // bucket, which lost them for good.
+  const movedIds = new Set(importable.map((item) => String(item.id)));
+  const remaining = legacy.filter((item) => {
+    if (!item || !item.id) return true;
+    return !movedIds.has(String(item.id));
+  });
+  if (remaining.length === legacy.length) return added;
+  if (remaining.length === 0) {
+    await chrome.storage.local.remove(bucketKey);
+  } else {
+    // One key, one write: the bucket is never half rewritten.
+    await setStorageWithRecovery({ [bucketKey]: remaining });
+  }
+  return added;
 }
 
 /**
  * Imports the words that were saved while signed out into the account that
  * is signing in now.
  *
- * Without this, signing in moved the reading namespace away from the words
- * the user had just captured: they were still in the device's storage, but
- * the panel looked in the signed-in namespace and found nothing, and the
- * cloud never saw them either. The user watched their word disappear at
- * the moment they signed in.
- *
- * Two rules make the import safe, and they are the same rules the notes
- * import follows:
- * - A word belongs to exactly one account. The account that owns a word
- *   can always import it again, so a retry never loses it; a different
- *   account never gets it.
- * - The signed-out bucket is cleared as soon as the words are copied into
- *   the account namespace, not after the upload. The words now live in the
- *   account's own namespace, so a failed upload keeps them on the device
- *   and the next sync of that account sends them; what it must never do is
- *   leave them where the next account could pick them up.
+ * The words follow the same road as the notes, and the same rules: they are
+ * claimed before they move, the copy is idempotent, and only the words that
+ * really moved leave the signed-out bucket.
  *
  * @param {string|number} githubId the account that is signing in.
  * @returns {Promise<number>} how many words were imported.
@@ -1316,44 +1615,16 @@ async function writeVocabularyClaim(owners) {
 async function migrateLegacyLocalVocabulary(githubId) {
   const accountId = String(githubId || "").trim();
   if (!accountId) return 0;
-  const legacy = await readLocalVocabulary(YTD_SETTINGS.VOCABULARY_STORAGE_KEY);
-  if (!Array.isArray(legacy) || legacy.length === 0) return 0;
-  const owners = await readVocabularyClaim();
-  const unclaimed = legacy.filter((word) => {
-    if (!word || !word.id) return false;
-    const owner = owners[String(word.id)];
-    // A word this account already owns is importable again; a word that
-    // belongs to another account is not.
-    return !owner || owner === accountId;
+  return migrateLegacyBucket({
+    accountId,
+    label: "words",
+    bucketKey: YTD_SETTINGS.VOCABULARY_STORAGE_KEY,
+    namespaceKeyFor: YTD_SETTINGS.vocabularyStorageKey,
+    readClaim: readVocabularyClaim,
+    writeClaim: writeVocabularyClaim,
+    readBucket: readLocalVocabulary,
+    writeBucket: writeLocalVocabulary,
   });
-  if (unclaimed.length === 0) {
-    // Every word in the bucket already belongs to another account.
-    console.warn(
-      "[YouTube Digest] The words saved while signed out already belong to " +
-        "another account and were not imported here.",
-    );
-    return 0;
-  }
-  const namespace = YTD_SETTINGS.vocabularyStorageKey(accountId);
-  const current = await readLocalVocabulary(namespace);
-  const byId = new Map(current.map((word) => [String(word.id), word]));
-  let added = 0;
-  for (const word of unclaimed) {
-    if (word && word.id && !byId.has(String(word.id))) {
-      byId.set(String(word.id), word);
-      added += 1;
-    }
-  }
-  if (added > 0) await writeLocalVocabulary(namespace, [...byId.values()]);
-  // The words now live in the account namespace, so the signed-out bucket
-  // is cleared right away - before the upload - and the ids are recorded
-  // as belonging to this account.
-  await chrome.storage.local.remove(YTD_SETTINGS.VOCABULARY_STORAGE_KEY);
-  for (const word of unclaimed) {
-    owners[String(word.id)] = accountId;
-  }
-  await writeVocabularyClaim(owners);
-  return added;
 }
 
 function localVocabToCloudPayload(item) {
@@ -1553,7 +1824,9 @@ async function handleSaveVocabulary(entry) {
     }
     return { success: true, item };
   } catch (error) {
-    return { success: false, error: error.message };
+    // A word that was not stored is a word the user believes is there and
+    // is not, so the code has to reach the surface.
+    return { success: false, error: error.message, code: error.code };
   }
 }
 
@@ -1609,7 +1882,7 @@ async function readPendingVocabDeletes(githubId) {
 async function writePendingVocabDeletes(githubId, entries) {
   const key = pendingVocabDeletesStorageKey(githubId);
   try {
-    await chrome.storage.local.set({ [key]: entries });
+    await setStorageWithRecovery({ [key]: entries });
   } catch (error) {
     console.warn(
       "[YouTube Digest] Pending word delete could not be stored:",
@@ -1804,7 +2077,7 @@ async function handleDeleteVocabulary(id) {
       if (session && target && wordKey) {
         await removePendingVocabDelete(session.githubId, wordKey);
       }
-      return { success: false, error: error.message };
+      return { success: false, error: error.message, code: error.code };
     }
 
     if (session && target && wordKey) {
@@ -1935,10 +2208,13 @@ async function readNotesClaim() {
 
 async function writeNotesClaim(owners) {
   try {
-    await chrome.storage.local.set({ [NOTES_CLAIM_KEY]: { ids: owners } });
+    await setStorageWithRecovery({ [NOTES_CLAIM_KEY]: { ids: owners } });
+    return true;
   } catch (error) {
-    // The claim is a safety net, not the primary guard: the bucket is
-    // already cleared when the import happens.
+    // The claim is the safety net that keeps another account from picking
+    // the notes up, so a failed write has to be reported: the caller keeps
+    // the source copy instead of deleting it.
+    return false;
   }
 }
 
@@ -1952,53 +2228,31 @@ async function writeNotesClaim(owners) {
  *   make another learner inherit notes that were written under a different
  *   account. The account that owns a note can always import it again, so a
  *   retry never loses it.
- * - The signed-out bucket is cleared as soon as the notes are copied into
- *   the account namespace, not after the upload. The notes now live in the
- *   account's own namespace, so a failed upload keeps them on the device
- *   and the next sync of that account sends them; what it must never do is
- *   leave them where the next account could pick them up.
+ * - The signed-out bucket is cleared of the notes that were imported, not
+ *   deleted wholesale. A note that belongs to another account stays where
+ *   it is: deleting the bucket took those notes with it, and a note that is
+ *   gone from the device is a note that is gone for good.
+ *
+ * The order of the steps is what makes the import survive an interruption:
+ * the ownership is recorded first, then the notes are copied, and only then
+ * are the moved ones removed from the signed-out bucket.
+ *
+ * @param {string|number} githubId the account that is signing in.
+ * @returns {Promise<number>} how many notes were imported.
  */
 async function migrateLegacyLocalNotes(githubId) {
   const accountId = String(githubId || "").trim();
   if (!accountId) return 0;
-  const legacy = await readLocalNotes(YTD_SETTINGS.NOTES_STORAGE_KEY);
-  if (!Array.isArray(legacy) || legacy.length === 0) return 0;
-  const owners = await readNotesClaim();
-  const unclaimed = legacy.filter((note) => {
-    if (!note || !note.id) return false;
-    const owner = owners[String(note.id)];
-    // A note this account already owns is importable again; a note that
-    // belongs to another account is not.
-    return !owner || owner === accountId;
+  return migrateLegacyBucket({
+    accountId,
+    label: "notes",
+    bucketKey: YTD_SETTINGS.NOTES_STORAGE_KEY,
+    namespaceKeyFor: YTD_SETTINGS.notesStorageKey,
+    readClaim: readNotesClaim,
+    writeClaim: writeNotesClaim,
+    readBucket: readLocalNotes,
+    writeBucket: writeLocalNotes,
   });
-  if (unclaimed.length === 0) {
-    // Every note in the bucket already belongs to another account.
-    console.warn(
-      "[YouTube Digest] The notes saved while signed out already belong to " +
-        "another account and were not imported here.",
-    );
-    return 0;
-  }
-  const namespace = YTD_SETTINGS.notesStorageKey(accountId);
-  const current = await readLocalNotes(namespace);
-  const byId = new Map(current.map((note) => [String(note.id), note]));
-  let added = 0;
-  for (const note of unclaimed) {
-    if (note && note.id && !byId.has(String(note.id))) {
-      byId.set(String(note.id), note);
-      added += 1;
-    }
-  }
-  if (added > 0) await writeLocalNotes(namespace, [...byId.values()]);
-  // The notes now live in the account namespace, so the signed-out bucket
-  // is cleared right away - before the upload - and the ids are recorded
-  // as belonging to this account.
-  await chrome.storage.local.remove(YTD_SETTINGS.NOTES_STORAGE_KEY);
-  for (const note of unclaimed) {
-    owners[String(note.id)] = accountId;
-  }
-  await writeNotesClaim(owners);
-  return added;
 }
 
 /**
@@ -2124,7 +2378,7 @@ async function completeGithubLogin(token, tabId, nonce) {
     const data = await cloudFetch("/api/me", { token });
     const user = data && data.user;
     if (!user) throw new Error("GitHub profile unavailable");
-    await chrome.storage.local.set({
+    await setStorageWithRecovery({
       [YTD_SETTINGS.GITHUB_SESSION_KEY]: {
         token,
         login: user.login,
@@ -2137,11 +2391,19 @@ async function completeGithubLogin(token, tabId, nonce) {
     // so the panel does not briefly render the re-login chip.
     await clearSyncSessionExpired();
     // Import notes saved before sign-in, then mirror everything to the cloud.
-    // The import moves the notes into the account namespace and clears the
-    // signed-out bucket right away, so a failed upload keeps them on the
-    // device without leaving them where the next account could inherit
-    // them.
-    await migrateLegacyLocalNotes(user.githubId);
+    // The import claims the notes, copies them into the account namespace
+    // and only then clears the moved ones from the signed-out bucket, so an
+    // interrupted import leaves them somewhere they can still be found. A
+    // failed import must not undo the sign-in: the session is already
+    // stored, and the notes stay in the bucket for the next sign-in.
+    try {
+      await migrateLegacyLocalNotes(user.githubId);
+    } catch (error) {
+      console.warn(
+        "[YouTube Digest] The notes saved before sign-in could not be imported yet:",
+        error.message,
+      );
+    }
     const sync = await fullSyncNotes();
     // The words follow the same road as the notes: they are imported into
     // the account namespace first, so a failed upload keeps them on the
@@ -2166,7 +2428,9 @@ async function completeGithubLogin(token, tabId, nonce) {
     chrome.runtime
       .sendMessage({ action: "githubLoginFailed", error: error.message })
       .catch(() => {});
-    return { success: false, error: error.message };
+    // The code travels with the message so a surface can tell a slow
+    // server from a dead session and say the right thing.
+    return { success: false, error: error.message, code: error.code };
   }
 }
 

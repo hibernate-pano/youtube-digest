@@ -886,17 +886,50 @@ async function handleFetchTranscript(videoId) {
     // Caption-only product scope: never fall back to paid AI transcription.
     apiUrl.searchParams.set("mode", "native");
 
-    // Make the API request
-    const response = await fetch(apiUrl.toString(), {
-      method: "GET",
-      headers: {
-        "x-api-key": settings.supadataApiKey,
+    // Make the API request. It runs under a deadline: a server that stops
+    // answering used to leave the panel waiting forever, because the request
+    // never came back and the service worker was suspended while it waited.
+    const { response, data } = await YTD_SETTINGS.withRequestTimeout(
+      async (signal) => {
+        const init = {
+          method: "GET",
+          headers: {
+            "x-api-key": settings.supadataApiKey,
+          },
+        };
+        if (signal) init.signal = signal;
+        const answer = await fetch(apiUrl.toString(), init);
+        let payload = null;
+        try {
+          payload = await answer.json();
+        } catch (error) {
+          // A body that is not JSON is handled by the status checks below.
+          // A request the deadline aborted is not: it has to surface as a
+          // timeout, not as an empty transcript.
+          if (signal && signal.aborted) throw error;
+        }
+        return { response: answer, data: payload };
       },
-    });
+      YTD_SETTINGS.TRANSCRIPT_REQUEST_TIMEOUT_MS,
+      () => {
+        const error = new Error(
+          "The transcript service did not answer within " +
+            Math.round(YTD_SETTINGS.TRANSCRIPT_REQUEST_TIMEOUT_MS / 1000) +
+            " seconds.",
+        );
+        error.code = YTD_SETTINGS.TRANSCRIPT_REQUEST_TIMEOUT;
+        return error;
+      },
+    );
 
     // Handle async jobs (for videos > 20 minutes, Supadata returns a job ID)
     if (response.status === 202) {
-      const jobData = await response.json();
+      const jobData = data || {};
+      // A job without an id cannot be polled. Asking for "undefined" would
+      // send sixty pointless requests instead of failing once.
+      if (!jobData.jobId) {
+        throw new Error("Supadata did not return a job id for this video.");
+      }
       // Poll for the result
       return await pollTranscriptJob(jobData.jobId, settings.supadataApiKey);
     }
@@ -910,7 +943,7 @@ async function handleFetchTranscript(videoId) {
     }
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
+      const errorData = data && typeof data === "object" ? data : {};
       if (response.status === 401) {
         return {
           success: false,
@@ -945,8 +978,6 @@ async function handleFetchTranscript(videoId) {
         errorData.message || `Supadata API error: ${response.status}`,
       );
     }
-
-    const data = await response.json();
 
     // Parse the response into our internal format
     // Supadata returns: { content: [{ text, offset, duration, lang }], lang, availableLangs }
@@ -1004,7 +1035,10 @@ async function handleFetchTranscript(videoId) {
     console.error("Transcript fetch error:", error);
     return {
       success: false,
-      error: error.message || "Failed to fetch transcript",
+      // The code is what the panel turns into a sentence. Only the failures
+      // that never had a code of their own fall back to their message.
+      error: error.code || error.message || "Failed to fetch transcript",
+      code: error.code,
     };
   }
 }
@@ -1024,18 +1058,42 @@ async function pollTranscriptJob(jobId, supadataApiKey) {
     // Wait before polling
     await new Promise((resolve) => setTimeout(resolve, pollInterval));
 
-    const response = await fetch(
-      `https://api.supadata.ai/v1/transcript/${encodeURIComponent(jobId)}`,
-      {
-        headers: { "x-api-key": supadataApiKey },
+    // Every poll runs under a deadline too. One poll that never answers
+    // would keep the whole job - and the service worker holding it - alive
+    // for good.
+    const { response, data } = await YTD_SETTINGS.withRequestTimeout(
+      async (signal) => {
+        const init = {
+          headers: { "x-api-key": supadataApiKey },
+        };
+        if (signal) init.signal = signal;
+        const answer = await fetch(
+          `https://api.supadata.ai/v1/transcript/${encodeURIComponent(jobId)}`,
+          init,
+        );
+        let payload = null;
+        try {
+          payload = await answer.json();
+        } catch (error) {
+          if (signal && signal.aborted) throw error;
+        }
+        return { response: answer, data: payload };
+      },
+      YTD_SETTINGS.TRANSCRIPT_REQUEST_TIMEOUT_MS,
+      () => {
+        const error = new Error(
+          "The transcript service did not answer within " +
+            Math.round(YTD_SETTINGS.TRANSCRIPT_REQUEST_TIMEOUT_MS / 1000) +
+            " seconds.",
+        );
+        error.code = YTD_SETTINGS.TRANSCRIPT_REQUEST_TIMEOUT;
+        return error;
       },
     );
 
     if (!response.ok) {
       throw new Error(`Job polling failed: ${response.status}`);
     }
-
-    const data = await response.json();
 
     if (data.status === "completed") {
       // Parse the completed transcript
@@ -1083,7 +1141,11 @@ async function pollTranscriptJob(jobId, supadataApiKey) {
     // Status is 'queued' or 'active' — keep polling
   }
 
-  throw new Error("Transcript processing timed out");
+  // The job never finished. It is the same kind of failure as a request
+  // that ran out of time, so it carries the same code.
+  const timeoutError = new Error("Transcript processing timed out");
+  timeoutError.code = YTD_SETTINGS.TRANSCRIPT_REQUEST_TIMEOUT;
+  throw timeoutError;
 }
 
 // ============================================================
@@ -1559,7 +1621,10 @@ async function handleSaveNote(
     return { success: true, note };
   } catch (error) {
     console.error("[YouTube Digest] Save note error:", error);
-    return { success: false, error: error.message };
+    // The code travels with the message: a note that did not fit into the
+    // device's storage is a different problem from a failed edit, and the
+    // panel can only say so if it knows which one happened.
+    return { success: false, error: error.message, code: error.code };
   }
 }
 
@@ -1997,6 +2062,9 @@ globalThis.__YTD_TRANSLATION_TESTING__ = {
   handleUpdateNote,
   handleSetNoteStarred,
   migrateLegacyLocalNotes,
+  migrateLegacyLocalVocabulary,
+  setStorageWithRecovery,
+  evictCachedDigests,
   mergeVocabularyForSync,
   handleExtractVocabulary,
   handleSaveVocabulary,

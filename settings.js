@@ -2,7 +2,8 @@
  * Shared, non-secret configuration helpers.
  *
  * API keys are stored in chrome.storage.local by options.js. This file contains
- * defaults and validation only, so it is safe to publish.
+ * defaults, validation, and the reason codes the surfaces agree on, so it is
+ * safe to publish.
  */
 var YTD_SETTINGS = (() => {
   const STORAGE_KEY = "ytd_settings";
@@ -35,6 +36,54 @@ var YTD_SETTINGS = (() => {
    * login.
    */
   const SYNC_EXPIRED_KEY = "ytd_sync_expired";
+
+  /**
+   * Reason code for a sync request that ran out of time.
+   *
+   * The sync service is the extension's own backend, so a request that does
+   * not answer within its budget means the service is unreachable - it says
+   * nothing about the session. The code keeps the two apart: a timeout must
+   * never be reported as a dead session, and a dead session must never be
+   * reported as a timeout.
+   */
+  const SYNC_REQUEST_TIMEOUT = "SYNC_REQUEST_TIMEOUT";
+
+  /**
+   * Reason code for a transcript request that ran out of time.
+   *
+   * Same idea as the sync timeout, for the transcript API: a slow answer is
+   * worth another try, not a sign-in prompt.
+   */
+  const TRANSCRIPT_REQUEST_TIMEOUT = "TRANSCRIPT_REQUEST_TIMEOUT";
+
+  /**
+   * Reason code for a local write that did not fit into the device's storage.
+   *
+   * The user has to hear about this one. A note that was never written is a
+   * note the user believes is there and is not, and the panel can only say so
+   * if the failure arrives as a code it knows.
+   */
+  const STORAGE_QUOTA_EXCEEDED = "STORAGE_QUOTA_EXCEEDED";
+
+  /**
+   * How long a request to the sync service may take.
+   *
+   * The service answers in well under a second. The budget is generous
+   * because a phone on a bad connection is not a broken service, but it is
+   * finite: an MV3 service worker is suspended after roughly half a minute
+   * of idleness, and a request that never ends takes the whole sync down
+   * with it.
+   */
+  const CLOUD_REQUEST_TIMEOUT_MS = 20_000;
+
+  /**
+   * How long a transcript request may take.
+   *
+   * A transcript is a bigger answer than a sync reply, and the API may have
+   * to extract the captions first, so it gets a longer budget than the sync
+   * requests - and still a finite one.
+   */
+  const TRANSCRIPT_REQUEST_TIMEOUT_MS = 45_000;
 
   /**
    * Interface language preference. The settings page owns the preference, but
@@ -355,12 +404,85 @@ var YTD_SETTINGS = (() => {
     return nonce;
   }
 
+  /**
+   * True when a storage write failed because the device's storage is full.
+   *
+   * Chrome names the failure QuotaExceededError, but the message is all some
+   * environments give, so both are looked at. A write that failed for any
+   * other reason must not be treated as a full disk: the recovery for a full
+   * disk throws data away, and that is the wrong thing to do to a note.
+   */
+  function isQuotaExceededError(error) {
+    if (!error) return false;
+    if (String(error.name || "") === "QuotaExceededError") return true;
+    return /quota/i.test(String(error.message || ""));
+  }
+
+  /**
+   * Runs a request under a deadline.
+   *
+   * A request that hangs must not hang the extension. The MV3 service worker
+   * is suspended while it waits, the sync stops in the middle, and the user
+   * is left with a spinner that never resolves.
+   *
+   * The deadline is enforced twice on purpose. An AbortController cancels the
+   * request when the platform offers one, and the race rejects the promise
+   * even when it does not - so the caller always gets an answer, and the
+   * answer is the reason code the surface needs.
+   *
+   * @param {function(AbortSignal|undefined): Promise} request the request to run
+   * @param {number} timeoutMs how long it may take
+   * @param {function(): Error} onTimeout builds the error the deadline reports
+   */
+  function withRequestTimeout(request, timeoutMs, onTimeout) {
+    const controller =
+      typeof AbortController === "function" ? new AbortController() : null;
+    let timerId = null;
+    const deadline = new Promise((_, reject) => {
+      timerId = setTimeout(() => {
+        if (controller) {
+          try {
+            controller.abort();
+          } catch (error) {
+            // The request is already gone; the deadline still reports.
+          }
+        }
+        reject(
+          typeof onTimeout === "function"
+            ? onTimeout()
+            : new Error("The request timed out."),
+        );
+      }, timeoutMs);
+    });
+    const started = (() => {
+      try {
+        return controller ? request(controller.signal) : request();
+      } catch (error) {
+        // A request that throws before it returns a promise still has to
+        // reach the caller, and the deadline has to be cleaned up.
+        return Promise.reject(error);
+      }
+    })();
+    // The deadline can win while the request is still on the wire. Its own
+    // failure is then nobody's job, and an unhandled rejection would take the
+    // service worker down with it.
+    Promise.resolve(started).catch(() => {});
+    return Promise.race([started, deadline]).finally(() => {
+      if (timerId !== null) clearTimeout(timerId);
+    });
+  }
+
   return {
     STORAGE_KEY,
     SERVER_BASE_URL,
     GITHUB_SESSION_KEY,
     SYNC_SESSION_EXPIRED,
     SYNC_EXPIRED_KEY,
+    SYNC_REQUEST_TIMEOUT,
+    TRANSCRIPT_REQUEST_TIMEOUT,
+    STORAGE_QUOTA_EXCEEDED,
+    CLOUD_REQUEST_TIMEOUT_MS,
+    TRANSCRIPT_REQUEST_TIMEOUT_MS,
     UI_LANGUAGE_STORAGE_KEY,
     PENDING_LOGIN_NONCE_KEY,
     NOTES_STORAGE_KEY,
@@ -380,6 +502,8 @@ var YTD_SETTINGS = (() => {
     translateSyncCopy,
     buildGithubLoginUrl,
     createLoginNonce,
+    isQuotaExceededError,
+    withRequestTimeout,
     PROVIDERS,
     KEY_FIELDS,
     getProvider,
