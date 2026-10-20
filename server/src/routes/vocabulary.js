@@ -1,10 +1,13 @@
-const { json, HttpError } = require("../middleware");
+const { json, HttpError, serverTime } = require("../middleware");
 const { parseVocabulary, VOCABULARY_STATUSES } = require("../validate");
 const { readObjectBody } = require("./notes");
 
 async function listVocabulary(ctx) {
   const rows = await ctx.store.listVocabulary(ctx.user.id);
-  return json({ vocabulary: rows });
+  // The server's own clock travels with the rows: the client needs it to
+  // tell which side of a conflict is newer without trusting the device
+  // clock.
+  return json({ vocabulary: rows, serverTime: serverTime() });
 }
 
 async function upsertVocabulary(ctx) {
@@ -12,7 +15,7 @@ async function upsertVocabulary(ctx) {
   const vocab = parseVocabulary(input);
   if (!vocab) throw new HttpError(400, "A non-empty term is required.");
   const row = await ctx.store.upsertVocabulary(ctx.user.id, vocab);
-  return json({ vocabulary: row }, 201);
+  return json({ vocabulary: row, serverTime: serverTime() }, 201);
 }
 
 async function updateVocabularyStatus(ctx) {
@@ -23,7 +26,7 @@ async function updateVocabularyStatus(ctx) {
   }
   const row = await ctx.store.updateVocabularyStatus(ctx.user.id, ctx.params.id, status);
   if (!row) throw new HttpError(404, "Vocabulary entry not found.");
-  return json({ vocabulary: row });
+  return json({ vocabulary: row, serverTime: serverTime() });
 }
 
 async function deleteVocabulary(ctx) {

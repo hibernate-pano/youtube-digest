@@ -236,6 +236,36 @@ test("sync delta returns only changed rows for the caller", async () => {
   assert.equal(bobDelta.data.notes[0].note, "bob note");
 });
 
+test("sync responses carry the server's own clock", async () => {
+  const env = makeEnv();
+  const token = await signIn(env, 1001, "alice");
+
+  // The rows are stamped with the server's clock, but the client compares
+  // them against timestamps taken from the device clock. Without a server
+  // timestamp the client cannot tell which side of a conflict is newer, so
+  // every sync response has to carry the server's own time.
+  const before = Date.now();
+  const listed = await api(env, "GET", "/api/notes", { token });
+  const after = Date.now();
+  assert.equal(typeof listed.data.serverTime, "string");
+  const serverMs = Date.parse(listed.data.serverTime);
+  assert.ok(Number.isFinite(serverMs), "serverTime must be a parsable timestamp");
+  assert.ok(
+    serverMs >= before - 1000 && serverMs <= after + 1000,
+    "serverTime must be the server's current time, not a row timestamp",
+  );
+
+  const vocabulary = await api(env, "GET", "/api/vocabulary", { token });
+  assert.equal(typeof vocabulary.data.serverTime, "string");
+  const delta = await api(env, "GET", "/api/sync", { token });
+  assert.equal(typeof delta.data.serverTime, "string");
+  const created = await api(env, "POST", "/api/notes", {
+    token,
+    body: { note: "with a clock", videoId: "abc123xyz", clientId: "clock_1" },
+  });
+  assert.equal(typeof created.data.serverTime, "string");
+});
+
 test("input validation caps lengths and rejects empty payloads", async () => {
   const env = makeEnv();
   const token = await signIn(env, 1001, "alice");

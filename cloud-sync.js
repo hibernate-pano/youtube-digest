@@ -22,10 +22,23 @@ async function saveNoteToStorage(note) {
   // Cloud mirror: best-effort, never blocks the local save.
   const session = await getGithubSession();
   if (session) {
-    await pushNoteToCloud(session, note).catch((error) => {
+    try {
+      const pushed = await pushNoteToCloud(session, note);
+      const cloudId = pushed && pushed.note && pushed.note.id;
+      if (cloudId) {
+        // Remember the server id. Without it the next full sync treats the
+        // note as never synced and pushes it again, and the favorite flag
+        // would travel with it even though the user never touched it here.
+        note.cloudId = cloudId;
+        if (typeof note.starred === "boolean") {
+          note.starredSynced = note.starred;
+        }
+        await chrome.storage.local.set({ [namespace]: notes });
+      }
+    } catch (error) {
       reportSyncSessionExpired(error);
       console.warn("[YouTube Digest] Note cloud sync failed:", error.message);
-    });
+    }
   }
 }
 
@@ -52,23 +65,80 @@ async function handleUpdateNote(noteId, text) {
     const session = await getGithubSession();
     if (session) {
       try {
+        const payload = localNoteToCloudPayload(note);
         if (note.cloudId) {
           await cloudFetch("/api/notes/" + encodeURIComponent(note.cloudId), {
             method: "PATCH",
             token: session.token,
-            body: localNoteToCloudPayload(note),
+            body: payload,
           });
         } else {
-          const pushed = await pushNoteToCloud(session, note);
+          const pushed = await pushNoteToCloud(session, note, payload);
           const cloudId = pushed && pushed.note && pushed.note.id;
           if (cloudId) {
             note.cloudId = cloudId;
             await writeLocalNotes(namespace, notes);
           }
         }
+        // Only a payload that carried the flag can move the baseline: when
+        // the flag was left out, the server kept its own value, and that is
+        // what the next local change has to be measured against.
+        if (payload.starred !== undefined && typeof note.starred === "boolean") {
+          note.starredSynced = note.starred;
+          note.starredDirty = false;
+          await writeLocalNotes(namespace, notes);
+        }
       } catch (error) {
         reportSyncSessionExpired(error);
         console.warn("[YouTube Digest] Note update cloud sync failed:", error.message);
+      }
+    }
+    return { success: true, note };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Stars or unstars a note on this device and mirrors it to the cloud.
+ *
+ * This is the only path that may change the favorite flag: the change is
+ * marked as an explicit user action, so the sync layer knows it has to be
+ * pushed instead of being overwritten by the cloud copy. A note the server
+ * already knows is updated through the dedicated star endpoint, so the note
+ * text is never rewritten by a star click.
+ */
+async function handleSetNoteStarred(noteId, starred) {
+  try {
+    const next = starred === true;
+    const namespace = await notesNamespace();
+    const notes = await readLocalNotes(namespace);
+    const note = notes.find((candidate) => candidate.id === noteId);
+    if (!note) return { success: false, error: "Note not found" };
+    note.starred = next;
+    note.starredDirty = true;
+    await writeLocalNotes(namespace, notes);
+    const session = await getGithubSession();
+    if (session) {
+      try {
+        if (note.cloudId) {
+          await cloudFetch("/api/notes/" + encodeURIComponent(note.cloudId) + "/star", {
+            method: "PATCH",
+            token: session.token,
+            body: { starred: next },
+          });
+        } else {
+          const pushed = await pushNoteToCloud(session, note);
+          const cloudId = pushed && pushed.note && pushed.note.id;
+          if (cloudId) note.cloudId = cloudId;
+        }
+        // The server confirmed the flag: it is the new baseline.
+        note.starredSynced = next;
+        note.starredDirty = false;
+        await writeLocalNotes(namespace, notes);
+      } catch (error) {
+        reportSyncSessionExpired(error);
+        console.warn("[YouTube Digest] Note star cloud sync failed:", error.message);
       }
     }
     return { success: true, note };
@@ -121,6 +191,82 @@ async function handleDeleteNote(noteId) {
 // CLOUD SYNC (GitHub account)
 // ============================================================
 
+/**
+ * Storage key for the last clock-offset sample.
+ *
+ * The offset (server clock minus device clock) is measured from the server
+ * timestamp every sync response carries, and persisted: a device with a
+ * wrong clock can only be corrected while it is online, and the extension
+ * must not re-measure on every single request.
+ */
+const CLOCK_OFFSET_KEY = "ytd_clock_offset";
+
+/**
+ * An offset larger than this is not plausible clock drift. Beyond it the
+ * device clock is simply wrong (manually changed, a wrong time zone in a
+ * virtual machine, a reset board), and the local timestamps cannot be
+ * placed on the server's timeline at all.
+ */
+const MAX_PLAUSIBLE_CLOCK_OFFSET_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Reads the persisted clock offset.
+ *
+ * @returns {Promise<{known: boolean, offset: number, trusted: boolean}>}
+ *   `known` is false when no server timestamp has ever been seen, which
+ *   means the client falls back to comparing raw timestamps.
+ */
+async function readClockContext() {
+  let stored = null;
+  try {
+    const result = await chrome.storage.local.get(CLOCK_OFFSET_KEY);
+    stored = result[CLOCK_OFFSET_KEY];
+  } catch (error) {
+    return { known: false, offset: 0, trusted: false };
+  }
+  if (!stored || typeof stored.offset !== "number" || !Number.isFinite(stored.offset)) {
+    return { known: false, offset: 0, trusted: false };
+  }
+  return { known: true, offset: stored.offset, trusted: stored.trusted === true };
+}
+
+/**
+ * Records the server's clock and derives the device clock's offset from it.
+ *
+ * The server stamps the response somewhere between the request going out
+ * and the reply coming back, so the midpoint of that window is the best
+ * estimate of what the device clock read at that moment. The measurement is
+ * best-effort: a failure here must never break the request it rides on.
+ *
+ * @param {string} serverTime the timestamp the server put on the response.
+ * @param {number} requestStartedAt device clock when the request went out.
+ * @param {number} responseReceivedAt device clock when the reply arrived.
+ * @returns {Promise<{known: boolean, offset: number, trusted: boolean}>}
+ */
+async function recordServerTime(serverTime, requestStartedAt, responseReceivedAt) {
+  const serverMs = Date.parse(serverTime);
+  if (!Number.isFinite(serverMs)) return readClockContext();
+  const localMidpoint = (requestStartedAt + responseReceivedAt) / 2;
+  const offset = Math.round(serverMs - localMidpoint);
+  const trusted = Math.abs(offset) <= MAX_PLAUSIBLE_CLOCK_OFFSET_MS;
+  try {
+    await chrome.storage.local.set({
+      [CLOCK_OFFSET_KEY]: { offset, trusted, sampledAt: Date.now() },
+    });
+  } catch (error) {
+    // Storage unavailable: this round simply merges on raw timestamps.
+  }
+  if (!trusted) {
+    console.warn(
+      "[YouTube Digest] This device's clock is off by " +
+        Math.round(offset / 3600000) +
+        "h, so notes changed in two places are kept as they are instead of " +
+        "one overwriting the other. Fix the system clock to resume merging.",
+    );
+  }
+  return { known: true, offset, trusted };
+}
+
 function formatSyncTimestamp(seconds) {
   const safe = Math.max(0, Number(seconds) || 0);
   const whole = Math.floor(safe);
@@ -149,12 +295,22 @@ async function cloudFetch(path, options) {
   const body = options && options.body;
   const headers = { "Content-Type": "application/json" };
   if (token) headers.Authorization = "Bearer " + token;
+  const requestStartedAt = Date.now();
   const response = await fetch(YTD_SETTINGS.SERVER_BASE_URL + path, {
     method,
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const data = await response.json().catch(() => null);
+  const responseReceivedAt = Date.now();
+  // Any response that carries the server's clock teaches the extension how
+  // far its own clock is off. Measuring here means the offset is known
+  // before the next merge, and it costs nothing on the request itself.
+  if (data && typeof data.serverTime === "string") {
+    await recordServerTime(data.serverTime, requestStartedAt, responseReceivedAt).catch(
+      () => {},
+    );
+  }
   if (!response.ok) {
     const error = new Error((data && data.error) || "Sync request failed: " + response.status);
     error.status = response.status;
@@ -251,6 +407,38 @@ async function writeLocalNotes(namespace, notes) {
   await chrome.storage.local.set({ [namespace]: notes });
 }
 
+/**
+ * True when the favorite flag was changed on this device and the change has
+ * not reached the server yet.
+ *
+ * The baseline is the flag the server last confirmed (`starredSynced`). A
+ * note without a baseline is never dirty: before this existed the
+ * extension had no way to star a note, so an unknown flag is the server's
+ * value rather than a user action - treating it as dirty would let a stale
+ * local copy undo a star the user removed in the dashboard.
+ */
+function isStarredDirty(note) {
+  if (!note) return false;
+  if (note.starredDirty === true) return true;
+  if (typeof note.starredSynced !== "boolean") return false;
+  return note.starred !== note.starredSynced;
+}
+
+/**
+ * True when the payload may carry the favorite flag.
+ *
+ * A note the server already knows only sends the flag when the user
+ * changed it here: sending the local copy on every push would clear the
+ * stars the user set in the dashboard, because the local copy is usually
+ * the stale one. A note the server has never seen sends it too - there is
+ * nothing stored that could be cleared.
+ */
+function shouldSendStarred(note) {
+  if (!note || typeof note.starred !== "boolean") return false;
+  if (!note.cloudId) return true;
+  return isStarredDirty(note);
+}
+
 function localNoteToCloudPayload(note) {
   const payload = {
     clientId: String(note.id || ""),
@@ -261,12 +449,12 @@ function localNoteToCloudPayload(note) {
     timestampSeconds: Number(note.timestampSeconds) || 0,
     quote: String(note.text || "").slice(0, 3000),
   };
-  // Only send `starred` when the local note actually carries an explicit
-  // boolean. The server treats a missing flag as "leave the stored value
-  // alone", so sending a defaulted `false` here would silently clear every
-  // favorite the user set in the web dashboard on the next push.
-  if (typeof note.starred === "boolean") {
-    payload.starred = note.starred;
+  // The favorite flag is only sent when the user changed it on this
+  // device. The server treats a missing flag as "leave the stored value
+  // alone", so sending the local copy every time would silently clear
+  // every favorite the user set in the web dashboard.
+  if (shouldSendStarred(note)) {
+    payload.starred = note.starred === true;
   }
   return payload;
 }
@@ -275,6 +463,7 @@ function cloudToLocalNote(cloud) {
   const seconds = Number(cloud.timestampSeconds) || 0;
   const createdMs = new Date(cloud.createdAt).getTime();
   const updatedMs = new Date(cloud.updatedAt).getTime();
+  const starred = cloud.starred === true;
   return {
     id: String(cloud.clientId || ""),
     videoId: String(cloud.videoId || ""),
@@ -288,12 +477,72 @@ function cloudToLocalNote(cloud) {
     text: String(cloud.note || ""),
     rawText: String(cloud.note || ""),
     // The cloud is authoritative for the favorite flag: without this the
-    // merge below would overwrite the local copy and drop the star.
-    starred: cloud.starred === true,
+    // merge below would overwrite the local copy and drop the star. The
+    // same value is the baseline a later local change is measured against.
+    starred,
+    starredSynced: starred,
     createdAt: Number.isFinite(createdMs) ? createdMs : Date.now(),
     updatedAt: Number.isFinite(updatedMs) ? updatedMs : Date.now(),
     cloudId: String(cloud.id || ""),
   };
+}
+
+/**
+ * Decides which side of a conflict wins.
+ *
+ * The cloud timestamps are stamped by the server, the local ones by the
+ * device clock, so the two can only be compared after the device clock has
+ * been corrected with the measured offset. Without that correction a device
+ * whose clock runs fast wins every conflict and silently rolls back the
+ * changes made in the dashboard, and a device whose clock runs slow loses
+ * every local edit.
+ *
+ * @param {number} cloudMs the cloud timestamp, in server time.
+ * @param {number} localMs the local timestamp, in device time.
+ * @param {{known: boolean, offset: number, trusted: boolean}} [clock]
+ * @returns {"cloud"|"local"|"hold"}
+ *   "hold" means neither side may be trusted: the conflict is left alone
+ *   instead of guessing.
+ */
+function resolveConflictWinner(cloudMs, localMs, clock) {
+  if (!clock || !clock.known) {
+    // No server clock reference yet (an older server that does not send its
+    // time, or a first request that failed): fall back to the raw
+    // comparison so nothing changes for those deployments.
+    return cloudMs > localMs ? "cloud" : "local";
+  }
+  if (!clock.trusted) {
+    // The device clock is too far off to place the local timestamp on the
+    // server's timeline. Overwriting either side would destroy work, so
+    // the conflict is held until the clock can be believed.
+    return "hold";
+  }
+  const normalizedLocalMs = localMs + clock.offset;
+  return cloudMs > normalizedLocalMs ? "cloud" : "local";
+}
+
+/**
+ * Merges one note's local and cloud copies.
+ *
+ * The note body follows the row winner, but the favorite flag is merged on
+ * its own: the cloud is the source of truth unless the star was changed
+ * explicitly on this device and has not been pushed yet.
+ *
+ * @returns {{item: object, push: boolean}} the merged note and whether it
+ *   still has to be sent to the server.
+ */
+function mergeNoteForSync(local, cloud, winner) {
+  const item = winner === "cloud" ? cloudToLocalNote(cloud) : local;
+  if (isStarredDirty(local)) {
+    // An explicit change that never reached the server wins, and the note
+    // has to be pushed so the change actually arrives.
+    item.starred = local.starred === true;
+    return { item, push: true };
+  }
+  const cloudStarred = cloud.starred === true;
+  item.starred = cloudStarred;
+  item.starredSynced = cloudStarred;
+  return { item, push: winner === "local" };
 }
 
 /**
@@ -304,8 +553,16 @@ function cloudToLocalNote(cloud) {
  * - Local rows that were synced before but are missing from the cloud were
  *   deleted elsewhere (e.g. from the web dashboard), so they are dropped
  *   locally too; without this, deletions would resurrect on the next sync.
+ *
+ * `clock` carries the measured offset between the device clock and the
+ * server clock; `mergeItem` can override how a conflicting pair is turned
+ * into one row (the notes use it to merge the favorite flag on its own).
  */
-function mergeCollectionsForSync(localItems, cloudItems, { keyOfLocal, keyOfCloud, toLocal }) {
+function mergeCollectionsForSync(
+  localItems,
+  cloudItems,
+  { keyOfLocal, keyOfCloud, toLocal, clock, mergeItem },
+) {
   const cloudByKey = new Map();
   for (const cloud of cloudItems || []) {
     const key = keyOfCloud(cloud);
@@ -319,10 +576,29 @@ function mergeCollectionsForSync(localItems, cloudItems, { keyOfLocal, keyOfClou
     if (cloud) {
       const cloudMs = new Date(cloud.updatedAt).getTime();
       const localMs = Number(local.updatedAt) || Number(local.createdAt) || 0;
-      const cloudNewer = cloudMs > localMs;
+      const winner = resolveConflictWinner(cloudMs, localMs, clock);
+      if (winner === "hold") {
+        // Keep the local copy, do not push it and do not replace it with
+        // the cloud copy: with an untrustworthy clock neither side can be
+        // called the newer one, so nothing is thrown away.
+        merged.set(key, {
+          source: "hold",
+          item: local,
+          push: false,
+          updatedAt: localMs,
+        });
+        continue;
+      }
+      const outcome = mergeItem
+        ? mergeItem(local, cloud, winner)
+        : {
+            item: winner === "cloud" ? toLocal(cloud) : local,
+            push: winner === "local",
+          };
       merged.set(key, {
-        source: cloudNewer ? "cloud" : "local",
-        item: cloudNewer ? cloud : local,
+        source: winner,
+        item: outcome.item,
+        push: outcome.push,
         updatedAt: Math.max(cloudMs, localMs),
       });
     } else if (!local.cloudId) {
@@ -330,6 +606,7 @@ function mergeCollectionsForSync(localItems, cloudItems, { keyOfLocal, keyOfClou
       merged.set(key, {
         source: "local",
         item: local,
+        push: true,
         updatedAt: Number(local.updatedAt) || Number(local.createdAt) || 0,
       });
     }
@@ -338,32 +615,39 @@ function mergeCollectionsForSync(localItems, cloudItems, { keyOfLocal, keyOfClou
   for (const cloud of cloudByKey.values()) {
     const key = keyOfCloud(cloud);
     if (!merged.has(key)) {
-      merged.set(key, { source: "cloud", item: cloud, updatedAt: new Date(cloud.updatedAt).getTime() });
+      merged.set(key, {
+        source: "cloud",
+        item: toLocal(cloud),
+        push: false,
+        updatedAt: new Date(cloud.updatedAt).getTime(),
+      });
     }
   }
   const mergedItems = [];
   const toPush = [];
   for (const entry of merged.values()) {
-    mergedItems.push(entry.source === "cloud" ? toLocal(entry.item) : entry.item);
-    if (entry.source === "local") toPush.push(entry.item);
+    mergedItems.push(entry.item);
+    if (entry.push) toPush.push(entry.item);
   }
   return { mergedItems, toPush };
 }
 
-function mergeNotesForSync(localNotes, cloudNotes) {
+function mergeNotesForSync(localNotes, cloudNotes, clock) {
   const result = mergeCollectionsForSync(localNotes, cloudNotes, {
     keyOfLocal: (item) => (item && item.id ? String(item.id) : ""),
     keyOfCloud: (item) => (item && item.clientId ? String(item.clientId) : ""),
     toLocal: cloudToLocalNote,
+    mergeItem: mergeNoteForSync,
+    clock,
   });
   return { mergedNotes: result.mergedItems, toPush: result.toPush };
 }
 
-async function pushNoteToCloud(session, note) {
+async function pushNoteToCloud(session, note, payload) {
   return cloudFetch("/api/notes", {
     method: "POST",
     token: session.token,
-    body: localNoteToCloudPayload(note),
+    body: payload || localNoteToCloudPayload(note),
   });
 }
 
@@ -396,6 +680,7 @@ async function runFullSync({
   cloudIdOf,
   readLocal,
   writeLocal,
+  mergeItem,
 }) {
   const session = await getGithubSession();
   if (!session) return { success: true, synced: false, reason: "not signed in" };
@@ -424,17 +709,23 @@ async function runFullSync({
       expired: isSyncSessionExpired(error),
     };
   }
+  // The pull carried the server's clock, so the offset between the device
+  // clock and the server clock is known before the merge happens.
+  const clock = await readClockContext();
   const { mergedItems, toPush } = mergeCollectionsForSync(local, cloud, {
     keyOfLocal,
     keyOfCloud,
     toLocal,
+    clock,
+    mergeItem,
   });
   for (const item of toPush) {
     try {
+      const payload = toCloudPayload(item);
       const pushed = await cloudFetch(pushPath, {
         method: "POST",
         token: session.token,
-        body: toCloudPayload(item),
+        body: payload,
       });
       const cloudId = cloudIdOf(pushed);
       if (cloudId) {
@@ -442,6 +733,12 @@ async function runFullSync({
         // deletions elsewhere propagate instead of resurrecting.
         const target = mergedItems.find((candidate) => keyOfLocal(candidate) === keyOfLocal(item));
         if (target) target.cloudId = cloudId;
+      }
+      if (payload.starred !== undefined && typeof item.starred === "boolean") {
+        // The server confirmed the favorite flag, so it becomes the
+        // baseline a later local change is measured against.
+        item.starredSynced = item.starred;
+        item.starredDirty = false;
       }
     } catch (error) {
       reportSyncSessionExpired(error);
@@ -464,6 +761,7 @@ async function fullSyncNotes() {
     cloudIdOf: (pushed) => pushed && pushed.note && pushed.note.id,
     readLocal: readLocalNotes,
     writeLocal: writeLocalNotes,
+    mergeItem: mergeNoteForSync,
   });
 }
 
@@ -737,26 +1035,102 @@ async function updateLocalVocabularyStatus(status, cloudId) {
 
 
 /**
- * One-time migration of the signed-out local notes into the account's
- * namespace (copied, never moved) so existing notes appear after login.
- * The signed-out copy is removed only after a successful full sync, so a
- * failed sync can never lose data; the id-based dedupe keeps re-logins
- * from importing the same note twice.
+ * Storage key for the record of which account owns which note from the
+ * signed-out bucket.
+ *
+ * The bucket is cleared as soon as it is imported, so a failed upload can
+ * never leave it behind for the next account to inherit. This record is the
+ * safety net for the case where that clear did not happen (a storage
+ * error, an interrupted write): those notes are already spoken for and
+ * must not be imported by a second account.
+ */
+const NOTES_CLAIM_KEY = "ytd_notes_claim";
+
+/**
+ * Reads the claim record: which account owns which note id.
+ *
+ * @returns {Promise<Record<string, string>>} note id -> account id.
+ */
+async function readNotesClaim() {
+  try {
+    const result = await chrome.storage.local.get(NOTES_CLAIM_KEY);
+    const claim = result[NOTES_CLAIM_KEY];
+    if (!claim || typeof claim !== "object" || !claim.ids) return {};
+    const owners = {};
+    for (const [id, owner] of Object.entries(claim.ids)) {
+      owners[String(id)] = String(owner);
+    }
+    return owners;
+  } catch (error) {
+    return {};
+  }
+}
+
+async function writeNotesClaim(owners) {
+  try {
+    await chrome.storage.local.set({ [NOTES_CLAIM_KEY]: { ids: owners } });
+  } catch (error) {
+    // The claim is a safety net, not the primary guard: the bucket is
+    // already cleared when the import happens.
+  }
+}
+
+/**
+ * Imports the notes that were saved while signed out into the account that
+ * is signing in now.
+ *
+ * Two rules make the import safe:
+ * - A note belongs to exactly one account. Once a note has been handed to
+ *   an account it is never handed to another one, so a failed sync cannot
+ *   make another learner inherit notes that were written under a different
+ *   account. The account that owns a note can always import it again, so a
+ *   retry never loses it.
+ * - The signed-out bucket is cleared as soon as the notes are copied into
+ *   the account namespace, not after the upload. The notes now live in the
+ *   account's own namespace, so a failed upload keeps them on the device
+ *   and the next sync of that account sends them; what it must never do is
+ *   leave them where the next account could pick them up.
  */
 async function migrateLegacyLocalNotes(githubId) {
+  const accountId = String(githubId || "").trim();
+  if (!accountId) return 0;
   const legacy = await readLocalNotes(YTD_SETTINGS.NOTES_STORAGE_KEY);
   if (!Array.isArray(legacy) || legacy.length === 0) return 0;
-  const namespace = YTD_SETTINGS.notesStorageKey(githubId);
+  const owners = await readNotesClaim();
+  const unclaimed = legacy.filter((note) => {
+    if (!note || !note.id) return false;
+    const owner = owners[String(note.id)];
+    // A note this account already owns is importable again; a note that
+    // belongs to another account is not.
+    return !owner || owner === accountId;
+  });
+  if (unclaimed.length === 0) {
+    // Every note in the bucket already belongs to another account.
+    console.warn(
+      "[YouTube Digest] The notes saved while signed out already belong to " +
+        "another account and were not imported here.",
+    );
+    return 0;
+  }
+  const namespace = YTD_SETTINGS.notesStorageKey(accountId);
   const current = await readLocalNotes(namespace);
   const byId = new Map(current.map((note) => [String(note.id), note]));
   let added = 0;
-  for (const note of legacy) {
+  for (const note of unclaimed) {
     if (note && note.id && !byId.has(String(note.id))) {
       byId.set(String(note.id), note);
       added += 1;
     }
   }
   if (added > 0) await writeLocalNotes(namespace, [...byId.values()]);
+  // The notes now live in the account namespace, so the signed-out bucket
+  // is cleared right away - before the upload - and the ids are recorded
+  // as belonging to this account.
+  await chrome.storage.local.remove(YTD_SETTINGS.NOTES_STORAGE_KEY);
+  for (const note of unclaimed) {
+    owners[String(note.id)] = accountId;
+  }
+  await writeNotesClaim(owners);
   return added;
 }
 
@@ -807,12 +1181,12 @@ async function completeGithubLogin(token, tabId) {
     // so the panel does not briefly render the re-login chip.
     await clearSyncSessionExpired();
     // Import notes saved before sign-in, then mirror everything to the cloud.
-    // The signed-out copy is cleared only after the sync succeeded.
-    const migrated = await migrateLegacyLocalNotes(user.githubId);
+    // The import moves the notes into the account namespace and clears the
+    // signed-out bucket right away, so a failed upload keeps them on the
+    // device without leaving them where the next account could inherit
+    // them.
+    await migrateLegacyLocalNotes(user.githubId);
     const sync = await fullSyncNotes();
-    if (sync.success && migrated > 0) {
-      await chrome.storage.local.remove(YTD_SETTINGS.NOTES_STORAGE_KEY);
-    }
     chrome.runtime
       .sendMessage({ action: "githubLoginChanged", login: user.login, sync })
       .catch(() => {});

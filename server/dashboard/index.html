@@ -48,11 +48,30 @@
       <section id="signedOut" class="signed-out" hidden>
         <h1>Your learning data, in one place</h1>
         <p>
-          Sign in with GitHub to see the notes, favorites, and vocabulary you
-          saved in the YouTube Digest extension. Each GitHub account only
-          ever sees its own data.
+          Sign in with GitHub to see the notes you wrote while watching a
+          video, the notes you starred, and the words you saved for review.
+          Each GitHub account only ever sees its own data.
+        </p>
+        <p class="signed-out-note">
+          Your notes arrive here as soon as you sign in with the same GitHub
+          account the extension uses. Starred notes and saved words are
+          created in the extension - the star on a note, and the Words tab -
+          so this page fills up as you use them.
         </p>
         <a class="login-btn big" href="/api/auth/login?redirect=/">Sign in with GitHub</a>
+        <div class="how-to">
+          <h2>Coming from the extension?</h2>
+          <ol>
+            <li>Open the YouTube Digest side panel on any YouTube tab.</li>
+            <li>Click <strong>Sign in</strong> in the panel header and sign in with GitHub.</li>
+            <li>Sign in here with the same account to see the same data.</li>
+          </ol>
+          <p>
+            This page is the sync service your extension already talks to.
+            Its address is in the extension's settings, in the GitHub sync
+            section.
+          </p>
+        </div>
       </section>
 
       <section id="notesPanel" hidden>
@@ -69,7 +88,12 @@
           <h2>Favorites</h2>
           <span class="count" id="favoritesCount"></span>
         </div>
-        <div class="empty" id="favoritesEmpty" hidden>Nothing favorited yet. Star a note to pin it here.</div>
+        <p class="panel-note">
+          Starred notes come from the extension: star a note in the side
+          panel and it is pinned here, on every device signed in to the same
+          account.
+        </p>
+        <div class="empty" id="favoritesEmpty" hidden>Nothing starred yet. Star a note in the extension and it is pinned here.</div>
         <div id="favoritesList" class="cards"></div>
       </section>
 
@@ -78,9 +102,13 @@
           <h2>Vocabulary</h2>
           <span class="count" id="vocabularyCount"></span>
         </div>
+        <p class="panel-note">
+          Words come from the extension: save a word from its Words tab and
+          it is listed here, ready for review.
+        </p>
         <div class="empty" id="vocabularyEmpty" hidden>
-          No saved words yet. Words you saved in the extension while signed in
-          appear here.
+          No words saved yet. Save a word in the extension and it appears
+          here.
         </div>
         <div id="vocabularyList" class="cards"></div>
       </section>
@@ -90,7 +118,11 @@
           <h2>Review due words</h2>
           <span class="count" id="reviewCount"></span>
         </div>
-        <div class="empty" id="reviewEmpty" hidden>Nothing due right now. Words you have saved come back here for review.</div>
+        <p class="panel-note">
+          Review is scheduled on the server: saved words come back here on
+          their own schedule, and the grade you give sets the next one.
+        </p>
+        <div class="empty" id="reviewEmpty" hidden>Nothing due right now. Saved words come back here on their own schedule.</div>
         <div id="reviewCard" class="review-card" hidden>
           <div class="review-term" id="dashReviewTerm"></div>
           <div class="review-sentence" id="dashReviewSentence"></div>

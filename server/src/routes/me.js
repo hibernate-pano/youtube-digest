@@ -1,4 +1,4 @@
-const { json, HttpError } = require("../middleware");
+const { json, HttpError, serverTime } = require("../middleware");
 
 async function me(ctx) {
   return json({
@@ -21,7 +21,7 @@ async function syncDelta(ctx) {
     throw new HttpError(400, "since must be an ISO 8601 timestamp.");
   }
   const delta = await ctx.store.getSyncDelta(ctx.user.id, since || undefined);
-  return json(delta);
+  return json({ ...delta, serverTime: serverTime() });
 }
 
 async function exportData(ctx) {

@@ -100,9 +100,38 @@ body {
 .signed-out h1 { font-size: var(--fs-3xl); }
 .signed-out p { color: var(--text-muted); }
 
+/* The second paragraph of the signed-out block carries the detail: what
+   reaches the page and when. It is quieter than the lead paragraph so the
+   call to action stays the loudest thing on the screen. */
+.signed-out-note { font-size: var(--fs-md); }
+
+/* The "coming from the extension" steps are a left-aligned block inside a
+   centred hero: a numbered list reads badly when centred. */
+.how-to {
+  margin-top: var(--sp-8);
+  padding: var(--sp-4) var(--sp-5);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  text-align: left;
+}
+.how-to h2 { margin: 0 0 var(--sp-2); font-size: var(--fs-lg); }
+.how-to ol { margin: 0; padding-left: 20px; color: var(--text-muted); }
+.how-to li { margin-bottom: 4px; }
+.how-to p { margin: var(--sp-3) 0 0; font-size: var(--fs-sm); color: var(--text-muted); }
+
 .list-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: var(--sp-3); }
 .list-head h2 { margin: 0; font-size: var(--fs-2xl); }
 .count { color: var(--text-muted); font-size: var(--fs-md); }
+
+/* One line under a tab heading that says where the data comes from, so an
+   empty list explains itself instead of looking broken. */
+.panel-note {
+  margin: 0 0 var(--sp-3);
+  color: var(--text-muted);
+  font-size: var(--fs-md);
+  max-width: 60ch;
+}
 
 .empty {
   padding: 28px;
