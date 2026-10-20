@@ -490,13 +490,12 @@ test("the panel has no hardcoded English left in its user-visible strings", () =
     }
   }
 
-  // The note delete button carries an English default because the release
-  // gate checks for that exact string. The panel replaces it with the
-  // translated label on the next line, so the user never reads the English.
-  const allowed = new Set(['aria-label="Delete note"', 'title="Delete note"']);
+  // Every label and title has to come from the copy table. There is no
+  // exception any more: the note delete button used to carry an English
+  // default because the release gate checked for that exact string, and
+  // the string was pinned rather than translated.
   for (const match of code.matchAll(/\b(?:aria-label|title)="([^"${]*)"/g)) {
     if (!/[A-Za-z]{2,}/.test(match[1])) continue;
-    if (allowed.has(match[0])) continue;
     offenders.push(match[0]);
   }
 

@@ -325,6 +325,7 @@ const PANEL_COPY = {
     wordStatusReviewing: "Reviewing",
     wordStatusMastered: "Mastered",
     deleteWord: "Delete word",
+    deleteNote: "Delete note",
     reviewTitle: "Review",
     reviewSignIn:
       "Sign in with GitHub to review your words on a schedule.",
@@ -541,6 +542,7 @@ const PANEL_COPY = {
     wordStatusReviewing: "复习中",
     wordStatusMastered: "已掌握",
     deleteWord: "删除生词",
+    deleteNote: "删除笔记",
     reviewTitle: "复习",
     reviewSignIn: "使用 GitHub 登录后，可以按计划复习你的生词。",
     reviewEmptyState: "现在没有需要复习的生词。",
@@ -4601,7 +4603,7 @@ function renderNotes(notes, filteredVideoId) {
         <button class="note-action-btn note-copy-text" type="button">${escapeHtml(panelCopy("copyText"))}</button>
         <button class="note-action-btn note-copy-link" type="button" data-url="${escapeHtml(note.timestampedUrl)}">${escapeHtml(panelCopy("copyTimestamp"))}</button>
         <button class="note-action-btn note-play" type="button" data-seconds="${Number(note.timestampSeconds) || 0}">${escapeHtml(panelCopy("play"))}</button>
-        <button class="note-delete" data-id="${escapeHtml(note.id)}" type="button" aria-label="Delete note" title="Delete note">
+        <button class="note-delete" data-id="${escapeHtml(note.id)}" type="button" aria-label="${escapeHtml(panelCopy("deleteNote"))}" title="${escapeHtml(panelCopy("deleteNote"))}">
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M3 6h18"></path>
             <path d="M8 6V4h8v2"></path>

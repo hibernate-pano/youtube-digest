@@ -329,7 +329,7 @@ test("note delete is an accessible SVG action at the end of the action row", () 
 
   assert.match(
     js,
-    /<div class="note-actions">[\s\S]*class="[^"]*note-play[^"]*"[\s\S]*class="note-delete"[\s\S]*aria-label="Delete note"[\s\S]*<svg viewBox="0 0 24 24" aria-hidden="true">/,
+    /<div class="note-actions">[\s\S]*class="[^"]*note-play[^"]*"[\s\S]*class="note-delete"[\s\S]*aria-label="\$\{escapeHtml\(panelCopy\("deleteNote"\)\)\}"[\s\S]*<svg viewBox="0 0 24 24" aria-hidden="true">/,
   );
   assert.doesNotMatch(js, /class="note-delete"[^>]*>Delete<\/button>/);
   assert.match(
