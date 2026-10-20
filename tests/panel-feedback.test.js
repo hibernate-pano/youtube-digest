@@ -132,18 +132,62 @@ test("our own failure code becomes a sentence the user can read", async () => {
   assert.ok(message.trim().length > 10, "the failure has no explanation");
 });
 
-test("the provider's own message is still shown", async () => {
+test("the failure names the provider whose key is missing", async () => {
   const panel = createPanel({ sendMessageImpl: workerRouter() });
 
   panel.helpers.renderAnalysisFailure({
     error: "NO_AI_KEY",
-    message: "DeepSeek V4 Flash API key not configured.",
+    provider: "DeepSeek",
   });
 
   const item = panel.el("chapterList").children[0];
   assert.match(
     item.children[0].textContent,
-    /API key not configured/,
+    /DeepSeek/,
+    "the user is not told whose key is missing",
+  );
+  assert.doesNotMatch(
+    item.children[0].textContent,
+    /NO_AI_KEY/,
+    "the code reached the user",
+  );
+});
+
+test("the panel names the provider even when the failure does not", async () => {
+  const panel = createPanel({
+    sendMessageImpl: workerRouter({
+      checkConfig: {
+        hasSupadataKey: true,
+        hasAiKey: true,
+        provider: "MiniMax M3",
+      },
+    }),
+  });
+  await panel.boot();
+
+  panel.helpers.renderAnalysisFailure({ error: "NO_AI_KEY" });
+
+  const item = panel.el("chapterList").children[0];
+  assert.match(
+    item.children[0].textContent,
+    /MiniMax/,
+    "the panel does not know whose key is missing",
+  );
+});
+
+test("the provider's own words still reach the user", async () => {
+  const panel = createPanel({ sendMessageImpl: workerRouter() });
+
+  // The provider's own verdict is the only place the specifics live. The
+  // panel cannot translate it, so it shows it as it is.
+  panel.helpers.renderAnalysisFailure({
+    error: "This API key has expired",
+  });
+
+  const item = panel.el("chapterList").children[0];
+  assert.match(
+    item.children[0].textContent,
+    /expired/i,
     "the provider's own words were hidden",
   );
 });
@@ -642,6 +686,27 @@ test("a failure is never shown in the worker's language", async () => {
     "the worker's English reached a Chinese screen",
   );
   assert.match(message, /字幕/, "the Chinese sentence is missing");
+});
+
+test("a failed analysis is never shown in the worker's language", async () => {
+  const panel = createPanel({ sendMessageImpl: workerRouter(), language: "zh-CN" });
+  await panel.helpers.loadPanelLanguage();
+
+  panel.helpers.renderAnalysisFailure({
+    error: "NO_AI_KEY",
+    provider: "DeepSeek",
+    message: "DeepSeek V4 Flash API key not configured.",
+  });
+
+  const item = panel.el("chapterList").children[0];
+  const message = item.children[0].textContent;
+  assert.doesNotMatch(
+    message,
+    /not configured/i,
+    "the worker's English reached a Chinese screen",
+  );
+  assert.match(message, /密钥/, "the Chinese sentence is missing");
+  assert.match(message, /DeepSeek/, "the provider is not named");
 });
 
 test("the panel keeps the worker's sentence out of every failure", async () => {

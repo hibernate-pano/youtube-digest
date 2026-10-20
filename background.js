@@ -646,6 +646,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({
           hasSupadataKey: !!settings.supadataApiKey,
           hasAiKey: !!getActiveAiKey(settings),
+          // The panel says which provider's key is missing, in the user's
+          // language. It can only do that if it knows which one it is.
+          provider: getActiveProvider(settings).name,
         }),
       )
       // Keep the shape stable: a caller must be able to tell a broken
@@ -1975,10 +1978,13 @@ async function handleAnalyzeTranscript(
   try {
     const settings = await getSettings();
     if (!getActiveAiKey(settings)) {
+      // The worker says what went wrong with a code, and names the provider
+      // so the panel can say it in the user's language. The sentence itself
+      // belongs to the panel: a sentence from here is in this language only.
       return {
         success: false,
         error: "NO_AI_KEY",
-        message: `${getActiveProvider(settings).name} API key not configured. Open YouTube Digest Settings.`,
+        provider: getActiveProvider(settings).name,
       };
     }
 
@@ -2056,14 +2062,12 @@ async function handleAnalyzeTranscript(
       return {
         success: false,
         error: "INVALID_AI_KEY",
-        message: "The AI provider rejected the API key.",
       };
     }
     if (error.status === 429) {
       return {
         success: false,
         error: "RATE_LIMITED",
-        message: "The AI provider rate-limited this request. Try again shortly.",
       };
     }
     return {
@@ -2464,7 +2468,11 @@ async function handleExtractVocabulary(sentence) {
   try {
     const settings = await getSettings();
     if (!getActiveAiKey(settings)) {
-      return { success: false, error: "NO_AI_KEY", message: "AI key not configured. Open Settings." };
+      return {
+        success: false,
+        error: "NO_AI_KEY",
+        provider: getActiveProvider(settings).name,
+      };
     }
     const cleanSentence = String(sentence || "").trim().slice(0, 4000);
     if (!cleanSentence) return { success: false, error: "EMPTY_SENTENCE" };
@@ -2512,7 +2520,7 @@ async function handleExplainSelection(
       return {
         success: false,
         error: "NO_AI_KEY",
-        message: `${getActiveProvider(settings).name} API key not configured.`,
+        provider: getActiveProvider(settings).name,
       };
     }
 

@@ -172,6 +172,16 @@ test("vocabulary extraction refuses to run without an AI key", async () => {
 
   assert.equal(result.success, false);
   assert.equal(result.error, "NO_AI_KEY");
+  assert.equal(
+    result.message,
+    undefined,
+    "the worker wrote a sentence the panel cannot translate",
+  );
+  assert.equal(
+    result.provider,
+    "DeepSeek V4 Flash",
+    "the panel cannot say whose key is missing",
+  );
 });
 
 test("vocabulary extraction refuses an empty sentence", async () => {

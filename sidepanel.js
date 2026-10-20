@@ -35,6 +35,9 @@ let errorAction = null;
 // settings watcher uses it to know when a settings change should bring the
 // panel back to life.
 let awaitingApiKey = false;
+// Which AI provider the user picked. The panel says whose key is missing,
+// and it can only say that if it knows the name.
+let activeProviderName = "";
 // The notes filter is a preference, not a per-open choice: the panel document
 // is recreated on every open, so it has to be remembered.
 const NOTES_FILTER_KEY = "ytd_notes_filter";
@@ -218,7 +221,10 @@ const PANEL_COPY = {
     // The failure codes the worker returns. They are for the developer, so
     // every one of them has a sentence the user can act on.
     errorCodeNoAiKey:
-      "No AI key is set. Open YouTube Digest Settings and add the key of your AI provider.",
+      "No API key is set for {provider}. Open YouTube Digest Settings and add the key.",
+    // The provider's name is not always known: the panel falls back to this
+    // when the failure arrives without one.
+    yourAiProvider: "your AI provider",
     errorCodeInvalidAiKey:
       "The AI provider rejected the API key. Check the key in YouTube Digest Settings.",
     errorCodeNoSupadataKey:
@@ -457,7 +463,9 @@ const PANEL_COPY = {
     // The failure codes the worker returns. They are for the developer, so
     // every one of them has a sentence the user can act on.
     errorCodeNoAiKey:
-      "还没有设置 AI 密钥。请在 YouTube Digest 设置里填入你的 AI 服务密钥。",
+      "还没有设置{provider}的 API 密钥。请在 YouTube Digest 设置里填入。",
+    // 有时候拿不到服务商的名字，这时就用这句。
+    yourAiProvider: "你的 AI 服务商",
     errorCodeInvalidAiKey:
       "AI 服务拒绝了这个密钥。请检查 YouTube Digest 设置里的密钥。",
     errorCodeNoSupadataKey:
@@ -745,20 +753,25 @@ function copyPlaceholders() {
 /**
  * Picks the sentence a failed request is shown with.
  *
- * The order matters. A message from the provider comes first: it is the only
- * thing that can explain a provider failure, and hiding it would leave the
- * user with nothing. Our own code comes next, turned into a sentence. A
- * string that still looks like a code (all caps, no spaces) is one we do
- * not know, and it is replaced by the generic sentence rather than shown as
- * it is.
+ * Our own code comes first, turned into a sentence in the user's language. A
+ * message is only used when there is no code to go by: that is where the
+ * provider's own words live, and they are the only thing that can explain a
+ * provider failure. A string that still looks like a code (all caps, no
+ * spaces) is one we do not know, and it is replaced by the generic sentence
+ * rather than shown as it is.
  */
 function panelFailureMessage(result) {
-  const message = String(result?.message || "").trim();
-  if (message) return message;
-
   const code = String(result?.error || "").trim();
   const copyKey = PANEL_ERROR_CODE_COPY[code];
-  if (copyKey) return panelCopy(copyKey);
+  if (copyKey) {
+    const provider = String(result?.provider || activeProviderName || "").trim();
+    return panelCopyFormat(copyKey, {
+      provider: provider || panelCopy("yourAiProvider"),
+    });
+  }
+
+  const message = String(result?.message || "").trim();
+  if (message) return message;
   if (code && /^[A-Z][A-Z0-9_]*$/.test(code)) return panelCopy("errorMessage");
   return code || panelCopy("errorMessage");
 }
@@ -1379,6 +1392,10 @@ async function bootPanel() {
     showServiceError(configStatus.error);
     return;
   }
+
+  // The panel says whose key is missing when one is. It can only say that
+  // if it knows which provider the user picked.
+  activeProviderName = String(configStatus?.provider || "").trim();
 
   // A Supadata key is no longer a dead end. The subtitles are read out of
   // the page itself first, and the key is only needed for the fallback. A

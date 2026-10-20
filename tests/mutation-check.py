@@ -259,6 +259,100 @@ MUTATIONS = [
             ),
         ],
     },
+    {
+        "name": "M10 the panel shows the worker's sentence again",
+        "file": "sidepanel.js",
+        "hunks": [
+            (
+                """  if (copyKey) {
+    const provider = String(result?.provider || activeProviderName || "").trim();""",
+                """  const message = String(result?.message || "").trim();
+  if (message) return message;
+
+  if (copyKey) {
+    const provider = String(result?.provider || activeProviderName || "").trim();""",
+            )
+        ],
+        "expect": [
+            (
+                "panel-feedback.test.js",
+                "a failed analysis is never shown in the worker's language",
+            ),
+        ],
+    },
+    {
+        "name": "M11 the worker writes the sentence the user reads",
+        "file": "background.js",
+        "hunks": [
+            (
+                """      return {
+        success: false,
+        error: "NO_AI_KEY",
+        provider: getActiveProvider(settings).name,
+      };
+    }
+    const cleanSentence = String(sentence || "").trim().slice(0, 4000);""",
+                """      return {
+        success: false,
+        error: "NO_AI_KEY",
+        provider: getActiveProvider(settings).name,
+        message: "AI key not configured. Open Settings.",
+      };
+    }
+    const cleanSentence = String(sentence || "").trim().slice(0, 4000);""",
+            )
+        ],
+        "expect": [
+            (
+                "background-vocabulary.test.js",
+                "vocabulary extraction refuses to run without an AI key",
+            ),
+        ],
+    },
+    {
+        "name": "M12 the provider is not named",
+        "file": "background.js",
+        "hunks": [
+            (
+                """      return {
+        success: false,
+        error: "NO_AI_KEY",
+        provider: getActiveProvider(settings).name,
+      };
+    }
+    const cleanSentence = String(sentence || "").trim().slice(0, 4000);""",
+                """      return {
+        success: false,
+        error: "NO_AI_KEY",
+        provider: "",
+      };
+    }
+    const cleanSentence = String(sentence || "").trim().slice(0, 4000);""",
+            )
+        ],
+        "expect": [
+            (
+                "background-vocabulary.test.js",
+                "vocabulary extraction refuses to run without an AI key",
+            ),
+        ],
+    },
+    {
+        "name": "M13 the panel forgets which provider the user picked",
+        "file": "sidepanel.js",
+        "hunks": [
+            (
+                """  activeProviderName = String(configStatus?.provider || "").trim();""",
+                """  activeProviderName = "";""",
+            )
+        ],
+        "expect": [
+            (
+                "panel-feedback.test.js",
+                "the panel names the provider even when the failure does not",
+            ),
+        ],
+    },
 ]
 
 

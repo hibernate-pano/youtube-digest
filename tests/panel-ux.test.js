@@ -664,8 +664,7 @@ test("an analysis failure shows the provider message, never the error code", asy
         return {
           success: false,
           error: "NO_AI_KEY",
-          message:
-            "DeepSeek V4 Flash API key not configured. Open YouTube Digest Settings.",
+          provider: "DeepSeek",
         };
       }
       if (message.action === "getNotes") return { success: true, notes: [] };
@@ -678,7 +677,11 @@ test("an analysis failure shows the provider message, never the error code", asy
 
   const chapterItem = harness.el("chapterList").children[0];
   const message = chapterItem.children[0].textContent;
-  assert.match(message, /API key not configured/);
+  assert.match(
+    message,
+    /DeepSeek/,
+    "the user is not told whose key is missing",
+  );
   assert.doesNotMatch(message, /NO_AI_KEY/);
 
   const button = chapterItem.children.find(
