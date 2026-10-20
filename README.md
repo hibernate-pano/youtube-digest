@@ -9,6 +9,7 @@ Turn every YouTube video into a resource for deep learning. YouTube Digest bring
 - Build understanding with an AI overview, chapters, key quotes, and selected-text explanations.
 - Navigate long videos by clicking timestamps in the transcript, overview, or notes.
 - Save polished timestamped notes for later study.
+- Read your notes, favorites and vocabulary on any device through the web dashboard that comes with the sync service.
 - Keep control of your data with your own API keys, local Chrome storage, and no analytics or telemetry.
 
 YouTube Digest is a bring-your-own-key project installed locally from GitHub. It is not available through the Chrome Web Store and does not include API credits. The extension has no analytics and no telemetry. If you sign in with GitHub, the optional sync feature mirrors your saved notes to this project's own sync service at `https://ytd.panbo.space`; without signing in, no note data leaves your device.
@@ -120,6 +121,18 @@ Keys and settings are stored in Chrome's local extension storage on your device.
 ## Optional GitHub sync
 
 Sign in with GitHub from Settings (or the **Sign in** button in the side panel) to back up your notes. Your notes are stored in this project's own database on `https://ytd.panbo.space`, a Cloudflare Worker backed by a Neon PostgreSQL database, and are linked to your GitHub account id. They are not written to your GitHub account, and no GitHub repository or gist is created. Every account's data is isolated server-side: the extension stores notes under an account-specific namespace, the server scopes every query by the verified token, and signing in with a different account shows that account's notes only. Sync is optional: without signing in, everything stays on this device exactly as before, and AI/transcript requests never involve the sync service. When signed in, saved notes mirror to the cloud automatically (idempotent by client id, newest edit wins) and appear on any device where you sign in with the same GitHub account.
+
+### The web dashboard
+
+The same service also serves a small web app at `https://ytd.panbo.space`. Sign in with GitHub there and you get the same data in a browser tab, on any device, without installing the extension:
+
+- **Notes** - every note you saved, with the video it came from and a link back to it.
+- **Favorites** - the notes you starred in the side panel.
+- **Vocabulary** - the words you captured, with their meaning and the sentence they came from.
+- **Review** - the spaced-repetition queue for those words, scheduled server-side.
+- **Export my data** - a copy of everything the service holds for your account.
+
+The dashboard is read-mostly on purpose: it is the place to *read* and *review* what you collected while watching, and the side panel is where you collect it. Both talk to the same database, and the same per-account isolation applies.
 
 ## Use YouTube Digest
 
