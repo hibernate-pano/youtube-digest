@@ -16,9 +16,9 @@
 
 - [ ] 注册 Chrome Web Store 开发者账号（$5 一次性）：https://chrome.google.com/webstore/devconsole
 - [ ] 隐私政策 URL：见下面「隐私政策 URL」一节。**线上只有一页**，它自带中英文切换。
-- [ ] 打包好的 ZIP：仓库根目录 npm run package 生成 dist/youtube-digest-v1.6.0.zip
+- [ ] 打包好的 ZIP：仓库根目录 npm run package 生成 dist/youtube-digest-v1.7.0.zip
   - 注意：商店不接受根目录直接打包，需要 zip 内包含 manifest.json（我们的脚本已满足）
-  - v1.6.0 的包现在有 27 个文件（新增 `PRIVACY.zh-CN.md`），SHA-256 以 `npm run package`
+  - v1.7.0 的包现在有 27 个文件，SHA-256 以 `npm run package`
     当次输出为准，不要抄旧记录
 - [ ] 数据使用披露表单（Data use disclosure）：勾选项必须和「商品信息」里的说法一致，
   尤其是 Supadata 和三个 AI 服务商。这张表和隐私政策对不上是常见的打回原因。
@@ -62,7 +62,7 @@ Chrome Web Store 开发者后台的实际限制：
 | --- | --- | ---: | --- |
 | 名称 | `YouTube Digest: Transcript, Translation & AI Notes` | 50 | 通过（上限 75） |
 | 简短描述 | `Turn any YouTube video into a learning resource: bilingual transcripts, AI overviews, and timestamped notes.` | 108 | 通过（上限 132） |
-| 详细描述 | 见下 | 1710 | 通过（上限 16000） |
+| 详细描述 | 见下 | 1941 | 通过（上限 16000） |
 | `manifest.json` 的 description | `Turn YouTube videos into learning resources with transcripts, bilingual translation, AI overviews, and notes.` | 109 | 通过（上限 132），且与简短描述说的是同一件事 |
 | 名称里的促销词 | 无 | - | 通过 |
 | 名称里的 emoji | 无 | - | 通过 |
@@ -100,6 +100,7 @@ FEATURES
 • Explain any selected sentence, and see what the call costs before you pay for it
 • Save timestamped notes, correct them later, and jump back to that moment
 • Build a vocabulary notebook from the transcript and review the words on a schedule
+• Read the transcript for free, straight out of the page you are watching
 • Keep a 30-day library of the videos you already read, so opening one again costs nothing
 • Export the transcript as a text file and your notes as Markdown
 • Sign in with GitHub to back up your notes and words, and read them on any device in the web dashboard
@@ -110,17 +111,19 @@ HOW TO USE
 3. Read, translate, search, explain, and take notes
 4. Save the words worth learning and review them later
 
-Bring your own API keys. A Supadata key fetches the transcript, and a key from
-DeepSeek, MiniMax, or OpenCode Go runs the AI features. You pay those providers
-directly. YouTube Digest does not sell credits or subscriptions, and never sees
-your keys.
+Bring your own API keys. The transcript is read out of the YouTube page you are
+already watching, so most videos cost nothing and no transcript key is needed.
+A key from DeepSeek, MiniMax, or OpenCode Go runs the AI features. You pay those
+providers directly. YouTube Digest does not sell credits or subscriptions, and
+never sees your keys.
 
 Your keys, settings, notes, and words stay in your Chrome profile. Only the notes
 and words you choose to back up are mirrored to this project's own sync service,
 linked to your GitHub account. There is no advertising, no analytics, and no
 telemetry. The privacy policy linked from this listing describes every data flow.
 
-The extension needs a Supadata key and one AI provider key before it can do anything.
+The extension needs one AI provider key before it can do anything. A Supadata key
+is optional and only used as a fallback when the page cannot be read.
 ```
 
 **类别**：Productivity / Education
@@ -216,6 +219,8 @@ https://raw.githubusercontent.com/hibernate-pano/youtube-digest/main/.review/lib
 - 隐私政策页已包含数据导出/删除说明，满足商店对账号系统的要求
 - 无付费功能，无需商品内购买设置
 - 数据使用披露表单要如实勾选：同步服务会处理你的 GitHub 标识、笔记、生词和复习进度，这些都要勾
+  - 字幕现在是**从页面里读的**，不发给任何第三方。Supadata 那一项按「用户自己填了 Key、
+    且页面读不到时才会发生」来勾，不要写成默认行为
 - 名称里的 `YouTube` 商标风险见上面「名称与描述的合规核对」
 - 商店版和本地版用同一个 GitHub OAuth App，回调地址不变，不需要改服务器
 
@@ -242,5 +247,5 @@ https://raw.githubusercontent.com/hibernate-pano/youtube-digest/main/.review/lib
 - [ ] **支持邮箱**。商店要求一个有人看的联系方式，仓库现在没有。
 - [ ] **`manifest.json` 的 `name`**。如果因为商标问题换商店名称，这个文件要同步改
       （不在本文档组的改动范围内）。
-- [ ] **版本号**。商店不接受比线上版本低的版本号，上架前要 bump `manifest.json`
-      和 `package.json`。
+- [x] **版本号**。`manifest.json` 和 `package.json` 已经一起 bump 到 **1.7.0**，
+      `dist/youtube-digest-v1.7.0.zip` 已生成。上架时用这个包。

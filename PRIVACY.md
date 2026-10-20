@@ -102,10 +102,10 @@ telemetry, and sets a Content-Security-Policy that blocks third-party scripts.
 ### YouTube's own caption tracks
 
 The transcript is read out of the YouTube page that is already open in your tab.
-YouTube's player state carries a signed URL for the video's own caption track,
-and the extension fetches that URL directly from your browser. **No subtitle
-text is sent to YouTube Digest's developer or to any third party on this path,
-and no Supadata credit is spent.**
+The page's own player requests the video's caption track with a signed URL,
+and the extension fetches that same YouTube URL directly from your browser.
+**No subtitle text is sent to YouTube Digest's developer or to any third party
+on this path, and no Supadata credit is spent.**
 
 This is the default path. It is tried first on every video.
 

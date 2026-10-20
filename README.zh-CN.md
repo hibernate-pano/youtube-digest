@@ -208,7 +208,7 @@ YouTube Digest 强制使用 Supadata 的 `mode=native`，不会在没有原生�
 - AI 生成字幕每分钟消耗 **2 credits**。YouTube Digest 不会使用这条路径，因为它强制使用 `mode=native`。
 - 如果没有可用原生字幕，仍会消耗 **1 credit**。Supadata 此时返回 HTTP `206`，扩展会显示“No native subtitle track is available for this video.”，但额度已经消耗。
 
-按照当前只获取原生字幕的方式，如果每次请求都成功，免费版每月大约可以兜底 100 个视频。重试和没有字幕的查询也会消耗额度，所以实际成功数量可能更少。
+按照当前只获取原生字幕的方式，如果每次请求都成功，免费版每月大约可以兜底 100 个视频。查出来确实没有原生字幕的视频会被记一天，所以它只花一个额度，而不是每打开一次花一个。「重试」每次都会真的重新查一次，重新查是要花额度的。
 
 DeepSeek 的额度与 Supadata 分开计算。YouTube Digest 不收款，也不转售 API 服务。建议为两个账号设置消费上限并定期查看用量。
 

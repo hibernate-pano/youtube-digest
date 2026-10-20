@@ -206,7 +206,7 @@ The [Supadata transcript documentation](https://docs.supadata.ai/get-transcript)
 - A generated transcript costs **2 credits per video minute**. YouTube Digest does not use this path because it forces `mode=native`.
 - An unavailable native lookup returned as HTTP `206` still uses **1 credit**. YouTube Digest shows this as "No native subtitle track is available for this video.", but the credit is already spent.
 
-With the current native-only behavior, the free tier can cover roughly 100 fallback lookups per month when each request succeeds once. Retries and unavailable-caption lookups also consume credits, so actual successful-video coverage can be lower.
+With the current native-only behavior, the free tier can cover roughly 100 fallback lookups per month when each request succeeds once. A video that turns out to have no native captions is remembered for a day, so it costs one credit instead of one credit every time you open it. "Try again" always performs a real new lookup, and a new lookup does cost a credit.
 
 DeepSeek usage is separate from Supadata. YouTube Digest does not collect payments or resell access. Set spending limits and monitor both accounts.
 
