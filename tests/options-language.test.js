@@ -394,10 +394,12 @@ function createElementStub() {
   };
 }
 
-function createSettingsHarness(initialStorage = {}) {
+function createSettingsHarness(initialStorage = {}, harness = {}) {
   const storage = { ...initialStorage };
   const removed = [];
   const elements = new Map();
+  const requests = [];
+  const asked = [];
 
   const getElementById = (id) => {
     if (!elements.has(id)) elements.set(id, createElementStub());
@@ -442,12 +444,20 @@ function createSettingsHarness(initialStorage = {}) {
       runtime: { sendMessage: async () => ({}) },
     },
     navigator: {},
-    confirm: () => true,
+    confirm: (message) => {
+      asked.push(message);
+      return harness.confirm ? harness.confirm(message, asked.length) : true;
+    },
+    fetch: async (url, init) => {
+      requests.push({ url, init });
+      if (harness.fetchImpl) return harness.fetchImpl(url, init, requests.length);
+      return { ok: true, status: 200, json: async () => ({}) };
+    },
   };
   root.globalThis = root;
 
   const api = options.initialize(root);
-  return { api, storage, removed, getElementById };
+  return { api, storage, removed, getElementById, requests, asked };
 }
 
 test("Delete all notes removes the notes of every signed-in account", async () => {
@@ -487,5 +497,219 @@ test("Delete all notes reports success even when there is nothing to delete", as
   assert.equal(
     getElementById("dataStatus").textContent,
     "Deleted all saved notes.",
+  );
+});
+
+test("Delete my account removes the account and its data, and asks twice first", async () => {
+  let releaseProfile;
+  const profileGate = new Promise((resolve) => {
+    releaseProfile = resolve;
+  });
+  const { api, storage, removed, requests, asked, getElementById } =
+    createSettingsHarness(
+      {
+        ytd_github_session: {
+          token: "token-alice",
+          login: "alice",
+          githubId: 1001,
+          savedAt: 1,
+        },
+        ytd_notes_1001: [{ id: "note-1" }],
+        ytd_vocabulary_1001: [{ id: "word-1" }],
+        ytd_notes_2002: [{ id: "note-of-another-account" }],
+        ytd_notes_filter: "all",
+        ytd_settings: { aiApiKey: "x" },
+      },
+      {
+        fetchImpl: async (url) => {
+          if (String(url).endsWith("/api/me")) {
+            // The server is slow to answer who the reader is. The answer
+            // arrives after the account was deleted, and it must not sign
+            // the reader back in.
+            await profileGate;
+            return {
+              ok: true,
+              status: 200,
+              json: async () => ({ user: { login: "alice", githubId: 1001 } }),
+            };
+          }
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ deleted: true, notesDeleted: 1 }),
+          };
+        },
+      },
+    );
+
+  await api.deleteGithubAccount();
+  // Now the slow answer arrives.
+  releaseProfile();
+  await settle();
+
+  // Two questions: the first one can be clicked through by accident, the
+  // second one cannot.
+  assert.equal(asked.length, 2, "the deletion was not confirmed twice");
+  assert.match(asked[0], /cannot be undone/);
+  assert.match(asked[1], /permanent/);
+
+  // The account is deleted on the server, with the session's token.
+  const accountRequests = requests.filter((request) =>
+    String(request.url).endsWith("/api/account"),
+  );
+  assert.equal(accountRequests.length, 1);
+  assert.equal(accountRequests[0].init.method, "DELETE");
+  assert.equal(
+    accountRequests[0].init.headers.Authorization,
+    "Bearer token-alice",
+    "the account was deleted with the wrong identity",
+  );
+
+  // The account's own data goes with it.
+  assert.ok(removed.includes("ytd_notes_1001"), "the notes stayed on the device");
+  assert.ok(
+    removed.includes("ytd_vocabulary_1001"),
+    "the words stayed on the device",
+  );
+  assert.ok(
+    removed.includes("ytd_github_session"),
+    "the session stayed on the device",
+  );
+  assert.equal(storage.ytd_github_session, undefined);
+  // Another account's data on the same device is not this account's to
+  // delete.
+  assert.ok(storage.ytd_notes_2002, "another account's notes were deleted");
+  assert.ok(storage.ytd_notes_filter, "the notes filter was deleted");
+
+  // And the page says it happened.
+  assert.equal(
+    getElementById("githubStatus").textContent,
+    "Account deleted. Your notes and words were removed from this device too.",
+  );
+  assert.equal(getElementById("githubLoginBtn").hidden, false);
+});
+
+test("a refused confirmation leaves the account alone", async () => {
+  const { api, storage, requests, asked } = createSettingsHarness(
+    {
+      ytd_github_session: { token: "token-alice", login: "alice", githubId: 1001 },
+      ytd_notes_1001: [{ id: "note-1" }],
+    },
+    { confirm: () => false },
+  );
+
+  await api.deleteGithubAccount();
+
+  assert.equal(asked.length, 1, "the second question was asked anyway");
+  assert.equal(
+    requests.filter((request) => String(request.url).endsWith("/api/account"))
+      .length,
+    0,
+    "the account was deleted without consent",
+  );
+  assert.ok(storage.ytd_github_session, "the session was removed anyway");
+  assert.ok(storage.ytd_notes_1001, "the notes were removed anyway");
+});
+
+test("a refused account deletion keeps the account and says why", async () => {
+  const { api, storage, requests, getElementById } = createSettingsHarness(
+    {
+      ytd_github_session: { token: "token-alice", login: "alice", githubId: 1001 },
+      ytd_notes_1001: [{ id: "note-1" }],
+    },
+    {
+      fetchImpl: async () => ({
+        ok: false,
+        status: 500,
+        json: async () => ({ error: "The database is unreachable." }),
+      }),
+    },
+  );
+
+  await api.deleteGithubAccount();
+
+  assert.equal(
+    requests.filter((request) => String(request.url).endsWith("/api/account"))
+      .length,
+    1,
+  );
+  // The account is still there, and still on the device.
+  assert.ok(storage.ytd_github_session, "the session was removed on a failure");
+  assert.ok(storage.ytd_notes_1001, "the notes were removed on a failure");
+  assert.match(
+    getElementById("githubStatus").textContent,
+    /Could not delete the account: The database is unreachable\./,
+  );
+});
+
+/** Lets the page's promise chains finish. */
+async function settle() {
+  for (let i = 0; i < 6; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+}
+
+test("a sync service that is having a bad minute does not sign the reader out", async () => {
+  // A 500 is the service's problem, not the reader's session. Signing
+  // somebody out because the server hiccuped would throw away a working
+  // sign-in over nothing.
+  const { api, storage, getElementById } = createSettingsHarness(
+    {
+      ytd_github_session: {
+        token: "token-alice",
+        login: "alice",
+        githubId: 1001,
+        savedAt: 1,
+      },
+    },
+    {
+      fetchImpl: async () => ({
+        ok: false,
+        status: 503,
+        json: async () => ({ error: "Service unavailable" }),
+      }),
+    },
+  );
+
+  await api.loadOptions();
+  await settle();
+
+  assert.ok(
+    storage.ytd_github_session,
+    "a broken server signed the reader out",
+  );
+  assert.notEqual(
+    getElementById("githubStatus").textContent,
+    "Your session expired. Sign in again.",
+    "the reader was told the session expired when the server was simply down",
+  );
+});
+
+test("only a rejected token ends the session", async () => {
+  const { api, storage, getElementById } = createSettingsHarness(
+    {
+      ytd_github_session: {
+        token: "token-alice",
+        login: "alice",
+        githubId: 1001,
+        savedAt: 1,
+      },
+    },
+    {
+      fetchImpl: async () => ({
+        ok: false,
+        status: 401,
+        json: async () => ({ error: "Session expired." }),
+      }),
+    },
+  );
+
+  await api.loadOptions();
+  await settle();
+
+  assert.equal(storage.ytd_github_session, undefined);
+  assert.equal(
+    getElementById("githubStatus").textContent,
+    "Your session expired. Sign in again.",
   );
 });

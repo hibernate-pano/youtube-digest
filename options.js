@@ -57,6 +57,14 @@ const YTD_OPTIONS = (() => {
       githubLoginFailed: "GitHub sign-in failed. Please try again.",
       githubSessionExpired: "Your session expired. Sign in again.",
       githubSignedOut: "Signed out. Your local data stays on this device.",
+      githubDeleteAccount: "Delete my account",
+      githubDeleteAccountConfirm:
+        "Delete your account and ALL notes, words, and review progress? This cannot be undone.",
+      githubDeleteAccountReally:
+        "Really delete everything, on the server and on this device? This is permanent.",
+      githubDeleteAccountDeleted:
+        "Account deleted. Your notes and words were removed from this device too.",
+      githubDeleteAccountFailed: "Could not delete the account: {message}",
       localRemix: "Local remix",
       customizationTitle: "Want to use another AI model?",
       customizationPurpose: "Edit and copy a safe prompt for your coding agent",
@@ -155,6 +163,14 @@ const YTD_OPTIONS = (() => {
       githubLoginFailed: "GitHub 登录失败，请重试。",
       githubSessionExpired: "登录已过期，请重新登录。",
       githubSignedOut: "已退出登录。本地数据仍保留在这台设备上。",
+      githubDeleteAccount: "删除我的账号",
+      githubDeleteAccountConfirm:
+        "确定删除你的账号以及全部笔记、单词和复习进度吗？此操作无法撤销。",
+      githubDeleteAccountReally:
+        "真的要删除所有数据吗？服务器上和这台设备上的都会删掉，此操作是永久的。",
+      githubDeleteAccountDeleted:
+        "账号已删除。这台设备上的笔记和单词也一并清除了。",
+      githubDeleteAccountFailed: "无法删除账号：{message}",
       localRemix: "本地改造",
       customizationTitle: "想使用其他 AI 模型？",
       customizationPurpose: "编辑并复制一段可安全交给编程 Agent 的提示词",
@@ -453,6 +469,7 @@ const YTD_OPTIONS = (() => {
     const githubLoginName = doc.getElementById("githubLoginName");
     const githubLoginBtn = doc.getElementById("githubLoginBtn");
     const githubLogoutBtn = doc.getElementById("githubLogoutBtn");
+    const githubDeleteAccountBtn = doc.getElementById("githubDeleteAccountBtn");
     const githubStatus = doc.getElementById("githubStatus");
     const languageButtons = [...doc.querySelectorAll("[data-language]")];
     const statusStates = new Map();
@@ -480,9 +497,19 @@ const YTD_OPTIONS = (() => {
         settingsApi.SERVER_BASE_URL + "/api/me",
         { headers: { Authorization: "Bearer " + token } },
       );
-      if (!response.ok) return null;
+      // Only the server saying "this token is no good" signs the reader
+      // out. A server that is down or broken says nothing about the token,
+      // and signing somebody out because a service had a bad minute is
+      // not what "the session expired" means.
+      if (response.status === 401) return null;
+      if (!response.ok) {
+        throw new Error("The sync service answered with " + response.status + ".");
+      }
       const data = await response.json();
-      return data && data.user ? data.user : null;
+      if (!data || !data.user) {
+        throw new Error("The sync service answered without a user.");
+      }
+      return data.user;
     }
 
     function renderGithubSignedIn(login) {
@@ -497,6 +524,25 @@ const YTD_OPTIONS = (() => {
       githubLoginName.textContent = "";
     }
 
+    /**
+     * One writer at a time for the session.
+     *
+     * The page asks the server who the reader is and writes the answer
+     * back. A sign-out or an account deletion removes the session. If the
+     * two happen at the same time, the answer must not be written back
+     * after the removal: that would sign the reader in again to an account
+     * that no longer exists.
+     */
+    let sessionWrite = Promise.resolve();
+    function withSessionLock(action) {
+      const next = sessionWrite.then(action, action);
+      sessionWrite = next.then(
+        () => {},
+        () => {},
+      );
+      return next;
+    }
+
     async function loadGithubAccount() {
       const stored = await storage.get(settingsApi.GITHUB_SESSION_KEY);
       const session = stored[settingsApi.GITHUB_SESSION_KEY];
@@ -508,14 +554,25 @@ const YTD_OPTIONS = (() => {
       try {
         const profile = await fetchGithubProfile(session.token);
         if (profile) {
-          await storage.set({
-            [settingsApi.GITHUB_SESSION_KEY]: {
-              ...session,
-              login: profile.login,
-              githubId: profile.githubId,
-            },
+          await withSessionLock(async () => {
+            // The session may be gone by now: the reader may have deleted
+            // the account while the server was being asked who they are.
+            // Writing the session back would sign them in again to an
+            // account that no longer exists.
+            const current = await storage.get(settingsApi.GITHUB_SESSION_KEY);
+            if (!current[settingsApi.GITHUB_SESSION_KEY]) {
+              renderGithubSignedOut();
+              return;
+            }
+            await storage.set({
+              [settingsApi.GITHUB_SESSION_KEY]: {
+                ...session,
+                login: profile.login,
+                githubId: profile.githubId,
+              },
+            });
+            renderGithubSignedIn(profile.login);
           });
-          renderGithubSignedIn(profile.login);
         } else {
           // The server rejected the token: treat the session as expired.
           await storage.remove(settingsApi.GITHUB_SESSION_KEY);
@@ -554,9 +611,88 @@ const YTD_OPTIONS = (() => {
     }
 
     async function logoutGithub() {
-      await storage.remove(settingsApi.GITHUB_SESSION_KEY);
+      await withSessionLock(() =>
+        storage.remove(settingsApi.GITHUB_SESSION_KEY),
+      );
       renderGithubSignedOut();
       setStatus(githubStatus, "githubSignedOut");
+    }
+
+    /**
+     * Deletes the signed-in account, on the server and on this device.
+     *
+     * The account lives on the sync service, so the account has to be
+     * deleted there: the extension cannot pretend it is gone. The notes and
+     * words that belong to it live in this browser profile under a
+     * namespace named after the account, and they go with it - a namespace
+     * nobody owns any more is data the user cannot reach and cannot
+     * delete.
+     *
+     * Two questions are asked, because the first one is easy to click
+     * through by accident and the second one is not.
+     */
+    async function deleteGithubAccount() {
+      const stored = await storage.get(settingsApi.GITHUB_SESSION_KEY);
+      const session = stored[settingsApi.GITHUB_SESSION_KEY];
+      if (!session || !session.token) {
+        renderGithubSignedOut();
+        setStatus(githubStatus, "githubSignedOut");
+        return;
+      }
+      const confirmed = root.confirm(
+        translate(currentLanguage, "githubDeleteAccountConfirm"),
+      );
+      if (!confirmed) return;
+      const really = root.confirm(
+        translate(currentLanguage, "githubDeleteAccountReally"),
+      );
+      if (!really) return;
+
+      let response;
+      try {
+        response = await root.fetch(
+          settingsApi.SERVER_BASE_URL + "/api/account",
+          {
+            method: "DELETE",
+            headers: { Authorization: "Bearer " + session.token },
+          },
+        );
+      } catch (error) {
+        setStatus(githubStatus, "githubDeleteAccountFailed", {
+          message: error.message,
+        });
+        return;
+      }
+      if (!response.ok) {
+        let message = "HTTP " + response.status;
+        try {
+          const data = await response.json();
+          if (data && data.error) message = data.error;
+        } catch (_error) {
+          // The body was not JSON. The status line is enough.
+        }
+        setStatus(githubStatus, "githubDeleteAccountFailed", { message });
+        return;
+      }
+
+      // The account is gone from the server, so the local copy of its data
+      // goes too. The keys are named after the account, so exactly that
+      // account's notes and words are removed - another account's data on
+      // the same device is left alone.
+      const githubId = session.githubId;
+      const keys = [];
+      if (githubId) {
+        keys.push(settingsApi.notesStorageKey(githubId));
+        keys.push(settingsApi.vocabularyStorageKey(githubId));
+        keys.push(settingsApi.notesDroppedKey(githubId));
+        keys.push(settingsApi.vocabularyDroppedKey(githubId));
+      }
+      await withSessionLock(async () => {
+        if (keys.length) await storage.remove(keys);
+        await storage.remove(settingsApi.GITHUB_SESSION_KEY);
+      });
+      renderGithubSignedOut();
+      setStatus(githubStatus, "githubDeleteAccountDeleted");
     }
 
     function renderStatus(element) {
@@ -735,6 +871,7 @@ const YTD_OPTIONS = (() => {
 
     githubLoginBtn.addEventListener("click", startGithubLogin);
     githubLogoutBtn.addEventListener("click", logoutGithub);
+    githubDeleteAccountBtn.addEventListener("click", deleteGithubAccount);
 
     form.addEventListener("submit", saveSettings);
     for (const radio of providerRadios) {
@@ -767,7 +904,13 @@ const YTD_OPTIONS = (() => {
     // functions. They used to be reachable only through a click handler,
     // which made it impossible to prove that "Delete all notes" actually
     // removed the notes of a signed-in account.
-    return { clearNotes, clearCachedDigests, resetAllData, loadOptions };
+    return {
+      clearNotes,
+      clearCachedDigests,
+      resetAllData,
+      loadOptions,
+      deleteGithubAccount,
+    };
   }
 
   return {
