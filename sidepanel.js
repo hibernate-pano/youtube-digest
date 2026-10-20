@@ -58,6 +58,40 @@ let currentNotes = [];
 let currentNotesFilterVideoId = null;
 const TRANSLATION_MESSAGE_TIMEOUT_MS = 130_000;
 const TRANSLATION_BATCH_SIZE = 3;
+// A translation is paid for with the user's own provider balance, so a batch
+// that failed for a reason that goes away on its own is asked again before
+// the panel gives up on it. This is how many times the panel asks on its
+// own: one try plus TRANSLATION_MAX_AUTO_RETRIES retries.
+const TRANSLATION_MAX_AUTO_RETRIES = 3;
+// The pause between two attempts grows with every retry, so a provider that
+// is throttling the panel is given room to breathe.
+const TRANSLATION_RETRY_BASE_DELAY_MS = 2000;
+// How often the pause looks at the world to see whether the retry is still
+// worth doing. A smaller number stops the wait sooner, a bigger one costs
+// less while the panel waits.
+const TRANSLATION_RETRY_POLL_MS = 250;
+// The failures that never get better on their own. The user has to fix the
+// settings first, so asking again would only spend the user's balance.
+const TRANSLATION_NON_RETRYABLE_ERROR_CODES = new Set([
+  "NO_AI_KEY",
+  "INVALID_AI_KEY",
+  "NO_SUPADATA_KEY",
+  "INVALID_SUPADATA_KEY",
+]);
+// The failures that are usually over by the time the panel asks again.
+const TRANSLATION_RETRYABLE_ERROR_CODES = new Set([
+  "RATE_LIMITED",
+  "EMPTY_AI_RESPONSE",
+  "AI_IDLE_TIMEOUT",
+  "AI_HARD_TIMEOUT",
+]);
+// A key that is missing or was refused. The message is what the worker
+// sends when it has no code to go by, so the words have to be read too.
+const TRANSLATION_KEY_PROBLEM_PATTERN =
+  /api key|not configured|unauthoriz|authentication|forbidden|\b401\b|\b403\b/i;
+// The failures a network hiccup or a model hiccup can cause.
+const TRANSLATION_TRANSIENT_PATTERN =
+  /rate.?limit|\b429\b|timed?\s*out|timeout|inactive|network|fetch failed|failed to fetch|econnreset|econnrefused|etimedout|socket hang up|json|unexpected token|unterminated|no valid|too many requests/i;
 
 // --- Vocabulary, review and library state ---
 // The vocabulary is local-first: it works without a sign-in, so the Words
@@ -254,6 +288,7 @@ const PANEL_COPY = {
       "AI calls use your own provider balance. Transcripts are read out of the page, so they cost nothing; only the fallback uses a Supadata credit.",
     translationUnavailable: "Translation unavailable.",
     translationFailed: "Translation failed.",
+    translationCancelled: "Translation cancelled.",
     translationWaiting: "Waiting for translation...",
     translating: "Translating...",
     retry: "Retry",
@@ -476,6 +511,7 @@ const PANEL_COPY = {
       "AI 调用使用你自己的服务额度。字幕直接从页面里读，不花钱；只有兜底那一次会消耗 1 个 Supadata 额度。",
     translationUnavailable: "翻译不可用。",
     translationFailed: "翻译失败。",
+    translationCancelled: "翻译已取消。",
     translationWaiting: "等待翻译...",
     translating: "正在翻译...",
     retry: "重试",
@@ -1011,6 +1047,104 @@ function sendTranslationMessage(message) {
       (error) => finish(reject, error),
     );
   });
+}
+
+/**
+ * Decides whether a failed translation deserves another attempt.
+ *
+ * A missing or refused key never gets better on its own: the user has to
+ * open the settings first, so asking again would only spend the user's
+ * balance for the same answer. Everything else - a rate limit, a timeout, a
+ * model that answered with half a JSON - is worth one more try, because
+ * those failures are over by the time the next attempt goes out.
+ */
+function isRetryableTranslationError(result) {
+  if (!result || result.success) return false;
+
+  const code = String(result.code || "").trim().toUpperCase();
+  if (code && TRANSLATION_NON_RETRYABLE_ERROR_CODES.has(code)) return false;
+  if (code && TRANSLATION_RETRYABLE_ERROR_CODES.has(code)) return true;
+
+  // The worker sends a code when it has one. When it does not, the message
+  // is all the panel has, so it has to be read.
+  const error = String(result.error || "");
+  if (TRANSLATION_KEY_PROBLEM_PATTERN.test(error)) return false;
+  if (TRANSLATION_TRANSIENT_PATTERN.test(error)) return true;
+  return false;
+}
+
+/**
+ * Waits before the next attempt. The pause grows with the attempt number, so
+ * a provider that is throttling the panel is given more room each time.
+ *
+ * The wait ends early when the request became pointless - the user left the
+ * video or went back to the original language. The panel then stops at once
+ * instead of sitting out a pause nobody is waiting for.
+ */
+function translationRetryDelay(attempt, isStale) {
+  const total = TRANSLATION_RETRY_BASE_DELAY_MS * attempt;
+  const step = Math.min(TRANSLATION_RETRY_POLL_MS, total);
+  return new Promise((resolve) => {
+    let waited = 0;
+    const wait = () => {
+      if (waited >= total || (typeof isStale === "function" && isStale())) {
+        resolve();
+        return;
+      }
+      waited += step;
+      setTimeout(wait, step);
+    };
+    wait();
+  });
+}
+
+/**
+ * Sends a translation message and asks again when the failure is one that
+ * goes away on its own.
+ *
+ * The panel used to give up after the first failure: the row kept its error
+ * and only a manual "Retry" click could fix it, so a single network hiccup
+ * left a paid translation sitting in the original language forever. The
+ * retries here cost the user's provider balance only when the previous
+ * attempt already failed, and the payload never changes, so the cache key of
+ * the batch stays the same.
+ *
+ * `isStale` is asked before every attempt. When the user has moved on - a
+ * different video, a different language mode - the panel stops instead of
+ * paying for a result nobody is waiting for.
+ */
+async function sendTranslationWithRetry(message, isStale) {
+  const stale = typeof isStale === "function" ? isStale : () => false;
+  let lastResult = null;
+  let lastError = null;
+
+  for (let attempt = 0; attempt <= TRANSLATION_MAX_AUTO_RETRIES; attempt += 1) {
+    if (stale()) {
+      return {
+        success: false,
+        error: panelCopy("translationCancelled"),
+        cancelled: true,
+      };
+    }
+    try {
+      const result = await sendTranslationMessage(message);
+      if (result?.success || !isRetryableTranslationError(result)) {
+        return result;
+      }
+      lastResult = result;
+    } catch (error) {
+      // A dead message channel or the watchdog timeout is a temporary
+      // problem too, so it gets the same number of chances.
+      lastError = error;
+      lastResult = null;
+    }
+    if (attempt < TRANSLATION_MAX_AUTO_RETRIES) {
+      await translationRetryDelay(attempt + 1, stale);
+    }
+  }
+
+  if (!lastResult && lastError) throw lastError;
+  return lastResult;
 }
 
 // --- Auto-scroll state (follow video playback in transcript) ---
@@ -2158,6 +2292,14 @@ async function translateInterfaceSegments(surface, segments, rerender) {
     );
   if (!missing.length) return;
 
+  // The batch belongs to the video, the mode and the generation it was
+  // started for. Once one of them changes, the answer is worth nothing to
+  // the user, so the retries stop as well.
+  const isStaleBatch = () =>
+    generation !== translationGeneration ||
+    videoId !== currentVideoId ||
+    currentTranscriptMode === "original";
+
   missing.forEach((segment) => interfaceTranslationInFlight.add(segment.cacheKey));
   setTranslatingSpinner(true);
   try {
@@ -2169,24 +2311,26 @@ async function translateInterfaceSegments(surface, segments, rerender) {
       const batch = missing.slice(start, start + TRANSLATION_BATCH_SIZE);
       let result;
       try {
-        result = await sendTranslationMessage({
-          action: "translateContent",
-          content: {
-            segments: batch.map(({ id, text }) => ({ id, text })),
+        // The payload is built once and never changes between the attempts,
+        // so every attempt asks for the very same thing and the cache key of
+        // the batch stays correct.
+        result = await sendTranslationWithRetry(
+          {
+            action: "translateContent",
+            content: {
+              segments: batch.map(({ id, text }) => ({ id, text })),
+            },
+            contentType: "interfaceBatch",
+            targetLanguage: "zh",
+            videoTitle: currentVideoTitle,
           },
-          contentType: "interfaceBatch",
-          targetLanguage: "zh",
-          videoTitle: currentVideoTitle,
-        });
+          isStaleBatch,
+        );
       } catch (error) {
         console.error("[YouTube Digest] Interface batch error:", error);
         result = { success: false, error: error.message };
       }
-      if (
-        generation !== translationGeneration ||
-        videoId !== currentVideoId ||
-        currentTranscriptMode === "original"
-      ) {
+      if (isStaleBatch()) {
         return;
       }
       const aligned = alignTranslatedSegmentBatch(
@@ -2197,6 +2341,9 @@ async function translateInterfaceSegments(surface, segments, rerender) {
         if (item.text) {
           interfaceTranslationCache.set(batch[index].cacheKey, item.text);
         } else {
+          // Only now, with every automatic attempt used up, does the segment
+          // go on the list of the ones the panel gave up on. Until then the
+          // "Retry" button is still there for the user to press.
           interfaceTranslationFailures.add(batch[index].cacheKey);
         }
       });
@@ -6358,22 +6505,32 @@ async function requestTranscriptTranslationBatch(
   mode,
 ) {
   const sourceBatch = indices.map((index) => segments[index]);
+  // The batch belongs to the video, the mode and the generation it was
+  // started for. Once one of them changes, the answer is worth nothing to
+  // the user, so the retries stop as well.
+  const isStaleBatch = () =>
+    generation !== translationGeneration ||
+    videoId !== currentVideoId ||
+    mode !== currentTranscriptMode;
   setTranslatingSpinner(true);
   try {
-    const result = await sendTranslationMessage({
-      action: "translateContent",
-      content: {
-        segments: sourceBatch.map(({ id, text }) => ({ id, text })),
+    // The payload is built once and never changes between the attempts, so
+    // every attempt asks for the very same thing and the cache key of the
+    // batch stays correct.
+    const result = await sendTranslationWithRetry(
+      {
+        action: "translateContent",
+        content: {
+          segments: sourceBatch.map(({ id, text }) => ({ id, text })),
+        },
+        contentType: "transcriptBatch",
+        targetLanguage: "zh",
+        videoTitle: currentVideoTitle,
       },
-      contentType: "transcriptBatch",
-      targetLanguage: "zh",
-      videoTitle: currentVideoTitle,
-    });
+      isStaleBatch,
+    );
 
-    const isStale =
-      generation !== translationGeneration ||
-      videoId !== currentVideoId ||
-      mode !== currentTranscriptMode;
+    const isStale = isStaleBatch();
 
     const responseSegments = result?.success
       ? result.translatedContent?.segments
@@ -6533,6 +6690,8 @@ function setTranslatingSpinner(show) {
 // not read this object at runtime.
 globalThis.__YTD_TRANSCRIPT_TESTING__ = {
   sendTranslationMessage,
+  sendTranslationWithRetry,
+  isRetryableTranslationError,
   groupTranscriptEntries,
   splitOversizedThought,
   alignTranslatedSegmentBatch,

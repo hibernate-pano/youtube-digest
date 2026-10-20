@@ -323,10 +323,15 @@ MUTATIONS = [
     }
     notice.hidden = false;
     notice.textContent = panelCopyFormat("notesDropped", {""",
-                """    let count = Number(record?.lastCount) || 0;
+                """    const count = Number(record?.lastCount) || 0;
 
     if (!count) {
-      count = 1;
+      notice.hidden = false;
+      notice.textContent = panelCopyFormat("notesDropped", {
+        count: "1",
+        limit: String(LOCAL_NOTE_LIMIT),
+      });
+      return;
     }
     notice.hidden = false;
     notice.textContent = panelCopyFormat("notesDropped", {""",
@@ -555,6 +560,77 @@ MUTATIONS = [
             (
                 "panel-playback.test.js",
                 "the playback poll keeps running when the tab and the relay both fail",
+            ),
+        ],
+    },
+    {
+        "name": "M25 the panel gives up on a paid translation after one try",
+        "file": "sidepanel.js",
+        "hunks": [
+            (
+                """  for (let attempt = 0; attempt <= TRANSLATION_MAX_AUTO_RETRIES; attempt += 1) {""",
+                """  for (let attempt = 0; attempt < 1; attempt += 1) {""",
+            )
+        ],
+        "expect": [
+            (
+                "translation-retry.test.js",
+                "a transcript batch that hit a rate limit is translated on the next try",
+            ),
+            (
+                "translation-retry.test.js",
+                "an interface segment that hit a rate limit is translated on the next try",
+            ),
+        ],
+    },
+    {
+        "name": "M26 a missing key is treated as worth another try",
+        "file": "sidepanel.js",
+        "hunks": [
+            (
+                """  if (code && TRANSLATION_NON_RETRYABLE_ERROR_CODES.has(code)) return false;""",
+                """  if (code && TRANSLATION_NON_RETRYABLE_ERROR_CODES.has(code)) return true;""",
+            ),
+            (
+                """  if (TRANSLATION_KEY_PROBLEM_PATTERN.test(error)) return false;""",
+                """  if (TRANSLATION_KEY_PROBLEM_PATTERN.test(error)) return true;""",
+            ),
+        ],
+        "expect": [
+            (
+                "translation-retry.test.js",
+                "a transcript batch with no API key is not asked again",
+            ),
+            (
+                "translation-retry.test.js",
+                "an interface segment with no API key is not asked again",
+            ),
+            (
+                "translation-retry.test.js",
+                "a failure that a new attempt cannot fix is not worth the user's balance",
+            ),
+        ],
+    },
+    {
+        "name": "M27 an interface segment goes on the deny list before the retries are used up",
+        "file": "sidepanel.js",
+        "hunks": [
+            (
+                """      const batch = missing.slice(start, start + TRANSLATION_BATCH_SIZE);
+      let result;""",
+                """      const batch = missing.slice(start, start + TRANSLATION_BATCH_SIZE);
+      batch.forEach((segment) => interfaceTranslationFailures.add(segment.cacheKey));
+      let result;""",
+            )
+        ],
+        "expect": [
+            (
+                "translation-retry.test.js",
+                "an interface segment that keeps failing goes on the deny list only after the attempts are used up",
+            ),
+            (
+                "translation-retry.test.js",
+                "an interface segment that hit a rate limit is translated on the next try",
             ),
         ],
     },
