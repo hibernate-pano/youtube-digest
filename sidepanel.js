@@ -2493,11 +2493,12 @@ function renderAnalysisResults(analysis) {
     const li = document.createElement("li");
     li.className = "chapter-item";
     li.dataset.seconds = chapter.timestampSeconds;
+    const stamp = displayTimestamp(chapter);
     // The timestamp is a real button, so a keyboard user can jump to a
     // chapter. The list item keeps its list semantics and stays clickable
     // for the mouse, and the click of the button bubbles up to it.
     li.innerHTML = `
-      <button class="chapter-timestamp" type="button" style="border: none; cursor: pointer;" aria-label="${escapeHtml(panelCopyFormat("jumpTo", { time: chapter.timestamp }))}">${escapeHtml(chapter.timestamp)}</button>
+      <button class="chapter-timestamp" type="button" style="border: none; cursor: pointer;" aria-label="${escapeHtml(panelCopyFormat("jumpTo", { time: stamp }))}">${escapeHtml(stamp)}</button>
       <div class="chapter-content">
         <span class="chapter-title">${renderLocalizedContent(chapter.title, "overview", `chapter-${index}-title`)}</span>
         <span class="chapter-summary">${renderLocalizedContent(chapter.summary || "", "overview", `chapter-${index}-summary`)}</span>
@@ -2506,7 +2507,7 @@ function renderAnalysisResults(analysis) {
     li.addEventListener("click", () => {
       debugLog(
         "[YouTube Digest Panel] Chapter clicked:",
-        chapter.timestamp,
+        stamp,
         chapter.timestampSeconds,
       );
       seekTo(chapter.timestampSeconds);
@@ -2535,6 +2536,7 @@ function renderAnalysisResults(analysis) {
     const div = document.createElement("div");
     div.className = "quote-item";
     div.dataset.seconds = quote.timestampSeconds;
+    const stamp = displayTimestamp(quote);
 
     // The quote card already holds two buttons of its own, so the card
     // cannot be a button as well: nested controls are a trap for screen
@@ -2542,7 +2544,7 @@ function renderAnalysisResults(analysis) {
     div.innerHTML = `
       <div class="quote-text">${renderLocalizedContent(quote.quote, "overview", `quote-${index}`)}</div>
       <div class="quote-meta">
-        <button class="quote-timestamp" type="button" style="border: none; cursor: pointer;" aria-label="${escapeHtml(panelCopyFormat("jumpTo", { time: quote.timestamp }))}">${escapeHtml(quote.timestamp)}</button>
+        <button class="quote-timestamp" type="button" style="border: none; cursor: pointer;" aria-label="${escapeHtml(panelCopyFormat("jumpTo", { time: stamp }))}">${escapeHtml(stamp)}</button>
         <div class="quote-actions">
           <button class="quote-save-note-btn" type="button" title="${escapeHtml(panelCopy("saveNote"))}">${escapeHtml(panelCopy("note"))}</button>
           <button class="quote-copy-btn" type="button" title="${escapeHtml(panelCopy("copyQuote"))}">${escapeHtml(panelCopy("copy"))}</button>
@@ -2556,7 +2558,7 @@ function renderAnalysisResults(analysis) {
     div.addEventListener("click", () => {
       debugLog(
         "[YouTube Digest Panel] Quote clicked:",
-        quote.timestamp,
+        stamp,
         quote.timestampSeconds,
       );
       seekTo(quote.timestampSeconds);
@@ -2720,9 +2722,7 @@ function renderTranscript() {
     div.className = "transcript-entry";
     div.dataset.seconds = group.start;
 
-    const minutes = Math.floor(group.start / 60);
-    const seconds = Math.floor(group.start % 60);
-    const timestamp = `${minutes}:${String(seconds).padStart(2, "0")}`;
+    const timestamp = YTD_SETTINGS.formatTimestamp(group.start);
 
     // The timestamp is a real button, so a keyboard user can jump to the
     // moment and a screen reader hears a control instead of loose text.
@@ -4791,11 +4791,12 @@ function renderNotes(notes, filteredVideoId) {
   notes.forEach((note, index) => {
     const translationId = getNoteTranslationId(note, index);
     const starred = note.starred === true;
+    const stamp = displayTimestamp(note);
     const noteEl = document.createElement("div");
     noteEl.className = "note-item";
     noteEl.innerHTML = `
       <div class="note-header">
-        <button class="note-timestamp" type="button" style="border: none;" data-url="${escapeHtml(note.timestampedUrl)}" data-seconds="${Number(note.timestampSeconds) || 0}" aria-label="${escapeHtml(panelCopyFormat("playFrom", { time: note.timestamp }))}">${escapeHtml(note.timestamp)}</button>
+        <button class="note-timestamp" type="button" style="border: none;" data-url="${escapeHtml(note.timestampedUrl)}" data-seconds="${Number(note.timestampSeconds) || 0}" aria-label="${escapeHtml(panelCopyFormat("playFrom", { time: stamp }))}">${escapeHtml(stamp)}</button>
         ${!filteredVideoId ? `<span class="note-video-title">${escapeHtml(note.videoTitle)}</span>` : ""}
         <button
           class="note-star${starred ? " note-star--on" : ""}"
@@ -5027,12 +5028,20 @@ async function getCurrentPlaybackSeconds() {
 }
 
 /**
- * Turns seconds into the M:SS stamp the rest of the panel uses.
+ * The stamp a reader sees for a chapter, a quote or a note.
+ *
+ * The seconds are the truth, and the stamp is derived from them, so what a
+ * reader reads and where the click lands can never disagree. The stored
+ * string is only used when the seconds are missing: an analysis cached by
+ * an older release still carries the old "90:00" for a ninety-minute
+ * video, and that string is not what the reader is shown.
  */
-function formatTimestamp(seconds) {
-  const total = Math.max(0, Math.floor(Number(seconds) || 0));
-  const minutes = Math.floor(total / 60);
-  return `${minutes}:${String(total % 60).padStart(2, "0")}`;
+function displayTimestamp(item) {
+  const seconds = Number(item?.timestampSeconds);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return YTD_SETTINGS.formatTimestamp(seconds);
+  }
+  return typeof item?.timestamp === "string" ? item.timestamp : "";
 }
 
 /**
@@ -5062,7 +5071,7 @@ async function refreshNotesCurrentTime() {
     return;
   }
   element.textContent = panelCopyFormat("playFrom", {
-    time: formatTimestamp(seconds),
+    time: YTD_SETTINGS.formatTimestamp(seconds),
   });
 }
 
@@ -5325,7 +5334,7 @@ function buildNotesMarkdown(notes) {
   notes.forEach((note) => {
     const title = note.videoTitle || panelCopy("untitledVideo");
     const channel = note.channelName || "";
-    const stamp = note.timestamp || formatTimestamp(note.timestampSeconds);
+    const stamp = displayTimestamp(note);
     const written = note.createdAt
       ? new Date(note.createdAt).toISOString().slice(0, 16).replace("T", " ")
       : "";
@@ -5435,7 +5444,7 @@ function renderVocabulary() {
 
     const statusKey = WORD_STATUS_LABELS[item.status] || "wordStatusLearning";
     const source = item.videoId
-      ? `<button class="word-source" type="button" data-video-id="${escapeHtml(item.videoId)}" data-seconds="${Number(item.timestampSeconds) || 0}">${escapeHtml(item.videoTitle || panelCopy("untitledVideo"))} · ${escapeHtml(formatTimestamp(item.timestampSeconds))}</button>`
+      ? `<button class="word-source" type="button" data-video-id="${escapeHtml(item.videoId)}" data-seconds="${Number(item.timestampSeconds) || 0}">${escapeHtml(item.videoTitle || panelCopy("untitledVideo"))} · ${escapeHtml(YTD_SETTINGS.formatTimestamp(item.timestampSeconds))}</button>`
       : "";
 
     card.innerHTML = `
@@ -6398,9 +6407,7 @@ function renderTranscriptModeRows(segments, mode) {
     div.dataset.segmentId = segment.id;
     div.dataset.segmentIndex = index;
 
-    const minutes = Math.floor(segment.start / 60);
-    const seconds = Math.floor(segment.start % 60);
-    const timestamp = `${minutes}:${String(seconds).padStart(2, "0")}`;
+    const timestamp = YTD_SETTINGS.formatTimestamp(segment.start);
 
     // The timestamp is a real button here too, so a translated transcript
     // is no less reachable with the keyboard than the original one.
@@ -6770,7 +6777,8 @@ globalThis.__YTD_PANEL_TESTING__ = {
   updateEmptyStates,
   openLibraryEntry,
   showWordConfirmation,
-  formatTimestamp,
+  displayTimestamp,
+  formatTimestamp: (seconds) => YTD_SETTINGS.formatTimestamp(seconds),
   extractVideoId,
   loadNotesDroppedNotice,
   showState,

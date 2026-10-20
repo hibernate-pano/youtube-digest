@@ -1273,7 +1273,9 @@ async function saveCurrentNote() {
       } else {
         showToast(
           panelCopy("noteSaved"),
-          panelCopy("savedAt", { timestamp: formatTimestamp(currentTime) }),
+          panelCopy("savedAt", {
+            timestamp: YTD_SETTINGS.formatTimestamp(currentTime),
+          }),
         );
       }
     } else {
@@ -1296,16 +1298,6 @@ async function saveCurrentNote() {
   setTimeout(() => {
     setNoteButtonState("idle", panelCopy("note"));
   }, 2000);
-}
-
-/**
- * Turns a number of seconds into the m:ss the product shows everywhere.
- */
-function formatTimestamp(seconds) {
-  const total = Math.max(0, Math.floor(seconds));
-  const minutes = Math.floor(total / 60);
-  const rest = total % 60;
-  return `${minutes}:${String(rest).padStart(2, "0")}`;
 }
 
 /**

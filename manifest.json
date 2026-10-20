@@ -34,7 +34,7 @@
   "content_scripts": [
     {
       "matches": ["https://www.youtube.com/*"],
-      "js": ["tokens.js", "content.js"],
+      "js": ["tokens.js", "settings.js", "content.js"],
       "run_at": "document_idle"
     }
   ],
