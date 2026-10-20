@@ -182,7 +182,7 @@ MUTATIONS = [
         "file": "sidepanel.js",
         "hunks": [
             (
-                """      if (signedOut) signedOut.hidden = result?.error !== "NO_SESSION";""",
+                """      if (signedOut) signedOut.hidden = !signedOutState;""",
                 """      if (signedOut) signedOut.hidden = true;""",
             )
         ],
@@ -282,8 +282,24 @@ MUTATIONS = [
         "file": "sidepanel.js",
         "hunks": [
             (
-                """    const count = Number(record?.lastCount) || 0;""",
-                """    const count = 0;""",
+                """    const count = Number(record?.lastCount) || 0;
+
+    if (!count) {
+      notice.hidden = true;
+      notice.textContent = "";
+      return;
+    }
+    notice.hidden = false;
+    notice.textContent = panelCopyFormat("notesDropped", {""",
+                """    const count = 0;
+
+    if (!count) {
+      notice.hidden = true;
+      notice.textContent = "";
+      return;
+    }
+    notice.hidden = false;
+    notice.textContent = panelCopyFormat("notesDropped", {""",
             )
         ],
         "expect": [
@@ -304,12 +320,16 @@ MUTATIONS = [
       notice.hidden = true;
       notice.textContent = "";
       return;
-    }""",
+    }
+    notice.hidden = false;
+    notice.textContent = panelCopyFormat("notesDropped", {""",
                 """    let count = Number(record?.lastCount) || 0;
 
     if (!count) {
       count = 1;
-    }""",
+    }
+    notice.hidden = false;
+    notice.textContent = panelCopyFormat("notesDropped", {""",
             )
         ],
         "expect": [
@@ -422,6 +442,119 @@ MUTATIONS = [
             (
                 "panel-tabs.test.js",
                 "the library says how long it keeps things",
+            ),
+        ],
+    },
+    {
+        "name": "M21 the playback poll searches every tab again",
+        "file": "sidepanel.js",
+        "hunks": [
+            (
+                """    if (youtubeTabId) {
+      try {
+        // The content script answers with the time itself, so a direct
+        // answer needs no unwrapping.
+        const direct = await chrome.tabs.sendMessage(youtubeTabId, {
+          action: "getCurrentTime",
+        });
+        const directTime = Number(direct?.currentTime);
+        if (Number.isFinite(directTime)) {
+          highlightActiveEntry(directTime);
+          return;
+        }
+      } catch (directErr) {
+        debugLog(
+          "[YouTube Digest Panel] Direct getCurrentTime failed, falling back to relay:",
+          directErr.message,
+        );
+      }
+    }
+
+""",
+                "",
+            )
+        ],
+        "expect": [
+            (
+                "panel-playback.test.js",
+                "the playback poll asks the YouTube tab directly instead of searching every tab",
+            ),
+            (
+                "panel-playback.test.js",
+                "the playback poll falls back to the relay when the YouTube tab is gone",
+            ),
+        ],
+    },
+    {
+        "name": "M22 the playback poll gives up when the tab is gone",
+        "file": "sidepanel.js",
+        "hunks": [
+            (
+                """      } catch (directErr) {
+        debugLog(
+          "[YouTube Digest Panel] Direct getCurrentTime failed, falling back to relay:",
+          directErr.message,
+        );
+      }""",
+                """      } catch (directErr) {
+        debugLog(
+          "[YouTube Digest Panel] Direct getCurrentTime failed, falling back to relay:",
+          directErr.message,
+        );
+        return;
+      }""",
+            )
+        ],
+        "expect": [
+            (
+                "panel-playback.test.js",
+                "the playback poll falls back to the relay when the YouTube tab is gone",
+            ),
+            (
+                "panel-playback.test.js",
+                "the playback poll keeps running when the tab and the relay both fail",
+            ),
+        ],
+    },
+    {
+        "name": "M23 the playback poll reads the direct answer as a relay envelope",
+        "file": "sidepanel.js",
+        "hunks": [
+            (
+                """        const directTime = Number(direct?.currentTime);""",
+                """        const directTime = Number(direct?.response?.currentTime);""",
+            )
+        ],
+        "expect": [
+            (
+                "panel-playback.test.js",
+                "the playback poll asks the YouTube tab directly instead of searching every tab",
+            ),
+        ],
+    },
+    {
+        "name": "M24 the playback poll reads the relay answer as a direct answer",
+        "file": "sidepanel.js",
+        "hunks": [
+            (
+                """    const currentTime = result.response.currentTime || 0;
+    highlightActiveEntry(currentTime);
+  } catch (error) {
+    // Silently ignore — YouTube tab might be closed or navigated away""",
+                """    const currentTime = result.currentTime || 0;
+    highlightActiveEntry(currentTime);
+  } catch (error) {
+    // Silently ignore — YouTube tab might be closed or navigated away""",
+            )
+        ],
+        "expect": [
+            (
+                "panel-playback.test.js",
+                "the playback poll falls back to the relay when the YouTube tab is gone",
+            ),
+            (
+                "panel-playback.test.js",
+                "the playback poll keeps running when the tab and the relay both fail",
             ),
         ],
     },

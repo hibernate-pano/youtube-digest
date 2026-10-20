@@ -5849,9 +5849,35 @@ function stopPlaybackTracking() {
 /**
  * One tick of the playback tracker. Gets current video time from the
  * YouTube tab and highlights + scrolls to the matching transcript entry.
+ *
+ * The YouTube tab the panel already knows about is asked first. The relay
+ * behind `relayToContent` has to search the browser's tabs to find the
+ * YouTube page, and that search is far too heavy to run twice a second.
  */
 async function playbackTrackingTick() {
   try {
+    if (youtubeTabId) {
+      try {
+        // The content script answers with the time itself, so a direct
+        // answer needs no unwrapping.
+        const direct = await chrome.tabs.sendMessage(youtubeTabId, {
+          action: "getCurrentTime",
+        });
+        const directTime = Number(direct?.currentTime);
+        if (Number.isFinite(directTime)) {
+          highlightActiveEntry(directTime);
+          return;
+        }
+      } catch (directErr) {
+        debugLog(
+          "[YouTube Digest Panel] Direct getCurrentTime failed, falling back to relay:",
+          directErr.message,
+        );
+      }
+    }
+
+    // The tab is gone, or it never answered. The relay finds the YouTube
+    // page again, so the tracker keeps following the video.
     const result = await chrome.runtime.sendMessage({
       action: "relayToContent",
       payload: { action: "getCurrentTime" },
