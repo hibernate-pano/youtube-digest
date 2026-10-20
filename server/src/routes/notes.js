@@ -1,4 +1,4 @@
-const { json, HttpError, readJsonObject } = require("../middleware");
+const { json, HttpError, readJsonObject, serverTime } = require("../middleware");
 const { parseNote, parseNotePatch } = require("../validate");
 
 /**
@@ -11,7 +11,10 @@ async function readObjectBody(ctx) {
 
 async function listNotes(ctx) {
   const rows = await ctx.store.listNotes(ctx.user.id);
-  return json({ notes: rows });
+  // The server's own clock travels with the rows: the client needs it to
+  // tell which side of a conflict is newer without trusting the device
+  // clock.
+  return json({ notes: rows, serverTime: serverTime() });
 }
 
 async function createNote(ctx) {
@@ -22,7 +25,7 @@ async function createNote(ctx) {
     throw new HttpError(400, "clientId is required for idempotent sync.");
   }
   const row = await ctx.store.createNote(ctx.user.id, note);
-  return json({ note: row }, 201);
+  return json({ note: row, serverTime: serverTime() }, 201);
 }
 
 async function setNoteStarred(ctx) {
@@ -32,7 +35,7 @@ async function setNoteStarred(ctx) {
   }
   const row = await ctx.store.setNoteStarred(ctx.user.id, ctx.params.id, input.starred);
   if (!row) throw new HttpError(404, "Note not found.");
-  return json({ note: row });
+  return json({ note: row, serverTime: serverTime() });
 }
 
 async function deleteNoteByClientId(ctx) {
@@ -52,7 +55,7 @@ async function updateNote(ctx) {
   if (!note) throw new HttpError(400, "A non-empty note is required.");
   const row = await ctx.store.updateNote(ctx.user.id, ctx.params.id, note);
   if (!row) throw new HttpError(404, "Note not found.");
-  return json({ note: row });
+  return json({ note: row, serverTime: serverTime() });
 }
 
 async function deleteNote(ctx) {

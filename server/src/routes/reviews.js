@@ -1,4 +1,4 @@
-const { json, HttpError } = require("../middleware");
+const { json, HttpError, serverTime } = require("../middleware");
 const { parseReviewGrade } = require("../validate");
 const { readObjectBody } = require("./notes");
 
@@ -6,7 +6,7 @@ async function listDueReviews(ctx) {
   const url = new URL(ctx.request.url);
   const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 20, 1), 100);
   const rows = await ctx.store.listDueReviews(ctx.user.id, limit);
-  return json({ reviews: rows });
+  return json({ reviews: rows, serverTime: serverTime() });
 }
 
 async function submitReview(ctx) {

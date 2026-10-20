@@ -93,6 +93,19 @@ function json(body, status) {
 }
 
 /**
+ * The server's own clock, as an ISO timestamp.
+ *
+ * The rows in the database are stamped with the server's clock, but the
+ * client compares them against timestamps taken from the device clock, so
+ * a device with a wrong clock can end up believing its own copy is the
+ * newer one. Every sync response carries this value: it is the reference
+ * point the client measures its own clock against.
+ */
+function serverTime() {
+  return new Date().toISOString();
+}
+
+/**
  * Maximum accepted request body, in bytes.
  *
  * Sized for the largest legitimate payload: a full note (20 000 characters),
@@ -251,6 +264,7 @@ module.exports = {
   requireUser,
   readBearer,
   json,
+  serverTime,
   assertBodySize,
   readJsonBody,
   readJsonObject,

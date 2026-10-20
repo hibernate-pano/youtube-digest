@@ -1237,6 +1237,112 @@ test("login migrates signed-out notes into the account namespace once", async ()
   assert.equal(again, 0);
 });
 
+test("the signed-out bucket is emptied as soon as the notes are imported", async () => {
+  const storageMock = createStorageMock({
+    ytd_notes: [
+      { id: "legacy_1", text: "old note", videoId: "abc123xyz", createdAt: 1000 },
+    ],
+  });
+  const helpers = loadBackgroundHelpers({ storageMock });
+  const added = await helpers.migrateLegacyLocalNotes(1001);
+  assert.equal(added, 1);
+  const raw = await storageMock.get(null);
+  assert.equal(raw.ytd_notes, undefined, "the signed-out copy must not survive the import");
+  assert.equal(raw.ytd_notes_1001.length, 1, "the note now belongs to the account");
+});
+
+test("a failed sync never hands the signed-out notes to the next account", async () => {
+  const storageMock = createStorageMock({
+    ytd_notes: [
+      { id: "legacy_1", text: "private note", videoId: "abc123xyz", createdAt: 1000 },
+    ],
+  });
+  const requests = [];
+  let syncFails = true;
+  const helpers = loadBackgroundHelpers({
+    storageMock,
+    fetchImpl: async (url, options) => {
+      requests.push({
+        url: String(url),
+        method: options.method,
+        body: options.body ? JSON.parse(options.body) : null,
+      });
+      if (String(url).endsWith("/api/me")) {
+        const alice = options.headers.Authorization === "Bearer token-alice";
+        return {
+          ok: true,
+          json: async () => ({
+            user: {
+              id: alice ? "1" : "2",
+              githubId: alice ? 1001 : 2002,
+              login: alice ? "alice" : "bob",
+            },
+          }),
+        };
+      }
+      if (syncFails) throw new TypeError("Failed to fetch");
+      return { ok: true, json: async () => ({ notes: [] }) };
+    },
+  });
+
+  // Alice signs in, but the upload fails.
+  const login = await helpers.completeGithubLogin("token-alice", null);
+  assert.equal(login.success, false, "the failed sync is reported");
+  const afterAlice = await storageMock.get(null);
+  assert.equal(
+    afterAlice.ytd_notes_1001.length,
+    1,
+    "the notes stay in the account they were imported into",
+  );
+  assert.equal(
+    afterAlice.ytd_notes,
+    undefined,
+    "the signed-out bucket is cleared even when the upload failed",
+  );
+
+  // Bob signs in on the same device.
+  syncFails = false;
+  requests.length = 0;
+  const bobLogin = await helpers.completeGithubLogin("token-bob", null);
+  assert.equal(bobLogin.success, true, JSON.stringify(bobLogin));
+  const afterBob = await storageMock.get(null);
+  assert.equal(
+    (afterBob.ytd_notes_2002 || []).length,
+    0,
+    "the previous account's notes must not appear in the next account's data",
+  );
+  const pushed = requests.filter(
+    (request) => request.method === "POST" && request.body,
+  );
+  for (const request of pushed) {
+    assert.notEqual(
+      request.body.clientId,
+      "legacy_1",
+      "a note that belonged to another account must never be uploaded for this one",
+    );
+  }
+});
+
+test("notes claimed by one account are not imported by another", async () => {
+  const storageMock = createStorageMock({
+    ytd_notes: [
+      { id: "legacy_1", text: "private note", videoId: "abc123xyz", createdAt: 1000 },
+    ],
+  });
+  const helpers = loadBackgroundHelpers({ storageMock });
+  assert.equal(await helpers.migrateLegacyLocalNotes(1001), 1);
+
+  // The bucket still holds a copy (a storage error kept it there), but the
+  // note already belongs to the first account.
+  await storageMock.set({
+    ytd_notes: [{ id: "legacy_1", text: "private note", videoId: "abc123xyz", createdAt: 1000 }],
+  });
+  const added = await helpers.migrateLegacyLocalNotes(2002);
+  assert.equal(added, 0, "a claimed note is never imported a second time");
+  const raw = await storageMock.get(null);
+  assert.equal(raw.ytd_notes_2002, undefined);
+});
+
 
 // ============================================================
 // VOCABULARY + REVIEW TESTS
