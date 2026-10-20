@@ -674,3 +674,109 @@ test("the video the panel just read is cached for next time", async () => {
   );
   assert.ok(cached.timestamp, "the cache does not say when it was written");
 });
+
+// ============================================================
+// F: the retry the user is offered has to be a real one
+// ============================================================
+
+test("a video without captions still offers a way out", async () => {
+  const panel = createPanel({
+    sendMessageImpl: workerRouter({
+      fetchTranscript: {
+        success: false,
+        error: "NO_TRANSCRIPT",
+        message: "No subtitles found for this video.",
+      },
+    }),
+  });
+  await panel.boot();
+  await panel.helpers.startDigest(
+    "videoA",
+    "https://www.youtube.com/watch?v=videoA",
+  );
+
+  assert.equal(panel.el("errorTitle").textContent, "No transcript found");
+  assert.match(
+    panel.el("errorMessage").textContent,
+    /subtitles/i,
+    "the user is shown a code instead of a sentence",
+  );
+  assert.equal(
+    panel.el("errorBtn").textContent,
+    "Retry",
+    "a caption-less video leaves the user with no way out",
+  );
+});
+
+test("the retry button asks the worker to look the video up again", async () => {
+  const panel = createPanel({
+    sendMessageImpl: workerRouter({
+      fetchTranscript: {
+        success: false,
+        error: "NO_TRANSCRIPT",
+        message: "No subtitles found for this video.",
+      },
+    }),
+  });
+  await panel.boot();
+  await panel.helpers.startDigest(
+    "videoA",
+    "https://www.youtube.com/watch?v=videoA",
+  );
+
+  const lookups = panel.sentMessages.filter(
+    (message) => message.action === "fetchTranscript",
+  );
+  assert.equal(lookups.length, 1);
+  assert.notEqual(
+    lookups[0].force,
+    true,
+    "the first look at the video is already a forced one",
+  );
+
+  // The user presses the button that says "Retry".
+  await panel.click(panel.el("errorBtn"));
+  await flush();
+
+  const afterRetry = panel.sentMessages.filter(
+    (message) => message.action === "fetchTranscript",
+  );
+  assert.equal(afterRetry.length, 2, "the retry never reached the worker");
+  assert.equal(
+    afterRetry[1].force,
+    true,
+    "the retry was answered from what the worker remembers, so it did nothing",
+  );
+});
+
+test("an empty transcript can be tried again as well", async () => {
+  const panel = createPanel({
+    sendMessageImpl: workerRouter({
+      fetchTranscript: {
+        success: false,
+        error: "EMPTY_TRANSCRIPT",
+        message: "Supadata returned an empty transcript for this video.",
+      },
+    }),
+  });
+  await panel.boot();
+  await panel.helpers.startDigest(
+    "videoA",
+    "https://www.youtube.com/watch?v=videoA",
+  );
+
+  assert.equal(panel.el("errorBtn").textContent, "Try Again");
+
+  await panel.click(panel.el("errorBtn"));
+  await flush();
+
+  const afterRetry = panel.sentMessages.filter(
+    (message) => message.action === "fetchTranscript",
+  );
+  assert.equal(afterRetry.length, 2, "the retry never reached the worker");
+  assert.equal(
+    afterRetry[1].force,
+    true,
+    "the retry was answered from what the worker remembers, so it did nothing",
+  );
+});

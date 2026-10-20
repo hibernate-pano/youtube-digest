@@ -1741,7 +1741,9 @@ function setupEventListeners() {
       return;
     }
     if (currentVideoId) {
-      startDigest(currentVideoId, currentVideoUrl);
+      // The user pressed the button, so the worker has to look the video up
+      // again instead of answering with the failure it remembers.
+      startDigest(currentVideoId, currentVideoUrl, { force: true });
     }
   });
 
@@ -2011,7 +2013,7 @@ function onVideoChanged(videoId) {
   clearOverviewLists();
 }
 
-async function startDigest(videoId, videoUrl) {
+async function startDigest(videoId, videoUrl, options = {}) {
   // Check if we already have this video loaded in memory
   if (videoId === currentVideoId && currentAnalysis) {
     showState("results");
@@ -2138,6 +2140,10 @@ async function startDigest(videoId, videoUrl) {
       // The worker reads the captions out of the page itself when it can,
       // and only spends a credit when it cannot.
       tabId: youtubeTabId,
+      // The worker remembers a video that has no captions, so that a second
+      // look does not cost another credit. When the user asked for the video
+      // to be looked at again, that memory has to be ignored.
+      force: options?.force === true,
     }),
   );
   const transcriptResult = await transcriptRequest.promise;
@@ -3322,12 +3328,14 @@ function showConfigError(configStatus) {
  * Asks for the transcript again.
  *
  * A failed lookup leaves the ledger, so the retry really buys a second
- * lookup. The user asked for it, so the credit is theirs.
+ * lookup. The user asked for it, so the credit is theirs, and the worker
+ * has to look the video up again instead of answering with the failure it
+ * remembers.
  */
 async function retryTranscript() {
   if (!currentVideoId) return;
   transcriptLedger.delete(currentVideoId);
-  await startDigest(currentVideoId, currentVideoUrl);
+  await startDigest(currentVideoId, currentVideoUrl, { force: true });
 }
 
 /**

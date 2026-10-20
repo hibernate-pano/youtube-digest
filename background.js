@@ -451,7 +451,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // The tab id lets the worker read the captions out of the page itself
     // before it spends a Supadata credit. Without it the fallback is the
     // only path, which is exactly what happened before.
-    handleFetchTranscriptLocalFirst(message.videoId, message.tabId || null)
+    handleFetchTranscriptLocalFirst(message.videoId, message.tabId || null, {
+      // The user asked for this video to be looked up again, so the worker
+      // must not answer it with the failure it remembers.
+      force: message.force === true,
+    })
       .then(sendResponse)
       .catch((err) => sendResponse({ error: err.message }));
     return true; // Keep the message channel open for async response
@@ -1172,11 +1176,18 @@ async function tryLocalTranscript(tabId, expectedVideoId) {
  * gone. The Supadata path covers all of that, so the product still works
  * when the cheap path does not.
  *
+ * The remembered failure of the paid path never blocks the local one. A
+ * video whose captions could not be read yesterday may have them today, and
+ * reading them out of the page costs the user nothing.
+ *
  * @param {string} videoId the video to read
  * @param {number|null} tabId the YouTube tab, when there is one
+ * @param {Object} options
+ * @param {boolean} options.force look the video up again even when the
+ *   failure of the last lookup is remembered
  * @returns {Promise<Object>} the transcript or a failure
  */
-async function handleFetchTranscriptLocalFirst(videoId, tabId) {
+async function handleFetchTranscriptLocalFirst(videoId, tabId, options = {}) {
   if (tabId) {
     const local = await tryLocalTranscript(tabId, videoId);
     if (local?.success) {
@@ -1188,7 +1199,7 @@ async function handleFetchTranscriptLocalFirst(videoId, tabId) {
     );
   }
 
-  const remote = await handleFetchTranscript(videoId);
+  const remote = await handleFetchTranscript(videoId, options);
   if (remote.success) return { ...remote, source: "supadata" };
 
   // The local path was tried and did not work, and there is no key to fall
@@ -1207,6 +1218,148 @@ async function handleFetchTranscriptLocalFirst(videoId, tabId) {
 }
 
 // ============================================================
+// THE TRANSCRIPT FAILURE CACHE
+// ============================================================
+
+// "This video has no captions" is a property of the video, not of the
+// moment. Captions do not appear out of nowhere, so a lookup that failed
+// that way is remembered for a day: opening the panel, switching tabs and
+// coming back must not spend another Supadata credit on the same answer.
+const TRANSCRIPT_FAILURE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+
+// The failure cache has a namespace of its own. The digest cache
+// (digest_<videoId>) belongs to the panel, which writes it, reads it and
+// evicts it, so nothing else may write under that name.
+const TRANSCRIPT_FAILURE_CACHE_PREFIX = "ytd_transcript_failed_";
+
+// The failures that describe the video itself. A missing key, an invalid
+// key, an exhausted balance, a rate limit and a timeout describe the
+// moment instead, so they are never remembered: the user has to be able to
+// try those again at once.
+const TRANSCRIPT_CACHEABLE_FAILURES = new Set([
+  "NO_TRANSCRIPT",
+  "EMPTY_TRANSCRIPT",
+]);
+
+// The lookups that are on the wire right now. The panel and the note flow
+// can ask for the same video at the same moment; they join one request
+// instead of paying for two.
+const transcriptRequestsInFlight = new Map();
+
+/**
+ * The storage key a failed transcript lookup is remembered under.
+ *
+ * @param {string} videoId the video the lookup was for
+ * @returns {string} the key
+ */
+function transcriptFailureCacheKey(videoId) {
+  return `${TRANSCRIPT_FAILURE_CACHE_PREFIX}${videoId}`;
+}
+
+/**
+ * Reads the remembered failure of a transcript lookup.
+ *
+ * A remembered failure is only worth something while it is fresh: a day
+ * later the video may have captions after all, and the user may have a key
+ * now. An entry that is too old is dropped on the way out.
+ *
+ * @param {string} videoId the video to look up
+ * @returns {Promise<Object|null>} the remembered failure, or null
+ */
+async function readFailedTranscript(videoId) {
+  if (!videoId) return null;
+
+  try {
+    const key = transcriptFailureCacheKey(videoId);
+    const stored = await chrome.storage.local.get(key);
+    const failure = stored[key];
+    if (!failure) return null;
+
+    const timestamp = Number(failure.timestamp) || 0;
+    if (Date.now() - timestamp > TRANSCRIPT_FAILURE_CACHE_TTL_MS) {
+      await chrome.storage.local.remove(key);
+      return null;
+    }
+
+    // Only a failure that describes the video is worth serving from the
+    // memory. Anything else was written by a version that thought
+    // differently, and the user has to be able to try it again at once.
+    const code = String(failure.error || "");
+    if (!TRANSCRIPT_CACHEABLE_FAILURES.has(code)) {
+      await chrome.storage.local.remove(key);
+      return null;
+    }
+
+    return {
+      success: false,
+      error: code,
+      message: String(failure.message || ""),
+    };
+  } catch (error) {
+    debugLog(
+      "[YouTube Digest BG] Failed-transcript cache read failed:",
+      error,
+    );
+    return null;
+  }
+}
+
+/**
+ * Remembers a transcript failure that describes the video itself.
+ *
+ * @param {string} videoId the video that failed
+ * @param {Object} result the failure the lookup produced
+ * @returns {Promise<void>} nothing
+ */
+async function writeFailedTranscript(videoId, result) {
+  if (!videoId || result?.success) return;
+  if (!TRANSCRIPT_CACHEABLE_FAILURES.has(result.error)) return;
+
+  try {
+    await chrome.storage.local.set({
+      [transcriptFailureCacheKey(videoId)]: {
+        error: result.error,
+        message: String(result.message || ""),
+        timestamp: Date.now(),
+      },
+    });
+    await pruneFailedTranscripts();
+  } catch (error) {
+    debugLog(
+      "[YouTube Digest BG] Failed-transcript cache write failed:",
+      error,
+    );
+  }
+}
+
+/**
+ * Drops the remembered failures that are too old to be true.
+ *
+ * The failure cache is not part of the digest cache, so the eviction the
+ * panel owns does not sweep it. Without this the entries would sit in
+ * storage forever.
+ *
+ * @returns {Promise<void>} nothing
+ */
+async function pruneFailedTranscripts() {
+  try {
+    const stored = await chrome.storage.local.get(null);
+    const expired = Object.keys(stored).filter((key) => {
+      if (!key.startsWith(TRANSCRIPT_FAILURE_CACHE_PREFIX)) return false;
+      const timestamp = Number(stored[key]?.timestamp) || 0;
+      return Date.now() - timestamp > TRANSCRIPT_FAILURE_CACHE_TTL_MS;
+    });
+    if (expired.length === 0) return;
+    await chrome.storage.local.remove(expired);
+  } catch (error) {
+    debugLog(
+      "[YouTube Digest BG] Failed-transcript cache cleanup failed:",
+      error,
+    );
+  }
+}
+
+// ============================================================
 // TRANSCRIPT FETCHING VIA SUPADATA API
 // ============================================================
 
@@ -1222,7 +1375,7 @@ async function handleFetchTranscriptLocalFirst(videoId, tabId) {
  * @param {string} videoId - The YouTube video ID (e.g., "dQw4w9WgXcQ")
  * @returns {Object} - { success, transcript, transcriptText, language } or { success: false, error }
  */
-async function handleFetchTranscript(videoId) {
+async function fetchTranscriptFromSupadata(videoId) {
   try {
     const settings = await getSettings();
     if (!settings.supadataApiKey) {
@@ -1401,6 +1554,68 @@ async function handleFetchTranscript(videoId) {
       error: error.code || error.message || "Failed to fetch transcript",
       code: error.code,
     };
+  }
+}
+
+/**
+ * Fetches the transcript of a video, paying for it at most once.
+ *
+ * Three things keep the user from paying twice for the same answer:
+ *
+ * - A failure that describes the video itself is remembered for a day, so
+ *   the second look at a caption-less video costs nothing.
+ * - Two callers that want the same video at the same moment (the panel and
+ *   the note flow) share the request that is already on the wire.
+ * - A request that is on the wire is never sent a second time.
+ *
+ * The user can always ask for a fresh lookup. The panel's retry button
+ * says so, and a video that has no captions must never be stuck for good.
+ *
+ * @param {string} videoId the video to read
+ * @param {Object} options
+ * @param {boolean} options.force ignore the remembered failure and look the
+ *   video up again. The user asked for it, so the credit is theirs.
+ * @returns {Promise<Object>} the transcript or a failure
+ */
+async function handleFetchTranscript(videoId, options = {}) {
+  if (options?.force !== true) {
+    const remembered = await readFailedTranscript(videoId);
+    if (remembered) {
+      debugLog(
+        "[YouTube Digest BG] The failure of this video is remembered:",
+        videoId,
+      );
+      return remembered;
+    }
+  }
+
+  const running = transcriptRequestsInFlight.get(videoId);
+  if (running) {
+    debugLog(
+      "[YouTube Digest BG] Joining the lookup that is already running:",
+      videoId,
+    );
+    return running;
+  }
+
+  const request = fetchTranscriptFromSupadata(videoId).then(async (result) => {
+    if (!result?.success) await writeFailedTranscript(videoId, result);
+    return result;
+  });
+  transcriptRequestsInFlight.set(videoId, request);
+
+  try {
+    return await request;
+  } catch (error) {
+    // The lookup itself never throws, but the panel expects a failure it can
+    // show, not an exception it has to make sense of.
+    return {
+      success: false,
+      error: error?.code || error?.message || "Failed to fetch transcript",
+      code: error?.code,
+    };
+  } finally {
+    transcriptRequestsInFlight.delete(videoId);
   }
 }
 
@@ -2446,6 +2661,10 @@ globalThis.__YTD_TRANSLATION_TESTING__ = {
   updatePanelForTab,
   handleFetchTranscript,
   handleFetchTranscriptLocalFirst,
+  fetchTranscriptFromSupadata,
+  readFailedTranscript,
+  writeFailedTranscript,
+  transcriptFailureCacheKey,
   tryLocalTranscript,
   readCaptionTracksFromTab,
   pickCaptionTrack,
