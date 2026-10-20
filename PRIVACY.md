@@ -2,7 +2,7 @@
 
 Effective: July 28, 2026
 
-YouTube Digest is a GitHub-only, bring-your-own-key Chrome extension. It has no YouTube Digest account, developer-operated backend, analytics, advertising, or telemetry.
+YouTube Digest is a GitHub-only, bring-your-own-key Chrome extension. It has no YouTube Digest account, analytics, advertising, or telemetry. It does run an optional sync service, described in "GitHub sync (optional)" below, that stores your saved notes when you choose to sign in.
 
 ## Data the extension handles
 
@@ -65,16 +65,18 @@ Those services process data under their own terms, privacy policies, retention p
 
 ## Local storage and retention
 
-YouTube Digest uses Chrome's local extension storage, not a YouTube Digest cloud service.
+YouTube Digest uses Chrome's local extension storage for its own data. The only
+data that also leaves the device is the saved notes you choose to sync, as
+described under "GitHub sync (optional)" above.
 
-- Supadata and AI provider settings and API keys remain on the device in Chrome's extension storage.
+- Supadata and AI provider settings and API keys remain on the device in Chrome's extension storage. They are never sent to the sync service.
 - Keys for all supported AI providers are kept side by side so you can switch
   providers without re-entering keys. Only the selected provider ever receives
   requests; keys for providers you have not selected stay on the device until
   you clear those fields in Settings or reset extension data.
-- Saved notes remain until you delete them or remove/clear the extension's data. The extension keeps up to 100 notes.
+- Saved notes remain until you delete them or remove/clear the extension's data. The extension keeps up to 100 notes. When you are signed in, those notes are also stored on the sync service until you delete them there or delete your account.
 - Recent transcript, digest, and per-segment translation cache entries are stored
-  locally. The cache is limited to 20 videos, and entries older than 30 days are
+  locally and are never synced. The cache is limited to 20 videos, and entries older than 30 days are
   removed when the side panel opens.
 
 Chrome extension storage is not a password vault. Anyone with sufficient access to your browser profile or device may be able to recover locally stored keys or content. Use scoped keys where providers support them, set spending limits, and rotate or revoke a key if the device or browser profile is compromised.
@@ -99,6 +101,7 @@ YouTube Digest uses Chrome permissions for these purposes:
 - YouTube host access: read the active video's URL and metadata and provide timestamp controls.
 - Supadata host access: retrieve transcripts.
 - DeepSeek, MiniMax, and OpenCode Go host access: provide AI overviews, explanations, translation, and note polishing through the selected provider.
+- Sync service host access (`https://ytd.panbo.space`): sign in with GitHub, and sync the saved notes you choose to back up. This permission is only used for the optional sync; it is not used while you are signed out.
 
 YouTube Digest does not use these permissions to monitor general browsing activity.
 

@@ -11,23 +11,26 @@ Turn every YouTube video into a resource for deep learning. YouTube Digest bring
 - Save polished timestamped notes for later study.
 - Keep control of your data with your own API keys, local Chrome storage, and no analytics or telemetry.
 
-YouTube Digest is a bring-your-own-key project installed locally from GitHub. It is not available through the Chrome Web Store, does not include API credits, and does not run a developer-operated server.
+YouTube Digest is a bring-your-own-key project installed locally from GitHub. It is not available through the Chrome Web Store and does not include API credits. The extension has no analytics and no telemetry. If you sign in with GitHub, the optional sync feature mirrors your saved notes to this project's own sync service at `https://ytd.panbo.space`; without signing in, no note data leaves your device.
 
 ![YouTube Digest demo](YouTube%20Digest%20demo.png)
 
-## New in v1.2.0
+## New in v1.4.0
 
 - Search transcript words or phrases and move through every match.
 - Use one Original, Chinese, or bilingual setting across Transcript, Overview, and Notes. New videos stay in Original by default.
 - Translate visible Overview and Notes content progressively in small cached batches.
 - Explain selected transcript text or save it directly as a timestamped note.
 - Keep your transcript position across navigation, with the panel closing automatically outside YouTube video pages.
+- Sign in with GitHub to back up your notes to the project's sync service, and sign in again on any other device to pick them up.
+- Click a note's text to correct it; the edit is saved locally and synced.
+- See a clear "Sync expired" chip when the GitHub session ends, and sign in again to resume the backup.
 
 ## Install with your coding agent
 
 You do not need to understand the code or use the command line. Send this message to your coding agent:
 
-> Download or clone this project into a permanent folder I choose, tell me its exact full path, and use that same folder for Chrome's Load unpacked step. If I need a suggestion during this first installation, offer `~/Documents/youtube-digest` on macOS or Linux, or `%USERPROFILE%\Documents\youtube-digest` on Windows, but do not assume either path. Walk me through installation and setup in simple terms. https://github.com/zarazhangrui/youtube-digest
+> Download or clone this project into a permanent folder I choose, tell me its exact full path, and use that same folder for Chrome's Load unpacked step. If I need a suggestion during this first installation, offer `~/Documents/youtube-digest` on macOS or Linux, or `%USERPROFILE%\Documents\youtube-digest` on Windows, but do not assume either path. Walk me through installation and setup in simple terms. https://github.com/hibernate-pano/youtube-digest
 
 Your agent should:
 
@@ -45,7 +48,7 @@ Never paste an API key into an AI chat, source file, screenshot, or public messa
 
 If you prefer to do it yourself:
 
-1. Open [github.com/zarazhangrui/youtube-digest](https://github.com/zarazhangrui/youtube-digest).
+1. Open [github.com/hibernate-pano/youtube-digest](https://github.com/hibernate-pano/youtube-digest).
 2. Choose **Code**, then **Download ZIP**.
 3. Choose a permanent folder and unzip the project there. Optional suggestions are `~/Documents/youtube-digest` on macOS or Linux, or `%USERPROFILE%\Documents\youtube-digest` on Windows. You may use a different folder.
 4. In Chrome, open `chrome://extensions`.
@@ -116,25 +119,29 @@ Keys and settings are stored in Chrome's local extension storage on your device.
 
 ## Optional GitHub sync
 
-Sign in with GitHub from Settings (or the 🔐 Sign in button in the side panel) to back up your notes to your own GitHub account. Every account's data is isolated server-side: the extension stores notes under an account-specific namespace, the server scopes every query by the verified token, and signing in with a different account shows that account's notes only. Sync is optional: without signing in, everything stays on this device exactly as before, and AI/transcript requests never involve the sync service. When signed in, saved notes mirror to the cloud automatically (idempotent by client id, newest edit wins) and appear on any device where you sign in with the same GitHub account.
+Sign in with GitHub from Settings (or the **Sign in** button in the side panel) to back up your notes. Your notes are stored in this project's own database on `https://ytd.panbo.space`, a Cloudflare Worker backed by a Neon PostgreSQL database, and are linked to your GitHub account id. They are not written to your GitHub account, and no GitHub repository or gist is created. Every account's data is isolated server-side: the extension stores notes under an account-specific namespace, the server scopes every query by the verified token, and signing in with a different account shows that account's notes only. Sync is optional: without signing in, everything stays on this device exactly as before, and AI/transcript requests never involve the sync service. When signed in, saved notes mirror to the cloud automatically (idempotent by client id, newest edit wins) and appear on any device where you sign in with the same GitHub account.
 
 ## Use YouTube Digest
 
 1. Open a standard YouTube watch page with captions.
 2. Click the YouTube Digest extension icon to open the side panel.
 3. Read the timestamped transcript, or choose **Original**, **中文**, or **双语**.
-4. Open **Overview** when you want AI-generated chapters and key quotes.
-5. Select transcript text when you want an AI explanation.
-6. Save a note from the player or a key quote, then revisit it from **Notes**.
+4. Search inside the transcript to find a word or phrase, and step through the matches.
+5. Open **Overview** when you want AI-generated chapters and key quotes.
+6. Select transcript text when you want an AI explanation, or save it as a note.
+7. Save a note from the player or a key quote, then revisit it from **Notes**. Click a note's text to correct it.
 
 ## What works today
 
 - Google Chrome 116 or newer, using the Side Panel API.
 - Standard `youtube.com/watch` video pages.
 - Native subtitle tracks returned by Supadata. YouTube Digest prefers English when available, but may show another native language.
-- Original, Simplified Chinese, and aligned bilingual transcript views.
+- Original, Simplified Chinese, and aligned bilingual transcript views, with one content-language setting shared across Transcript, Overview, and Notes.
+- Transcript search for words or phrases, with previous and next buttons for every match.
 - AI overviews, selected-text explanations, translation, and automatic note polishing.
+- Timestamped notes saved from the player, a key quote, or selected transcript text, with click-to-edit correction and buttons to copy the note text or its timestamped link.
 - Local notes and a local cache for recent transcript and digest results.
+- Optional GitHub sync of your saved notes to the project's sync service, with one isolated data set per GitHub account.
 - DeepSeek V4 Flash, MiniMax M3, and OpenCode Go's DeepSeek V4 Flash for all published AI features. Other providers require a local code adaptation and are not supported by this published version.
 
 Shorts, live streams, private or access-restricted videos, and videos without an available native transcript may not work. Firefox, Safari, mobile browsers, and other Chromium browsers are not currently tested or supported.
@@ -143,13 +150,13 @@ YouTube Digest forces Supadata's `mode=native`. It does not request AI-generated
 
 ## Supadata free tier and request costs
 
-Current as of August 9, 2026, the [Supadata pricing page](https://supadata.ai/pricing) lists a free tier with **100 credits per month**, no credit card required. Unused credits do not roll over. Supadata pricing can change, so check the current page before relying on these numbers.
+Current as of October 20, 2026, the [Supadata pricing page](https://supadata.ai/pricing) lists a free tier with **100 credits per month**, no credit card required. Unused credits do not roll over. Supadata pricing can change, so check the current page before relying on these numbers.
 
 The [Supadata transcript documentation](https://docs.supadata.ai/get-transcript) describes the transcript request modes and credit behavior:
 
 - A native transcript request uses **1 credit**, regardless of video duration.
 - A generated transcript costs **2 credits per video minute**. YouTube Digest does not use this path because it forces `mode=native`.
-- An unavailable native lookup returned as HTTP `206` still uses **1 credit**.
+- An unavailable native lookup returned as HTTP `206` still uses **1 credit**. YouTube Digest shows this as "No native subtitle track is available for this video.", but the credit is already spent.
 
 With the current native-only behavior, the free tier can cover roughly 100 transcript lookups per month when each request succeeds once. Retries and unavailable-caption lookups also consume credits, so actual successful-video coverage can be lower.
 
@@ -157,32 +164,34 @@ DeepSeek usage is separate from Supadata. YouTube Digest does not collect paymen
 
 ## DeepSeek V4 Flash pricing
 
-As of August 27, 2026, DeepSeek lists these USD prices per 1 million tokens on its official [pricing page](https://api-docs.deepseek.com/quick_start/pricing/):
+As of October 20, 2026, DeepSeek lists these USD prices per 1 million tokens on its official [pricing page](https://api-docs.deepseek.com/quick_start/pricing/):
 
 | Token type | Off-peak | Peak |
 | --- | ---: | ---: |
-| Cache-hit input | $0.007 | $0.014 |
-| Cache-miss input | $0.22 | $0.44 |
-| Output | $0.66 | $1.32 |
+| Cache-hit input | $0.003 | $0.006 |
+| Cache-miss input | $0.15 | $0.30 |
+| Output | $0.60 | $1.20 |
 
-Peak hours are 01:00–04:00 and 06:00–10:00 UTC, Monday through Friday. All other hours use off-peak rates.
+Peak hours are 01:00–04:00 and 06:00–10:00 UTC, Monday through Friday, excluding Chinese public holidays. All other hours use off-peak rates, including weekends and Chinese public holidays.
+
+The extension sends the model name `deepseek-v4-flash`. DeepSeek's page notes that this older name is still accepted, that the model behind it has been retired, and that its requests are served by the newer Flash model and billed at the Flash prices shown above.
 
 A measured 20-minute English talk used about **32,600 input tokens** and an estimated **3,500 to 4,500 output tokens** across 43 small translation batches. At current prices, translating the full video costs approximately:
 
-- **Off-peak: $0.003 to $0.010 USD**.
-- **Peak: $0.005 to $0.020 USD**.
+- **Off-peak: $0.002 to $0.008 USD**.
+- **Peak: $0.004 to $0.015 USD**.
 
 The lower end assumes most repeated input hits DeepSeek's cache. The upper end assumes cache misses. Translation is lazy and cached, so translating only part of a video costs less. Check the official page before relying on these prices.
 
 ## Remix it with your coding agent
 
-This is a personal remix project. Upstream issues and pull requests are not accepted. If something breaks or you want a new feature, download or fork your own copy and ask your coding agent to fix, remix, or personalize it for you.
+This is a personal remix of the upstream project at [github.com/zarazhangrui/youtube-digest](https://github.com/zarazhangrui/youtube-digest), which does not include the GitHub sync or the web dashboard. Upstream issues and pull requests are not accepted. If something breaks or you want a new feature, download or fork your own copy and ask your coding agent to fix, remix, or personalize it for you.
 
 YouTube Digest uses plain HTML, CSS, and JavaScript with no build step, so it is a friendly starting point for agent-assisted projects. Ideas to try:
 
 - Add more translation languages and let each person choose a learning language.
 - Create customized summary templates for lectures, interviews, tutorials, reviews, or research talks.
-- Build a vocabulary notebook that saves a word, its sentence, meaning, and video timestamp.
+- Wire up the vocabulary notebook. The sync backend and the web dashboard already have vocabulary and spaced-review support, but the extension side no longer captures words: the transcript "+ Word" button and the Words tab were removed, so nothing in the extension can save a word, its sentence, meaning, and video timestamp yet. Adding that capture flow is the missing piece.
 - Export notes and vocabulary to Markdown, CSV, Anki, or another study tool.
 - Add personal topic filters that highlight the chapters most relevant to a goal.
 - Add optional local-model support for a different privacy and cost tradeoff.
@@ -201,7 +210,9 @@ YouTube Digest makes provider requests directly from the extension:
 3. Focused features send only the content they need, such as selected text with context or small transcript batches for translation.
 4. It stores keys, settings, notes, and recent cache entries locally in Chrome.
 
-There is no YouTube Digest account system, advertising, analytics, or telemetry. Supadata and your chosen AI provider still receive data under their own terms and privacy policies. See [PRIVACY.md](PRIVACY.md) for details.
+The one exception is the optional GitHub sync described above. If you sign in, your saved notes are also mirrored to this project's own sync service at `https://ytd.panbo.space`, which runs on Cloudflare Workers with a Neon PostgreSQL database. Sign-in uses GitHub's OAuth flow, and the service only ever serves the rows belonging to the account you signed in with. If you never sign in, no note data leaves your device.
+
+There is no YouTube Digest account system, advertising, analytics, or telemetry. Supadata and your chosen AI provider still receive data under their own terms and privacy policies. [PRIVACY.md](PRIVACY.md) is the authoritative description of every data flow, including the sync service.
 
 ## Troubleshooting
 
@@ -209,20 +220,22 @@ There is no YouTube Digest account system, advertising, analytics, or telemetry.
 
 - At `chrome://extensions`, find YouTube Digest and click **Reload**, then refresh the YouTube tab.
 - Confirm that you are on a standard `https://www.youtube.com/watch?...` page, not a Short, embed, or live page.
-- The current version automatically follows YouTube when its responsive action bar changes. Wait a moment after the page finishes loading.
+- The button is labeled **Digest** and sits next to YouTube's Share and Save buttons. The current version automatically follows YouTube when its responsive action bar changes, so wait a moment after the page finishes loading.
 - If you have an older downloaded copy, resizing the YouTube window horizontally once may reveal the button. Then download the latest version so resizing is no longer required.
 - If it is still missing, ask your coding agent to inspect the content script on that exact video page.
 
 ### The side panel does not open
 
-- Confirm that you are on a standard `https://www.youtube.com/watch?...` page.
+- Confirm that you are on a `https://www.youtube.com/...` page. The panel is enabled on YouTube tabs only, and the current version closes it automatically when you switch to another site.
 - At `chrome://extensions`, confirm YouTube Digest is enabled and click **Reload**.
 - Refresh the YouTube tab after reloading the extension.
+- The panel opens with a **Settings** button in its header. Clicking the extension icon on a YouTube tab also opens the panel.
 - Ask your coding agent to inspect the extension if the problem continues.
 
 ### YouTube Digest asks for setup
 
-- Open **Settings** and save a Supadata key and the API key of your chosen AI provider.
+- The panel shows the title **API Keys Missing** and a button labeled **Open Settings** when a key is missing. Click that button, or open **Settings** from the panel header, from the YouTube Digest card at `chrome://extensions`, or by right-clicking the toolbar icon.
+- Save a Supadata key and the API key of your chosen AI provider. The extension also opens Settings by itself the first time it is installed.
 - Choose one of the supported providers: DeepSeek V4 Flash, MiniMax M3, or OpenCode Go. Endpoints and models are fixed, so there are no Base URL or Model fields to configure.
 - If Settings says a legacy custom provider was removed, enter the API key of your chosen provider. The old AI key was cleared so it could not be reused with the wrong service.
 
@@ -241,6 +254,11 @@ YouTube Digest will not fall back to generated transcription.
 - Confirm the key was created in the account linked to the provider selected in Settings, and that the account has available credit.
 - If you adapted a local copy for another model, use the Settings customization prompt again and ask your coding agent to inspect that local implementation.
 
+### The sync chip says "Sync expired"
+
+- Your notes are still saved on this device, but the cloud backup stopped because the GitHub session ended.
+- Click the chip and sign in with GitHub again to resume syncing.
+
 Never share API keys, private transcripts, or personal notes in chats, screenshots, or logs.
 
 ## Checks for coding agents
@@ -253,7 +271,13 @@ npm run check
 npm run package
 ```
 
-The agent should also reload the unpacked extension in Chrome and test several real YouTube videos. Automated checks do not prove that live provider requests and YouTube interactions work.
+`npm run check` validates the public release file list and scans for credentials; `npm run package` builds the release ZIP. If the change touches the sync backend, also run the server's own suite:
+
+```bash
+cd server && npm test
+```
+
+These are the same commands the CI workflow runs. The agent should also reload the unpacked extension in Chrome and test several real YouTube videos. Automated checks do not prove that live provider requests and YouTube interactions work.
 
 ## License
 
