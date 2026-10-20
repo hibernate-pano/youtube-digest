@@ -57,7 +57,7 @@ body {
   justify-content: center;
   gap: var(--sp-2);
   min-height: var(--hit);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   background: transparent;
   color: var(--text-muted);
   border-radius: var(--r-pill);
@@ -176,7 +176,7 @@ body {
   align-items: center;
   justify-content: center;
   min-height: 36px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   background: transparent;
   color: var(--text-muted);
   border-radius: var(--r-pill);
@@ -205,7 +205,7 @@ body {
 .vocab-sentence { color: var(--text-muted); font-size: var(--fs-md); margin-top: 4px; }
 
 select.status-select {
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: var(--r-pill);
   padding: 3px 10px;
   font-size: var(--fs-sm);
@@ -237,7 +237,7 @@ select.status-select {
 .review-actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 14px; }
 .review-progress { text-align: center; color: var(--text-muted); font-size: var(--fs-md); margin-top: 12px; }
 .grade-btn {
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   background: var(--surface);
   border-radius: var(--r-pill);
   padding: 8px 18px;

@@ -118,7 +118,7 @@ body {
 .sync-account {
   flex-shrink: 0;
   padding: 5px 10px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: var(--r-pill);
   background: var(--surface);
   color: var(--text-secondary);
@@ -444,7 +444,7 @@ body {
   font-size: var(--fs-sm);
   padding: 6px 13px;
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: var(--r-pill);
   color: var(--text-secondary);
   cursor: pointer;
@@ -476,7 +476,7 @@ body {
   min-height: 38px;
   margin: 2px 0 10px;
   padding: 0 6px 0 11px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: var(--r-md);
   background: var(--surface);
   box-shadow: var(--shadow-sm);
@@ -664,7 +664,7 @@ body {
 }
 
 .localized-translation .translation-pending {
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 /* ============================================================
@@ -739,7 +739,7 @@ body {
   font-size: var(--fs-xs);
   padding: 4px 11px;
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: var(--r-pill);
   color: var(--text-secondary);
   cursor: pointer;
@@ -779,7 +779,7 @@ body {
 /* A search result can be current without moving the video playback position. */
 .transcript-entry.search-current {
   background: var(--surface-raised);
-  box-shadow: inset 3px 0 0 var(--highlight);
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .transcript-search-highlight {
@@ -831,7 +831,7 @@ body {
 }
 
 .translation-pending {
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 /* A failed translation is a failure, not an accent: it now uses the
@@ -874,7 +874,7 @@ body {
 }
 
 .transcript-paragraph.translating {
-  color: var(--text-muted);
+  color: var(--text-secondary);
   position: relative;
 }
 
@@ -912,7 +912,7 @@ body {
 }
 
 .transcript-entry.translating .transcript-text {
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .transcript-entry.translating::after {
@@ -1505,7 +1505,7 @@ body {
   place-items: center;
   margin-left: auto;
   padding: 0;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: 50%;
   background: var(--surface-raised);
   color: var(--text-muted);
@@ -1556,7 +1556,7 @@ body {
   font-size: var(--fs-sm);
   padding: 6px 12px;
   background: var(--surface-raised);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: var(--r-pill);
   color: var(--text-secondary);
   cursor: pointer;
@@ -1576,7 +1576,7 @@ body {
 /* note editing */
 .note-edit-input {
   width: 100%;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: 8px;
   padding: 6px 8px;
   font: inherit;

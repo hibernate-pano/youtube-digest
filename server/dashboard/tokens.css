@@ -30,9 +30,17 @@
   --surface-tint: #f8eee9;
   --surface-glass: rgba(255, 255, 255, 0.72);
 
-  /* Borders. */
+  /* Borders.
+     --border is decorative: it separates a card from the page and never
+     carries information the user has to read.
+     --border-strong is the functional one: it draws the boundary of a
+     control the user has to find and operate (inputs, selects, textareas).
+     WCAG 2.2 SC 1.4.11 asks for 3:1 on those boundaries; the decorative
+     border would never get there without turning the whole product into a
+     wireframe. */
   --border: #e7dfd2;
   --border-heavy: #d8cebe;
+  --border-strong: #96886f;
 
   /* Ink. */
   --text: #2e2a24;
@@ -143,6 +151,7 @@
 
     --border: #3b3531;
     --border-heavy: #4d4540;
+    --border-strong: #80756c;
 
     --text: #f2ece4;
     --text-secondary: #c4b9ab;
