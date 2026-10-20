@@ -1,5 +1,16 @@
 # Chrome Web Store 上架材料包
 
+> **当前状态：尚未上架。** 扩展现在只以「从 GitHub 本地安装」的方式分发，README 里
+> 「不在 Chrome Web Store 上架」的说法与事实一致。本材料包是**为将来上架准备的**，
+> 不是当前的分发方式。
+>
+> 如果决定真的上架，这三处必须一起改，否则会变成一个不实的产品页面：
+>
+> 1. `README.md` / `README.zh-CN.md`：删掉「not available through the Chrome Web
+>    Store」这句话，改成商店链接。
+> 2. `manifest.json`：`version` 与 `package.json` 一起 bump（发布门禁会比对两者）。
+> 3. 商店描述里的「local install」措辞：改成「从 Chrome Web Store 安装」。
+
 ## 前置条件
 
 - [ ] 注册 Chrome Web Store 开发者账号($5 一次性):https://chrome.google.com/webstore/devconsole
