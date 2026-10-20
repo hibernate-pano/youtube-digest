@@ -303,3 +303,140 @@ test("the static HTML fallback says the same thing as the runtime copy", () => {
     `only ${checked} static strings were compared - the matcher probably stopped working`,
   );
 });
+
+test("every notes namespace is recognised, whatever account it belongs to", () => {
+  const settings = require("../settings.js");
+
+  assert.equal(settings.notesStorageKey(""), "ytd_notes");
+  assert.equal(settings.notesStorageKey(undefined), "ytd_notes");
+  assert.equal(settings.notesStorageKey("12345"), "ytd_notes_12345");
+  assert.equal(settings.notesStorageKey(" 12345 "), "ytd_notes_12345");
+
+  assert.equal(settings.isNotesStorageKey("ytd_notes"), true);
+  assert.equal(settings.isNotesStorageKey("ytd_notes_12345"), true);
+  // An empty account id is not a namespace: notesStorageKey("") returns
+  // the base key, so "ytd_notes_" is never written.
+  assert.equal(settings.isNotesStorageKey("ytd_notes_"), false);
+
+  // Keys that only look similar must not be swept up by a wipe.
+  assert.equal(settings.isNotesStorageKey("ytd_notes_filter"), false);
+  assert.equal(settings.isNotesStorageKey("ytd_settings"), false);
+  assert.equal(settings.isNotesStorageKey("digest_abc"), false);
+  assert.equal(settings.isNotesStorageKey("ytd_vocabulary_12345"), false);
+});
+
+// ============================================================
+// The data actions on the settings page
+// ============================================================
+
+function createElementStub() {
+  return {
+    value: "",
+    textContent: "",
+    hidden: false,
+    dataset: {},
+    classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
+    style: {},
+    addEventListener() {},
+    setAttribute() {},
+    removeAttribute() {},
+    appendChild() {},
+    querySelectorAll: () => [],
+  };
+}
+
+function createSettingsHarness(initialStorage = {}) {
+  const storage = { ...initialStorage };
+  const removed = [];
+  const elements = new Map();
+
+  const getElementById = (id) => {
+    if (!elements.has(id)) elements.set(id, createElementStub());
+    return elements.get(id);
+  };
+
+  const root = {
+    document: {
+      getElementById,
+      querySelectorAll: () => [],
+      readyState: "complete",
+      documentElement: { lang: "en" },
+      addEventListener() {},
+    },
+    YTD_SETTINGS: require("../settings.js"),
+    chrome: {
+      storage: {
+        local: {
+          async get(key) {
+            if (key === null || key === undefined) return { ...storage };
+            if (typeof key === "string") {
+              return key in storage ? { [key]: storage[key] } : {};
+            }
+            const out = {};
+            for (const name of key) if (name in storage) out[name] = storage[name];
+            return out;
+          },
+          async set(patch) {
+            Object.assign(storage, patch);
+          },
+          async remove(key) {
+            for (const name of Array.isArray(key) ? key : [key]) {
+              removed.push(name);
+              delete storage[name];
+            }
+          },
+          async clear() {
+            for (const name of Object.keys(storage)) delete storage[name];
+          },
+        },
+      },
+      runtime: { sendMessage: async () => ({}) },
+    },
+    navigator: {},
+    confirm: () => true,
+  };
+  root.globalThis = root;
+
+  const api = options.initialize(root);
+  return { api, storage, removed, getElementById };
+}
+
+test("Delete all notes removes the notes of every signed-in account", async () => {
+  const { api, storage, removed } = createSettingsHarness({
+    ytd_notes: [{ id: "note-1" }],
+    ytd_notes_1001: [{ id: "note-2" }],
+    ytd_notes_2002: [{ id: "note-3" }],
+    // Not notes: the panel's notes filter and the settings must survive.
+    ytd_notes_filter: "all",
+    ytd_settings: { aiApiKey: "x" },
+    digest_abc123: { transcript: "hi" },
+  });
+
+  await api.clearNotes();
+
+  assert.deepEqual(
+    removed.sort(),
+    ["ytd_notes", "ytd_notes_1001", "ytd_notes_2002"],
+    "a signed-in account's notes were left on the device",
+  );
+  assert.equal(storage.ytd_notes, undefined);
+  assert.equal(storage.ytd_notes_1001, undefined);
+  assert.equal(storage.ytd_notes_2002, undefined);
+  assert.equal(storage.ytd_notes_filter, "all", "the notes filter was wiped");
+  assert.ok(storage.ytd_settings, "the settings were wiped");
+  assert.ok(storage.digest_abc123, "the cached digests were wiped");
+});
+
+test("Delete all notes reports success even when there is nothing to delete", async () => {
+  const { api, removed, getElementById } = createSettingsHarness({
+    ytd_settings: { aiApiKey: "x" },
+  });
+
+  await api.clearNotes();
+
+  assert.deepEqual(removed, []);
+  assert.equal(
+    getElementById("dataStatus").textContent,
+    "Deleted all saved notes.",
+  );
+});

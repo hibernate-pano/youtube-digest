@@ -56,9 +56,12 @@ function loadCloudSync({ fetchImpl, storage = {} } = {}) {
       runtime: { sendMessage: async () => ({}) },
       tabs: { onUpdated: { addListener() {} }, create: async () => ({ id: 1 }) },
     },
-    // Quoted: an unquoted `YTD_SETTINGS:` at statement position would parse as
-    // a label rather than a property name.
+    // The real settings module is loaded, with only the network host
+    // swapped for the test double. A hand-written stub silently went stale
+    // the moment settings.js grew a function, which broke the sync tests
+    // instead of the code that was actually wrong.
     "YTD_SETTINGS": {
+      ...require("../settings.js"),
       GITHUB_SESSION_KEY: "ytd_github_session",
       SERVER_BASE_URL: "https://sync.test",
     },

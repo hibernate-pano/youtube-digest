@@ -674,7 +674,16 @@ const YTD_OPTIONS = (() => {
     }
 
     async function clearNotes() {
-      await storage.remove("ytd_notes");
+      // Notes live in a namespace that depends on the signed-in account:
+      // "ytd_notes" while signed out, "ytd_notes_<githubId>" while signed in
+      // (see YTD_SETTINGS.notesStorageKey). Removing only the signed-out
+      // key left every note of a signed-in user in place while the UI
+      // reported that they were gone.
+      const all = await storage.get(null);
+      const keys = Object.keys(all).filter((key) =>
+        settingsApi.isNotesStorageKey(key),
+      );
+      if (keys.length) await storage.remove(keys);
       setStatus(dataStatus, "notesDeleted");
     }
 
@@ -719,6 +728,12 @@ const YTD_OPTIONS = (() => {
     } else {
       void loadOptions();
     }
+
+    // The data actions are handed back so the tests can drive the real
+    // functions. They used to be reachable only through a click handler,
+    // which made it impossible to prove that "Delete all notes" actually
+    // removed the notes of a signed-in account.
+    return { clearNotes, clearCachedDigests, resetAllData, loadOptions };
   }
 
   return {

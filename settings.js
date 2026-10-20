@@ -45,6 +45,42 @@ var YTD_SETTINGS = (() => {
   const SUPPORTED_UI_LANGUAGES = new Set(["en", "zh-CN"]);
 
   /**
+   * Local storage namespace for saved notes.
+   *
+   * The namespace depends on the signed-in account so one learner's notes
+   * never show up in another account's view: "ytd_notes" while signed out,
+   * "ytd_notes_<githubId>" while signed in.
+   *
+   * This lives here because three different surfaces need to agree on it -
+   * the sync layer writes it, the settings page deletes it, and the panel
+   * reads it. When the rule lived only in cloud-sync.js, the settings page
+   * deleted the signed-out key and silently left every note of a signed-in
+   * user on the device while telling them the notes were gone.
+   */
+  const NOTES_STORAGE_KEY = "ytd_notes";
+
+  function notesStorageKey(githubId) {
+    const id = String(githubId || "").trim();
+    return id ? `${NOTES_STORAGE_KEY}_${id}` : NOTES_STORAGE_KEY;
+  }
+
+  /**
+   * True for every storage key that holds saved notes, whatever account
+   * they belong to. Used when wiping notes so no namespace is missed.
+   *
+   * The account id is always numeric, so only a numeric suffix counts.
+   * A plain prefix check would also swallow unrelated keys that happen to
+   * start with "ytd_notes_" - "ytd_notes_filter" holds the panel's notes
+   * filter and must survive a notes wipe.
+   */
+  function isNotesStorageKey(key) {
+    const name = String(key || "");
+    if (name === NOTES_STORAGE_KEY) return true;
+    if (!name.startsWith(`${NOTES_STORAGE_KEY}_`)) return false;
+    return /^\d+$/.test(name.slice(NOTES_STORAGE_KEY.length + 1));
+  }
+
+  /**
    * Copy for the GitHub sync chip in the panel header. The signed-in and
    * signed-out labels already ship in the markup; these strings cover the
    * tooltip, the accessible name, and the expired-session state.
@@ -190,6 +226,9 @@ var YTD_SETTINGS = (() => {
     SYNC_SESSION_EXPIRED,
     SYNC_EXPIRED_KEY,
     UI_LANGUAGE_STORAGE_KEY,
+    NOTES_STORAGE_KEY,
+    notesStorageKey,
+    isNotesStorageKey,
     SYNC_COPY,
     normalizeUiLanguage,
     translateSyncCopy,

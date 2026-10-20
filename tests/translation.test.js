@@ -187,7 +187,11 @@ function loadBackgroundHelpers({
           }),
       },
     },
+    // The real settings module is the base, so a function that is added to
+    // settings.js is available here the moment it exists. Only the pieces
+    // the test needs to control are overridden.
     YTD_SETTINGS: {
+      ...require("../settings.js"),
       STORAGE_KEY: "ytd_settings",
       GITHUB_SESSION_KEY: "ytd_github_session",
       SYNC_SESSION_EXPIRED: "SYNC_SESSION_EXPIRED",

@@ -239,7 +239,7 @@ async function isSyncSessionExpiredForAccount() {
 
 async function notesNamespace() {
   const session = await getGithubSession();
-  return session ? "ytd_notes_" + session.githubId : "ytd_notes";
+  return YTD_SETTINGS.notesStorageKey(session && session.githubId);
 }
 
 async function readLocalNotes(namespace) {
@@ -454,7 +454,7 @@ async function runFullSync({
 
 async function fullSyncNotes() {
   return runFullSync({
-    namespaceFor: (session) => "ytd_notes_" + session.githubId,
+    namespaceFor: (session) => YTD_SETTINGS.notesStorageKey(session.githubId),
     fetchPath: "/api/notes",
     pushPath: "/api/notes",
     keyOfLocal: (item) => (item && item.id ? String(item.id) : ""),
@@ -744,9 +744,9 @@ async function updateLocalVocabularyStatus(status, cloudId) {
  * from importing the same note twice.
  */
 async function migrateLegacyLocalNotes(githubId) {
-  const legacy = await readLocalNotes("ytd_notes");
+  const legacy = await readLocalNotes(YTD_SETTINGS.NOTES_STORAGE_KEY);
   if (!Array.isArray(legacy) || legacy.length === 0) return 0;
-  const namespace = "ytd_notes_" + githubId;
+  const namespace = YTD_SETTINGS.notesStorageKey(githubId);
   const current = await readLocalNotes(namespace);
   const byId = new Map(current.map((note) => [String(note.id), note]));
   let added = 0;
@@ -811,7 +811,7 @@ async function completeGithubLogin(token, tabId) {
     const migrated = await migrateLegacyLocalNotes(user.githubId);
     const sync = await fullSyncNotes();
     if (sync.success && migrated > 0) {
-      await chrome.storage.local.remove("ytd_notes");
+      await chrome.storage.local.remove(YTD_SETTINGS.NOTES_STORAGE_KEY);
     }
     chrome.runtime
       .sendMessage({ action: "githubLoginChanged", login: user.login, sync })
