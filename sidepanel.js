@@ -180,6 +180,30 @@ const PANEL_COPY = {
     generatingOverview: "Generating overview... uses your AI balance",
     errorTitle: "Error",
     errorMessage: "Something went wrong.",
+    // The failure codes the worker returns. They are for the developer, so
+    // every one of them has a sentence the user can act on.
+    errorCodeNoAiKey:
+      "No AI key is set. Open YouTube Digest Settings and add the key of your AI provider.",
+    errorCodeInvalidAiKey:
+      "The AI provider rejected the API key. Check the key in YouTube Digest Settings.",
+    errorCodeNoSupadataKey:
+      "No Supadata API key is set. Open YouTube Digest Settings to add one.",
+    errorCodeInvalidSupadataKey:
+      "The Supadata API key is invalid. Open YouTube Digest Settings to replace it.",
+    errorCodeNoTranscript:
+      "This video has no subtitles, so there is nothing to read.",
+    errorCodeEmptyTranscript: "The transcript for this video came back empty.",
+    errorCodeOutOfCredits:
+      "Your Supadata credits are used up. Add credits at dash.supadata.ai.",
+    errorCodeRateLimited: "Too many requests. Wait a moment and try again.",
+    errorCodeEmptySentence:
+      "There was no sentence to read. Select a sentence in the transcript and try again.",
+    errorCodeAiIdleTimeout: "The AI provider stopped answering. Try again.",
+    errorCodeAiHardTimeout: "The AI provider took too long. Try again.",
+    errorCodeSyncSessionExpired:
+      "The GitHub session expired, so the cloud backup stopped. Sign in again to resume it.",
+    toastDismiss: "Dismiss",
+    toastDismissTitle: "Dismiss this notice",
     serviceErrorTitle: "YouTube Digest could not start",
     tryAgain: "Try Again",
     openSettings: "Open Settings",
@@ -213,8 +237,11 @@ const PANEL_COPY = {
     costDisclosure:
       "AI calls use your own provider balance. Each transcript lookup uses 1 Supadata credit.",
     translationUnavailable: "Translation unavailable.",
+    translationFailed: "Translation failed.",
+    translationWaiting: "Waiting for translation...",
     translating: "Translating...",
     retry: "Retry",
+    retrying: "Retrying...",
     signIn: "Sign in",
     signInTitle: "Sign in with GitHub to back up your notes",
     settings: "Settings",
@@ -244,6 +271,7 @@ const PANEL_COPY = {
     searchResults: "Search results",
     previousMatch: "Previous transcript match",
     nextMatch: "Next transcript match",
+    searchNoMatches: "No matches",
     digestReady: "Digest ready",
     explainTitle: "Explain",
     close: "Close",
@@ -338,6 +366,12 @@ const PANEL_COPY = {
     librarySearchLabel: "Search the library",
     libraryEmpty:
       "Nothing here yet. Every video you open is kept for 30 days, so you can read it again without spending another credit.",
+    libraryNoResults: "No video matches your search.",
+    libraryJustNow: "just now",
+    libraryMinutesAgo: "{count} min ago",
+    libraryHoursAgo: "{count} h ago",
+    libraryDaysAgo: "{count} d ago",
+    libraryMonthsAgo: "{count} mo ago",
     libraryHasSummary: "Summary",
     libraryTranscriptOnly: "Transcript only",
     libraryRetention:
@@ -347,6 +381,7 @@ const PANEL_COPY = {
     libraryOpenInPanel: "Read in the panel",
     libraryCachedView:
       "This is a saved copy, not the video in this tab. Notes you write here belong to the saved video.",
+    untitledVideo: "Untitled video",
   },
   "zh-CN": {
     welcomeTitle: "准备开始",
@@ -358,6 +393,28 @@ const PANEL_COPY = {
     generatingOverview: "正在生成概览... 会消耗你的 AI 额度",
     errorTitle: "出错了",
     errorMessage: "出了点问题。",
+    // The failure codes the worker returns. They are for the developer, so
+    // every one of them has a sentence the user can act on.
+    errorCodeNoAiKey:
+      "还没有设置 AI 密钥。请在 YouTube Digest 设置里填入你的 AI 服务密钥。",
+    errorCodeInvalidAiKey:
+      "AI 服务拒绝了这个密钥。请检查 YouTube Digest 设置里的密钥。",
+    errorCodeNoSupadataKey:
+      "还没有设置 Supadata API 密钥。请在 YouTube Digest 设置里填入。",
+    errorCodeInvalidSupadataKey:
+      "Supadata API 密钥无效。请在 YouTube Digest 设置里更换。",
+    errorCodeNoTranscript: "这个视频没有字幕，所以没有可以阅读的内容。",
+    errorCodeEmptyTranscript: "这个视频的字幕是空的。",
+    errorCodeOutOfCredits:
+      "Supadata 额度已经用完，请前往 dash.supadata.ai 充值。",
+    errorCodeRateLimited: "请求过于频繁，请稍等一下再试。",
+    errorCodeEmptySentence: "没有可以读取的句子。请在字幕里选中一句话再试。",
+    errorCodeAiIdleTimeout: "AI 服务没有继续响应了，请重试。",
+    errorCodeAiHardTimeout: "AI 服务响应超时了，请重试。",
+    errorCodeSyncSessionExpired:
+      "GitHub 登录已过期，云端备份已经停止。重新登录即可恢复。",
+    toastDismiss: "关闭",
+    toastDismissTitle: "关闭这条提示",
     serviceErrorTitle: "YouTube Digest 无法启动",
     tryAgain: "重试",
     openSettings: "打开设置",
@@ -387,8 +444,11 @@ const PANEL_COPY = {
     costDisclosure:
       "AI 调用使用你自己的服务额度。每次字幕查询会消耗 1 个 Supadata 额度。",
     translationUnavailable: "翻译不可用。",
+    translationFailed: "翻译失败。",
+    translationWaiting: "等待翻译...",
     translating: "正在翻译...",
     retry: "重试",
+    retrying: "重试中...",
     signIn: "登录",
     signInTitle: "使用 GitHub 登录以备份你的笔记",
     settings: "设置",
@@ -418,6 +478,7 @@ const PANEL_COPY = {
     searchResults: "搜索结果",
     previousMatch: "上一个字幕匹配",
     nextMatch: "下一个字幕匹配",
+    searchNoMatches: "没有匹配",
     digestReady: "摘要已就绪",
     explainTitle: "解释",
     close: "关闭",
@@ -509,6 +570,12 @@ const PANEL_COPY = {
     librarySearchLabel: "搜索资料库",
     libraryEmpty:
       "这里还是空的。每个打开过的视频都会保留 30 天，你可以免费重读，不会再花额度。",
+    libraryNoResults: "没有符合搜索条件的视频。",
+    libraryJustNow: "刚刚",
+    libraryMinutesAgo: "{count} 分钟前",
+    libraryHoursAgo: "{count} 小时前",
+    libraryDaysAgo: "{count} 天前",
+    libraryMonthsAgo: "{count} 个月前",
     libraryHasSummary: "有摘要",
     libraryTranscriptOnly: "只有字幕",
     libraryRetention:
@@ -518,10 +585,29 @@ const PANEL_COPY = {
     libraryOpenInPanel: "在面板里重看",
     libraryCachedView:
       "这是已保存的副本，不是当前标签页里的视频。在这里写的笔记属于这个已保存的视频。",
+    untitledVideo: "未命名视频",
   },
 };
 
 let panelLanguage = "en";
+
+// The failure codes the worker hands back. They are written for the
+// developer, so the panel never shows one: every code has a copy key that
+// says the same thing in words a user can act on.
+const PANEL_ERROR_CODE_COPY = {
+  NO_AI_KEY: "errorCodeNoAiKey",
+  INVALID_AI_KEY: "errorCodeInvalidAiKey",
+  NO_SUPADATA_KEY: "errorCodeNoSupadataKey",
+  INVALID_SUPADATA_KEY: "errorCodeInvalidSupadataKey",
+  NO_TRANSCRIPT: "errorCodeNoTranscript",
+  EMPTY_TRANSCRIPT: "errorCodeEmptyTranscript",
+  OUT_OF_CREDITS: "errorCodeOutOfCredits",
+  RATE_LIMITED: "errorCodeRateLimited",
+  EMPTY_SENTENCE: "errorCodeEmptySentence",
+  AI_IDLE_TIMEOUT: "errorCodeAiIdleTimeout",
+  AI_HARD_TIMEOUT: "errorCodeAiHardTimeout",
+  SYNC_SESSION_EXPIRED: "errorCodeSyncSessionExpired",
+};
 
 function normalizePanelLanguage(language) {
   if (
@@ -564,6 +650,27 @@ function copyPlaceholders() {
     days: String(LIBRARY_MAX_AGE_DAYS),
     limit: String(LOCAL_NOTE_LIMIT),
   };
+}
+
+/**
+ * Picks the sentence a failed request is shown with.
+ *
+ * The order matters. A message from the provider comes first: it is the only
+ * thing that can explain a provider failure, and hiding it would leave the
+ * user with nothing. Our own code comes next, turned into a sentence. A
+ * string that still looks like a code (all caps, no spaces) is one we do
+ * not know, and it is replaced by the generic sentence rather than shown as
+ * it is.
+ */
+function panelFailureMessage(result) {
+  const message = String(result?.message || "").trim();
+  if (message) return message;
+
+  const code = String(result?.error || "").trim();
+  const copyKey = PANEL_ERROR_CODE_COPY[code];
+  if (copyKey) return panelCopy(copyKey);
+  if (code && /^[A-Z][A-Z0-9_]*$/.test(code)) return panelCopy("errorMessage");
+  return code || panelCopy("errorMessage");
 }
 
 /**
@@ -1317,6 +1424,12 @@ function setupEventListeners() {
   document.getElementById("librarySearchInput")?.addEventListener("input", (event) => {
     librarySearchQuery = String(event.target?.value || "");
     renderLibrary();
+  });
+
+  // The visible notice can be dismissed. An error waits for the user, so it
+  // needs a way out that does not involve waiting.
+  document.getElementById("panelToastClose")?.addEventListener("click", () => {
+    hideToast();
   });
 
   // Error retry
@@ -2385,7 +2498,7 @@ function updateTranscriptSearchControls(query) {
       ? ""
       : hasMatches
         ? `${transcriptSearchIndex + 1} of ${transcriptSearchMatches.length}`
-        : "No matches";
+        : panelCopy("searchNoMatches");
   }
   if (previous) previous.disabled = !hasMatches;
   if (next) next.disabled = !hasMatches;
@@ -2571,26 +2684,97 @@ function exportTranscript() {
 // ============================================================
 
 /**
- * Announces a message to screen readers.
+ * Writes a message into a live region.
  *
- * The announcer is a permanent, visually hidden live region. It never leaves
- * the DOM, so the message is read out no matter which state container is on
+ * The region is a permanent, visually hidden live region. It never leaves the
+ * DOM, so the message is read out no matter which state container is on
  * screen. A live region inside a container that is hidden with display:none
  * is never announced, which is why the panel announces here instead of inside
  * the state blocks.
  */
-function announceStatus(message) {
-  const region = document.getElementById("panelStatus");
+function writeLiveRegion(regionId, message) {
+  const region = document.getElementById(regionId);
   if (region) region.textContent = message ? String(message) : "";
 }
 
+// How long a passing message stays on screen. An error does not use this:
+// it waits for the user.
+const TOAST_TIMEOUT_MS = 4000;
+let toastTimer = null;
+
 /**
- * Announces a failure to screen readers, assertively. Used for the failures
- * that have no alert container of their own.
+ * Shows a message on screen.
+ *
+ * The live regions are invisible, so a failure used to reach the screen
+ * reader and nobody else. This bar is the visible half of the same message.
+ * It is the only place where the panel says something the user did not have
+ * to ask for, so it stays out of the way: fixed at the bottom, no pointer
+ * events, and gone again in a few seconds unless it is an error.
  */
-function announceAlert(message) {
-  const region = document.getElementById("panelAlert");
-  if (region) region.textContent = message ? String(message) : "";
+function showToast(message, kind) {
+  const toast = document.getElementById("panelToast");
+  if (!toast) return;
+
+  const text = message ? String(message) : "";
+  // An empty message says nothing, so it changes nothing. In particular it
+  // must not wipe a message the user has not read yet.
+  if (!text) return;
+
+  const isError = kind === "error";
+  // An error waits for the user. A passing message must not wipe away an
+  // error the user has not read yet.
+  if (!isError && !toast.hidden && toast.dataset.kind === "error") return;
+
+  const label = document.getElementById("panelToastText");
+  if (label) label.textContent = text;
+  toast.dataset.kind = isError ? "error" : "status";
+  toast.hidden = false;
+  document.body?.classList.add("toast-visible");
+
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = null;
+  if (!isError) {
+    toastTimer = setTimeout(() => {
+      hideToast();
+    }, TOAST_TIMEOUT_MS);
+  }
+}
+
+/**
+ * Takes the visible message off the screen.
+ */
+function hideToast() {
+  const toast = document.getElementById("panelToast");
+  if (toast) {
+    toast.hidden = true;
+    toast.dataset.kind = "";
+  }
+  document.body?.classList.remove("toast-visible");
+  if (toastTimer) {
+    clearTimeout(toastTimer);
+    toastTimer = null;
+  }
+}
+
+/**
+ * Announces a message to screen readers, and shows it on screen as well.
+ *
+ * A state the panel already shows (the loading screen, an empty state, the
+ * error screen) does not need a second copy of itself on screen, so it is
+ * announced with {notice: false}.
+ */
+function announceStatus(message, options = {}) {
+  writeLiveRegion("panelStatus", message);
+  if (options.notice !== false) showToast(message, "status");
+}
+
+/**
+ * Announces a failure to screen readers, assertively, and shows it on screen
+ * as well. Used for the failures that have no error container of their own.
+ */
+function announceAlert(message, options = {}) {
+  writeLiveRegion("panelAlert", message);
+  if (options.notice !== false) showToast(message, "error");
 }
 
 function showState(state) {
@@ -2618,12 +2802,19 @@ function showState(state) {
     stopPlaybackTracking();
   }
 
+  // The error screen takes over the whole panel and says what went wrong, so
+  // a notice from an earlier action would only repeat it.
+  if (state === "error") {
+    hideToast();
+  }
+
   // The states that have no live region of their own are announced here, so
-  // a screen reader user learns that the panel moved on.
+  // a screen reader user learns that the panel moved on. The panel itself is
+  // on screen as well, so these do not get a notice of their own.
   if (state === "results") {
-    announceStatus(panelCopy("digestReady"));
+    announceStatus(panelCopy("digestReady"), { notice: false });
   } else if (state === "welcome") {
-    announceStatus(panelCopy("welcomeTitle"));
+    announceStatus(panelCopy("welcomeTitle"), { notice: false });
   }
 
   updateEmptyStates();
@@ -2700,7 +2891,8 @@ function updateEmptyStates() {
 function updateLoading(title, subtitle) {
   document.getElementById("loadingText").textContent = title;
   document.getElementById("loadingSubtext").textContent = subtitle;
-  announceStatus([title, subtitle].filter(Boolean).join(". "));
+  // The loading screen says all of this already.
+  announceStatus([title, subtitle].filter(Boolean).join(". "), { notice: false });
 }
 
 function showError(title, message, options = {}) {
@@ -2725,7 +2917,8 @@ function showError(title, message, options = {}) {
       : null;
   }
 
-  announceAlert(`${errorTitle}. ${errorMessage}`);
+  // The error screen says this already, so a notice would say it twice.
+  announceAlert(`${errorTitle}. ${errorMessage}`, { notice: false });
 }
 
 /**
@@ -2740,7 +2933,7 @@ function showServiceError(message) {
   document.getElementById("errorTitle").textContent = errorTitle;
   document.getElementById("errorMessage").textContent = errorMessage;
   document.getElementById("errorBtn").textContent = panelCopy("tryAgain");
-  announceAlert(`${errorTitle}. ${errorMessage}`);
+  announceAlert(`${errorTitle}. ${errorMessage}`, { notice: false });
   errorAction = () => {
     void bootPanel();
   };
@@ -2767,7 +2960,7 @@ function showConfigError(configStatus) {
   document.getElementById("errorTitle").textContent = errorTitle;
   document.getElementById("errorMessage").textContent = errorMessage;
   document.getElementById("errorBtn").textContent = panelCopy("openSettings");
-  announceAlert(`${errorTitle}. ${errorMessage}`);
+  announceAlert(`${errorTitle}. ${errorMessage}`, { notice: false });
   errorAction = openOptions;
 }
 
@@ -2849,7 +3042,7 @@ function showTranscriptError(result) {
     default:
       showError(
         panelCopy("noTranscriptTitle"),
-        result?.message || result?.error || panelCopy("errorMessage"),
+        panelFailureMessage(result),
       );
   }
 }
@@ -3050,7 +3243,8 @@ function renderAnalysisPending() {
     quotesList.innerHTML = `<div class="quote-item" style="color: var(--text-muted); border-left-color: var(--border);">${escapeHtml(panelCopy("loadingQuotes"))}</div>`;
 
   // The Overview tab loads in front of the user, so say that it is working.
-  announceStatus(panelCopy("generatingOverview"));
+  // The tab says it too, so it does not need a notice of its own.
+  announceStatus(panelCopy("generatingOverview"), { notice: false });
 }
 
 /**
@@ -3069,9 +3263,10 @@ async function applyAnalysisResult(videoId, ticket, analysisResult) {
       return;
     }
     if (!analysisResult.analysis) {
+      // The reason is the code the worker sent. The panel turns it into a
+      // sentence, so it is passed on as it is.
       renderAnalysisFailure({
         error: analysisResult.error || "EMPTY_ANALYSIS",
-        message: panelCopy("errorMessage"),
       });
       return;
     }
@@ -3146,9 +3341,9 @@ function renderAnalysisFailure(result) {
   const chapterList = document.getElementById("chapterList");
   const quotesList = document.getElementById("quotesList");
   const code = String(result?.error || "");
-  const message = String(
-    result?.message || result?.error || panelCopy("errorMessage"),
-  );
+  // A code is written for the developer. The user gets a sentence, unless
+  // the provider sent a message of its own.
+  const message = panelFailureMessage(result);
 
   // The card comes back, so a failed summary can be tried again.
   renderSummaryGate();
@@ -3157,7 +3352,8 @@ function renderAnalysisFailure(result) {
     chapterList.innerHTML = "";
     const item = document.createElement("li");
     item.className = "chapter-item";
-    item.style.color = "var(--accent)";
+    // A failure has to look like a failure, not like a highlighted result.
+    item.style.color = "var(--danger)";
     item.style.border = "none";
     item.style.flexDirection = "column";
     item.style.alignItems = "flex-start";
@@ -3195,7 +3391,7 @@ function renderAnalysisFailure(result) {
     quotesList.innerHTML = "";
     const item = document.createElement("div");
     item.className = "quote-item";
-    item.style.color = "var(--accent)";
+    item.style.color = "var(--danger)";
     item.style.borderLeftColor = "var(--border)";
     item.textContent = message;
     quotesList.appendChild(item);
@@ -3302,7 +3498,7 @@ async function copyToClipboardWithFeedback(text, buttonId) {
 
   const success = await copyToClipboard(text);
   if (success) {
-    btn.textContent = "Copied";
+    btn.textContent = panelCopy("copied");
     setTimeout(() => {
       btn.textContent = original;
     }, 2000);
@@ -3366,18 +3562,15 @@ function setupExplainFeature() {
   tooltip.setAttribute("role", "toolbar");
   tooltip.setAttribute("aria-label", panelCopy("selectionActions"));
 
-  tooltip.innerHTML = `
-    <button class="explain-btn" type="button">Explain</button>
-    <button class="selection-note-btn" type="button">Note</button>
-    <button class="selection-word-btn" type="button">Word</button>
-  `;
   // The three actions follow the interface language.
+  tooltip.innerHTML = `
+    <button class="explain-btn" type="button">${escapeHtml(panelCopy("explainTitle"))}</button>
+    <button class="selection-note-btn" type="button">${escapeHtml(panelCopy("note"))}</button>
+    <button class="selection-word-btn" type="button">${escapeHtml(panelCopy("extractWord"))}</button>
+  `;
   const explainBtn = tooltip.querySelector(".explain-btn");
-  explainBtn.textContent = panelCopy("explainTitle");
   const selectionNoteBtn = tooltip.querySelector(".selection-note-btn");
-  selectionNoteBtn.textContent = panelCopy("note");
   const selectionWordBtn = tooltip.querySelector(".selection-word-btn");
-  selectionWordBtn.textContent = panelCopy("extractWord");
   selectionWordBtn.title = panelCopy("extractWordTitle");
   selectionWordBtn.setAttribute("aria-label", panelCopy("extractWordTitle"));
 
@@ -4353,7 +4546,8 @@ async function saveQuickNote() {
     return;
   }
   if (!currentVideoId) {
-    announceAlert(panelCopy("emptyNoVideoNotes"));
+    // The Notes tab shows this empty state on its own.
+    announceAlert(panelCopy("emptyNoVideoNotes"), { notice: false });
     return;
   }
 
@@ -4585,7 +4779,7 @@ function buildNotesMarkdown(notes) {
   const lines = ["# YouTube Digest notes", ""];
 
   notes.forEach((note) => {
-    const title = note.videoTitle || "Untitled video";
+    const title = note.videoTitle || panelCopy("untitledVideo");
     const channel = note.channelName || "";
     const stamp = note.timestamp || formatTimestamp(note.timestampSeconds);
     const written = note.createdAt
@@ -4697,7 +4891,7 @@ function renderVocabulary() {
 
     const statusKey = WORD_STATUS_LABELS[item.status] || "wordStatusLearning";
     const source = item.videoId
-      ? `<button class="word-source" type="button" data-video-id="${escapeHtml(item.videoId)}" data-seconds="${Number(item.timestampSeconds) || 0}">${escapeHtml(item.videoTitle || "Video")} · ${escapeHtml(formatTimestamp(item.timestampSeconds))}</button>`
+      ? `<button class="word-source" type="button" data-video-id="${escapeHtml(item.videoId)}" data-seconds="${Number(item.timestampSeconds) || 0}">${escapeHtml(item.videoTitle || panelCopy("untitledVideo"))} · ${escapeHtml(formatTimestamp(item.timestampSeconds))}</button>`
       : "";
 
     card.innerHTML = `
@@ -4795,12 +4989,18 @@ async function loadDueReviews() {
     if (!result?.success) {
       reviewQueue = [];
       reviewIndex = 0;
-      if (signedOut) signedOut.hidden = result?.error !== "NO_SESSION";
+      const signedOutState = result?.error === "NO_SESSION";
+      if (signedOut) signedOut.hidden = !signedOutState;
       if (empty) empty.hidden = true;
       if (card) card.hidden = true;
       if (actions) actions.hidden = true;
       const progress = document.getElementById("reviewProgress");
       if (progress) progress.textContent = "";
+      // Being signed out is a state, not a failure, and the review area
+      // says so. A real failure has to be told, or it is only in the log.
+      if (!signedOutState) {
+        announceAlert(panelFailureMessage(result));
+      }
       return;
     }
 
@@ -4906,7 +5106,7 @@ async function submitReviewGrade(grade) {
     .catch(() => null);
 
   if (!result?.success) {
-    announceAlert(result?.error || panelCopy("errorMessage"));
+    announceAlert(panelFailureMessage(result));
     return;
   }
 
@@ -4921,7 +5121,8 @@ async function submitReviewGrade(grade) {
     if (empty) empty.hidden = false;
     const progress = document.getElementById("reviewProgress");
     if (progress) progress.textContent = "";
-    announceStatus(panelCopy("reviewEmptyState"));
+    // The review area says this on its own.
+    announceStatus(panelCopy("reviewEmptyState"), { notice: false });
     void loadVocabulary();
     return;
   }
@@ -5000,7 +5201,11 @@ function renderLibrary() {
   if (!visible.length) {
     const empty = document.createElement("p");
     empty.className = "panel-hint";
-    empty.textContent = query ? panelCopy("libraryEmpty") : panelCopy("libraryEmpty");
+    // Two different situations, two different sentences: an empty library
+    // and a search that found nothing.
+    empty.textContent = query
+      ? panelCopy("libraryNoResults")
+      : panelCopy("libraryEmpty");
     list.appendChild(empty);
     return;
   }
@@ -5010,7 +5215,7 @@ function renderLibrary() {
     card.className = "library-item";
     const relative = formatRelativeTime(entry.timestamp);
     card.innerHTML = `
-      <div class="library-title">${escapeHtml(entry.title || "Untitled video")}</div>
+      <div class="library-title">${escapeHtml(entry.title || panelCopy("untitledVideo"))}</div>
       <div class="library-meta">
         <span class="library-channel">${escapeHtml(entry.channelName || "")}</span>
         <span class="library-time">${escapeHtml(relative)}</span>
@@ -5136,19 +5341,23 @@ function renderCachedViewNote() {
 
 /**
  * Says how long ago a cached video was read, in the words a person would
- * use.
- */function formatRelativeTime(timestamp) {
+ * use. The timestamp is the moment the video was saved, not a moment inside
+ * the video, so a video read a minute ago reads as "just now".
+ */
+function formatRelativeTime(timestamp) {
   const elapsed = Date.now() - (Number(timestamp) || 0);
   if (!Number.isFinite(elapsed) || elapsed < 0) return "";
   const minutes = Math.floor(elapsed / 60_000);
-  if (minutes < 1) return panelCopy("libraryTranscriptOnly") ? "" : "";
-  if (minutes < 60) return `${minutes} min`;
+  if (minutes < 1) return panelCopy("libraryJustNow");
+  if (minutes < 60) {
+    return panelCopyFormat("libraryMinutesAgo", { count: minutes });
+  }
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} h`;
+  if (hours < 24) return panelCopyFormat("libraryHoursAgo", { count: hours });
   const days = Math.floor(hours / 24);
-  if (days < 30) return `${days} d`;
+  if (days < 30) return panelCopyFormat("libraryDaysAgo", { count: days });
   const months = Math.floor(days / 30);
-  return `${months} mo`;
+  return panelCopyFormat("libraryMonthsAgo", { count: months });
 }
 
 /**
@@ -5588,9 +5797,9 @@ function renderTranscriptSegmentContent(segment, mode, translated, error) {
   if (translated) {
     translationHtml = renderSubtitleInlineMarkup(translated);
   } else if (error) {
-    translationHtml = `${escapeHtml(error)}<button class="translation-retry-btn" type="button">Retry</button>`;
+    translationHtml = `${escapeHtml(error)}<button class="translation-retry-btn" type="button">${escapeHtml(panelCopy("retry"))}</button>`;
   } else {
-    translationHtml = "Waiting for translation…";
+    translationHtml = escapeHtml(panelCopy("translationWaiting"));
   }
 
   if (mode === "bilingual") {
@@ -5765,7 +5974,7 @@ async function requestTranscriptTranslationBatch(
 
     aligned.forEach((item, batchIndex) => {
       if (!result?.success) {
-        item.error = result?.error || "Translation failed.";
+        item.error = result?.error || panelCopy("translationFailed");
       }
       updateTranslatedRow(
         sourceBatch[batchIndex],
@@ -5782,7 +5991,11 @@ async function requestTranscriptTranslationBatch(
       updateTranslatedRow(
         segment,
         indices[batchIndex],
-        { id: segment.id, text: "", error: error.message || "Translation failed." },
+        {
+          id: segment.id,
+          text: "",
+          error: error.message || panelCopy("translationFailed"),
+        },
         generation,
       );
     });
@@ -5803,7 +6016,7 @@ function retryTranslationSegment(index, generation) {
     const translation = row.querySelector(".transcript-translation");
     if (translation) {
       translation.className = "transcript-translation translation-pending";
-      translation.textContent = "Retrying…";
+      translation.textContent = panelCopy("retrying");
     }
   }
   activeTranslationQueue.enqueue(index, true);
@@ -5948,6 +6161,10 @@ globalThis.__YTD_PANEL_TESTING__ = {
   clampToolbarCenter,
   announceStatus,
   announceAlert,
+  showToast,
+  hideToast,
+  panelFailureMessage,
+  formatRelativeTime,
   renderSummaryGate,
   hideSummaryGate,
   renderAnalysisResults,

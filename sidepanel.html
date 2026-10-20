@@ -598,32 +598,14 @@
           aria-labelledby="tab-words"
           data-panel="words"
         >
-          <div class="section">
-            <div class="section-header">
-              <div class="section-title" data-i18n="wordsTitle">
-                My vocabulary
-              </div>
-              <button
-                class="enhance-btn"
-                id="wordsRefreshBtn"
-                type="button"
-                data-i18n="refresh"
-              >
-                Refresh
-              </button>
-            </div>
-            <p class="panel-hint" id="wordsIntro" data-i18n="wordsIntro">
-              Select a word in the transcript and choose Word to add it here.
-            </p>
-            <div class="words-meta">
-              <span class="words-count" id="wordsCount"></span>
-            </div>
-            <p class="words-warning" id="wordsLimitWarning" hidden></p>
-            <p class="words-warning words-dropped" id="wordsDroppedNotice" hidden></p>
-            <div id="wordsList"></div>
-          </div>
-
-          <div class="section">
+          <!--
+            Review comes first. It is the part of this tab with a deadline:
+            a learner opens the Words tab to review, and the word list can
+            hold 500 entries. Asking them to scroll past all of them first
+            put the daily work at the bottom of the page, so the order of
+            the two sections follows what the user came to do.
+          -->
+          <div class="section review-section">
             <div class="section-header">
               <div class="section-title" data-i18n="reviewTitle">Review</div>
             </div>
@@ -665,6 +647,31 @@
               </div>
               <p class="review-progress" id="reviewProgress"></p>
             </div>
+          </div>
+
+          <div class="section words-section">
+            <div class="section-header">
+              <div class="section-title" data-i18n="wordsTitle">
+                My vocabulary
+              </div>
+              <button
+                class="enhance-btn"
+                id="wordsRefreshBtn"
+                type="button"
+                data-i18n="refresh"
+              >
+                Refresh
+              </button>
+            </div>
+            <p class="panel-hint" id="wordsIntro" data-i18n="wordsIntro">
+              Select a word in the transcript and choose Word to add it here.
+            </p>
+            <div class="words-meta">
+              <span class="words-count" id="wordsCount"></span>
+            </div>
+            <p class="words-warning" id="wordsLimitWarning" hidden></p>
+            <p class="words-warning words-dropped" id="wordsDroppedNotice" hidden></p>
+            <div id="wordsList"></div>
           </div>
         </div>
 
@@ -710,6 +717,30 @@
         </div>
 
       </div>
+    </div>
+
+    <!-- VISIBLE NOTICE
+         The two live regions at the top of the document are invisible, so a
+         failure used to reach the screen reader and nobody else. This bar is
+         the visible half of the same message: the same words, on screen.
+         It is fixed, so it never changes the layout, and it takes no pointer
+         events, so it can never swallow a click on the content behind it.
+         The live regions stay the announcers, so nobody hears a message
+         twice. -->
+    <div class="panel-toast" id="panelToast" data-kind="status" hidden>
+      <span class="panel-toast-text" id="panelToastText"></span>
+      <button
+        class="panel-toast-close"
+        id="panelToastClose"
+        type="button"
+        data-i18n-aria-label="toastDismiss"
+        data-i18n-title="toastDismissTitle"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M18 6 6 18"></path>
+          <path d="m6 6 12 12"></path>
+        </svg>
+      </button>
     </div>
 
     <!-- Auto-scroll follow button — appears when user scrolls away from playback position -->

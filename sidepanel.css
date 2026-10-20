@@ -1014,6 +1014,89 @@ body {
 }
 
 /* ============================================================
+   VISIBLE NOTICE
+   The live regions in the markup are invisible, so every failure the panel
+   reported used to reach the screen reader and nobody else. This bar is the
+   visible half of the same message.
+
+   It is fixed, so it never changes the layout of the panel, and it takes no
+   pointer events, so it can never swallow a click meant for the content
+   behind it. Only the close button takes pointer events back.
+   ============================================================ */
+.panel-toast {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-4);
+  background: var(--surface-raised);
+  border-top: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-md);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  pointer-events: none;
+}
+
+.panel-toast[hidden] {
+  display: none;
+}
+
+/* A failure has to look like a failure, not like another piece of content. */
+.panel-toast[data-kind="error"] {
+  background: var(--danger-dim);
+  border-top-color: var(--danger);
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.panel-toast-text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.panel-toast-close {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.panel-toast-close:hover {
+  background: var(--accent-dim);
+}
+
+.panel-toast-close svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+/* The floating "follow playback" pill lives at the bottom of the panel too,
+   so it steps aside while a notice is on screen. */
+body.toast-visible .follow-playback-btn {
+  bottom: 78px;
+}
+
+/* ============================================================
    LOADING STATE
    ============================================================ */
 .loading-container {
