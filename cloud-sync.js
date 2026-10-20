@@ -6,6 +6,37 @@
  * background.js.
  */
 
+/**
+ * Records that words were dropped by the local store's cap.
+ *
+ * The record is what the panel reads, so the user is told about the loss
+ * instead of finding a word missing. Only a real drop is recorded: a store
+ * that is under the cap leaves no trace.
+ */
+async function recordDroppedVocabulary(count) {
+  if (!count) return;
+  try {
+    const session = await getGithubSession();
+    const key = YTD_SETTINGS.vocabularyDroppedKey(session && session.githubId);
+    const stored = await chrome.storage.local.get(key);
+    const previous = stored && stored[key];
+    const total = Number(previous && previous.total) || 0;
+    await chrome.storage.local.set({
+      [key]: {
+        total: total + count,
+        lastCount: count,
+        lastAt: Date.now(),
+      },
+    });
+  } catch (error) {
+    // The record is a courtesy. A failed write must never stop the save.
+    console.warn(
+      "[YouTube Digest] Could not record the dropped words:",
+      error.message,
+    );
+  }
+}
+
 async function saveNoteToStorage(note) {
   const namespace = await notesNamespace();
   const result = await chrome.storage.local.get(namespace);
@@ -882,7 +913,7 @@ function mergeCollectionsForSync(
 }
 
 function mergeNotesForSync(localNotes, cloudNotes, clock, tombstones) {
-  const result = mergeCollectionsForSync(localNotes, cloudNotes, {
+  return mergeCollectionsForSync(localNotes, cloudNotes, {
     keyOfLocal: (item) => (item && item.id ? String(item.id) : ""),
     keyOfCloud: (item) => (item && item.clientId ? String(item.clientId) : ""),
     toLocal: cloudToLocalNote,
@@ -890,7 +921,6 @@ function mergeNotesForSync(localNotes, cloudNotes, clock, tombstones) {
     clock,
     tombstones,
   });
-  return { mergedNotes: result.mergedItems, toPush: result.toPush };
 }
 
 async function pushNoteToCloud(session, note, payload) {
@@ -924,13 +954,12 @@ async function runFullSync({
   fetchPath,
   pushPath,
   keyOfLocal,
-  keyOfCloud,
-  toLocal,
   toCloudPayload,
   cloudIdOf,
+  pickCloud,
   readLocal,
   writeLocal,
-  mergeItem,
+  merge,
   tombstones,
   onPushed,
 }) {
@@ -943,7 +972,11 @@ async function runFullSync({
     const data = await cloudFetch(fetchPath, { token: session.token });
     // The server accepted our token, so any earlier expiry is stale.
     await clearSyncSessionExpired();
-    cloud = data && (data.notes || data.vocabulary) ? data.notes || data.vocabulary : [];
+    // The list is named by the endpoint: the notes live under "notes" and
+    // the words under "vocabulary". Picking the wrong one is not a small
+    // mistake - an empty array is truthy, so "data.notes || data.vocabulary"
+    // would silently hand the notes list to the vocabulary sync.
+    cloud = pickCloud(data);
   } catch (error) {
     // The pull is the one step that decides whether syncing works at all, so
     // its failure is returned with the reason code intact: the caller can tell
@@ -964,14 +997,7 @@ async function runFullSync({
   // The pull carried the server's clock, so the offset between the device
   // clock and the server clock is known before the merge happens.
   const clock = await readClockContext();
-  const { mergedItems, toPush } = mergeCollectionsForSync(local, cloud, {
-    keyOfLocal,
-    keyOfCloud,
-    toLocal,
-    clock,
-    mergeItem,
-    tombstones,
-  });
+  const { mergedItems, toPush } = merge(local, cloud, clock, tombstones);
   for (const item of toPush) {
     try {
       const payload = toCloudPayload(item);
@@ -1026,13 +1052,12 @@ async function fullSyncNotes() {
     fetchPath: "/api/notes",
     pushPath: "/api/notes",
     keyOfLocal: (item) => (item && item.id ? String(item.id) : ""),
-    keyOfCloud: (item) => (item && item.clientId ? String(item.clientId) : ""),
-    toLocal: cloudToLocalNote,
     toCloudPayload: localNoteToCloudPayload,
     cloudIdOf: (pushed) => pushed && pushed.note && pushed.note.id,
+    pickCloud: (data) => (data && Array.isArray(data.notes) ? data.notes : []),
     readLocal: readLocalNotes,
     writeLocal: writeLocalNotes,
-    mergeItem: mergeNoteForSync,
+    merge: mergeNotesForSync,
     tombstones,
     // A note that is written again is newer than the delete that is still
     // on its way: the delete is dropped, so a note the user re-created is
@@ -1074,7 +1099,7 @@ async function handleLogoutGithub() {
 
 async function vocabularyNamespace() {
   const session = await getGithubSession();
-  return session ? "ytd_vocabulary_" + session.githubId : "ytd_vocabulary";
+  return YTD_SETTINGS.vocabularyStorageKey(session && session.githubId);
 }
 
 async function readLocalVocabulary(namespace) {
@@ -1084,6 +1109,113 @@ async function readLocalVocabulary(namespace) {
 
 async function writeLocalVocabulary(namespace, items) {
   await chrome.storage.local.set({ [namespace]: items });
+}
+
+/**
+ * Storage key for the record of which account owns which word from the
+ * signed-out bucket.
+ *
+ * The same rule as the notes: a word belongs to exactly one account. Once
+ * an account has taken a word it is never handed to another one, so a
+ * failed upload cannot make another learner inherit words that were
+ * written under a different account.
+ */
+const VOCABULARY_CLAIM_KEY = "ytd_vocabulary_claim";
+
+/**
+ * Reads the claim record: which account owns which word id.
+ *
+ * @returns {Promise<Record<string, string>>} word id -> account id.
+ */
+async function readVocabularyClaim() {
+  try {
+    const result = await chrome.storage.local.get(VOCABULARY_CLAIM_KEY);
+    const claim = result[VOCABULARY_CLAIM_KEY];
+    if (!claim || typeof claim !== "object" || !claim.ids) return {};
+    const owners = {};
+    for (const [id, owner] of Object.entries(claim.ids)) {
+      owners[String(id)] = String(owner);
+    }
+    return owners;
+  } catch (error) {
+    return {};
+  }
+}
+
+async function writeVocabularyClaim(owners) {
+  try {
+    await chrome.storage.local.set({ [VOCABULARY_CLAIM_KEY]: { ids: owners } });
+  } catch (error) {
+    // The claim is a safety net, not the primary guard: the bucket is
+    // already cleared when the import happens.
+  }
+}
+
+/**
+ * Imports the words that were saved while signed out into the account that
+ * is signing in now.
+ *
+ * Without this, signing in moved the reading namespace away from the words
+ * the user had just captured: they were still in the device's storage, but
+ * the panel looked in the signed-in namespace and found nothing, and the
+ * cloud never saw them either. The user watched their word disappear at
+ * the moment they signed in.
+ *
+ * Two rules make the import safe, and they are the same rules the notes
+ * import follows:
+ * - A word belongs to exactly one account. The account that owns a word
+ *   can always import it again, so a retry never loses it; a different
+ *   account never gets it.
+ * - The signed-out bucket is cleared as soon as the words are copied into
+ *   the account namespace, not after the upload. The words now live in the
+ *   account's own namespace, so a failed upload keeps them on the device
+ *   and the next sync of that account sends them; what it must never do is
+ *   leave them where the next account could pick them up.
+ *
+ * @param {string|number} githubId the account that is signing in.
+ * @returns {Promise<number>} how many words were imported.
+ */
+async function migrateLegacyLocalVocabulary(githubId) {
+  const accountId = String(githubId || "").trim();
+  if (!accountId) return 0;
+  const legacy = await readLocalVocabulary(YTD_SETTINGS.VOCABULARY_STORAGE_KEY);
+  if (!Array.isArray(legacy) || legacy.length === 0) return 0;
+  const owners = await readVocabularyClaim();
+  const unclaimed = legacy.filter((word) => {
+    if (!word || !word.id) return false;
+    const owner = owners[String(word.id)];
+    // A word this account already owns is importable again; a word that
+    // belongs to another account is not.
+    return !owner || owner === accountId;
+  });
+  if (unclaimed.length === 0) {
+    // Every word in the bucket already belongs to another account.
+    console.warn(
+      "[YouTube Digest] The words saved while signed out already belong to " +
+        "another account and were not imported here.",
+    );
+    return 0;
+  }
+  const namespace = YTD_SETTINGS.vocabularyStorageKey(accountId);
+  const current = await readLocalVocabulary(namespace);
+  const byId = new Map(current.map((word) => [String(word.id), word]));
+  let added = 0;
+  for (const word of unclaimed) {
+    if (word && word.id && !byId.has(String(word.id))) {
+      byId.set(String(word.id), word);
+      added += 1;
+    }
+  }
+  if (added > 0) await writeLocalVocabulary(namespace, [...byId.values()]);
+  // The words now live in the account namespace, so the signed-out bucket
+  // is cleared right away - before the upload - and the ids are recorded
+  // as belonging to this account.
+  await chrome.storage.local.remove(YTD_SETTINGS.VOCABULARY_STORAGE_KEY);
+  for (const word of unclaimed) {
+    owners[String(word.id)] = accountId;
+  }
+  await writeVocabularyClaim(owners);
+  return added;
 }
 
 function localVocabToCloudPayload(item) {
@@ -1121,53 +1253,85 @@ function vocabKey(item) {
 }
 
 /**
- * Pure merge for vocabulary, mirroring the notes strategy: cloud is the
- * source of truth, brand-new local items (no cloudId) are pushed, and
- * previously synced items missing from the cloud are dropped locally.
+ * Merges one word's local and cloud copies.
+ *
+ * The word's body follows the row winner, but the LOCAL id is kept: the
+ * panel holds that id and sends it back when the user deletes the word. If
+ * the id changed with every merge, the delete would arrive for a word that
+ * no longer exists and the user would watch the word stay.
+ *
+ * @returns {{item: object, push: boolean}} the merged word and whether it
+ *   still has to be sent to the server.
  */
-function mergeVocabularyForSync(localItems, cloudItems) {
-  const cloudByKey = new Map();
-  for (const cloud of cloudItems || []) {
-    if (cloud && cloud.term) cloudByKey.set(vocabKey(cloud), cloud);
+function mergeVocabularyItem(local, cloud, winner) {
+  const item = winner === "cloud" ? cloudVocabToLocal(cloud) : local;
+  if (local && local.id) {
+    item.id = local.id;
+    item.createdAt = local.createdAt || item.createdAt;
   }
-  const merged = new Map();
-  for (const local of localItems || []) {
-    if (!local || !local.term) continue;
-    const key = vocabKey(local);
-    const cloud = cloudByKey.get(key);
-    if (cloud) {
-      merged.set(key, cloudVocabToLocal(cloud));
-    } else if (!local.cloudId) {
-      merged.set(key, local);
-    }
-  }
-  for (const cloud of cloudByKey.values()) {
-    if (!merged.has(vocabKey(cloud))) {
-      merged.set(vocabKey(cloud), cloudVocabToLocal(cloud));
-    }
-  }
-  const localResult = [];
-  const toPush = [];
-  for (const entry of merged.values()) {
-    localResult.push(entry);
-    if (!entry.cloudId) toPush.push(entry);
-  }
-  return { mergedItems: localResult, toPush };
+  return { item, push: winner === "local" };
 }
 
-async function fullSyncVocabulary() {
-  return runFullSync({
-    namespaceFor: (session) => "ytd_vocabulary_" + session.githubId,
-    fetchPath: "/api/vocabulary",
-    pushPath: "/api/vocabulary",
+/**
+ * Merges the local words with the words in the cloud.
+ *
+ * The key is the word itself: the server keeps one row per term and
+ * sentence, so that pair is what says whether the two sides are talking
+ * about the same word.
+ */
+function mergeVocabularyForSync(localWords, cloudWords, clock, tombstones) {
+  return mergeCollectionsForSync(localWords, cloudWords, {
     keyOfLocal: vocabKey,
     keyOfCloud: vocabKey,
     toLocal: cloudVocabToLocal,
+    mergeItem: mergeVocabularyItem,
+    clock,
+    tombstones,
+  });
+}
+
+async function fullSyncVocabulary() {
+  const session = await getGithubSession();
+  if (!session) return { success: true, synced: false, reason: "not signed in" };
+  // The deletes that have not reached the server yet. Their words are kept
+  // out of the merge, so the sync cannot bring them back, and they are sent
+  // again below.
+  const pending = await readPendingVocabDeletes(session.githubId);
+  // The delete intents, with the moment they were recorded. The merge
+  // compares that moment with the word's own timestamp: a word that was
+  // captured AFTER the delete is newer, and the capture wins - the delete
+  // is stale and must not be applied to the word.
+  const tombstones = new Map();
+  for (const entry of pending) {
+    tombstones.set(entry.key, entry.deletedAt);
+  }
+  const result = await runFullSync({
+    namespaceFor: (session) => YTD_SETTINGS.vocabularyStorageKey(session.githubId),
+    fetchPath: "/api/vocabulary",
+    pushPath: "/api/vocabulary",
+    keyOfLocal: vocabKey,
     toCloudPayload: localVocabToCloudPayload,
     cloudIdOf: (pushed) => pushed && pushed.vocabulary && pushed.vocabulary.id,
+    pickCloud: (data) => (data && Array.isArray(data.vocabulary) ? data.vocabulary : []),
     readLocal: readLocalVocabulary,
     writeLocal: writeLocalVocabulary,
+    merge: mergeVocabularyForSync,
+    tombstones,
+    // A word that is captured again is newer than the delete that is still
+    // on its way: the delete is dropped, so a word the user re-captured is
+    // not eaten by a stale intent.
+    onPushed: (item) =>
+      cancelPendingVocabDeleteForPushed(
+        pending,
+        tombstones,
+        item,
+        vocabKey,
+      ),
   });
+  // The deletes that are still on their way are sent again now - also when
+  // the pull failed, because the delete is a request of its own.
+  await flushPendingVocabDeletes(session, pending, tombstones);
+  return result;
 }
 
 /**
@@ -1209,10 +1373,28 @@ async function handleSaveVocabulary(entry) {
     } else {
       items.unshift(item);
     }
-    if (items.length > 500) items.splice(500);
+    // The cap lives in settings.js so the panel can show the same number the
+    // store enforces. A word that disappears without a word is a word the
+    // user lost, so the drop is recorded and logged - never a silent
+    // truncation.
+    const MAX_WORDS = YTD_SETTINGS.MAX_LOCAL_VOCABULARY;
+    let dropped = 0;
+    if (items.length > MAX_WORDS) {
+      dropped = items.length - MAX_WORDS;
+      items.splice(MAX_WORDS);
+      await recordDroppedVocabulary(dropped);
+      console.warn(
+        `[YouTube Digest] ${dropped} word(s) were dropped: the local store keeps the newest ${MAX_WORDS}.`,
+      );
+    }
     await writeLocalVocabulary(namespace, items);
     const session = await getGithubSession();
     if (session) {
+      // The word is on the device again, so a delete of this word that is
+      // still on its way is stale: it must not be applied to the word the
+      // user just captured. Otherwise the next sync would delete the word
+      // the user re-created.
+      await removePendingVocabDelete(session.githubId, vocabKey(item));
       try {
         const pushed = await cloudFetch("/api/vocabulary", {
           method: "POST",
@@ -1242,22 +1424,269 @@ async function handleGetVocabulary() {
   }
 }
 
+/**
+ * Storage key for the word deletes that have not reached the server yet.
+ *
+ * Scoped to the account the words belong to, exactly like the notes
+ * namespace: a delete recorded for one account must never be applied to
+ * another account's word.
+ */
+function pendingVocabDeletesStorageKey(githubId) {
+  const id = String(githubId || "").trim();
+  return id ? "ytd_pending_vocab_deletes_" + id : "ytd_pending_vocab_deletes";
+}
+
+/**
+ * Reads the word deletes that have not reached the server yet.
+ *
+ * @param {string|number} githubId the account the deletes belong to.
+ * @returns {Promise<Array<{key: string, term: string, sentence: string,
+ *   cloudId: string, deletedAt: number}>>}
+ */
+async function readPendingVocabDeletes(githubId) {
+  const key = pendingVocabDeletesStorageKey(githubId);
+  try {
+    const stored = await chrome.storage.local.get(key);
+    const entries = stored[key];
+    if (!Array.isArray(entries)) return [];
+    return entries
+      .filter((entry) => entry && typeof entry.key === "string" && entry.key)
+      .map((entry) => ({
+        key: entry.key,
+        term: String(entry.term || ""),
+        sentence: String(entry.sentence || ""),
+        cloudId: String(entry.cloudId || ""),
+        deletedAt: Number(entry.deletedAt) || 0,
+      }));
+  } catch (error) {
+    return [];
+  }
+}
+
+async function writePendingVocabDeletes(githubId, entries) {
+  const key = pendingVocabDeletesStorageKey(githubId);
+  try {
+    await chrome.storage.local.set({ [key]: entries });
+  } catch (error) {
+    console.warn(
+      "[YouTube Digest] Pending word delete could not be stored:",
+      error.message,
+    );
+  }
+}
+
+async function removePendingVocabDelete(githubId, wordKey) {
+  const pending = await readPendingVocabDeletes(githubId);
+  const remaining = pending.filter((entry) => entry.key !== wordKey);
+  if (remaining.length === pending.length) return;
+  await writePendingVocabDeletes(githubId, remaining);
+}
+
+/**
+ * Drops a pending word delete: the word was captured again, so the delete
+ * is older than the word and must not be applied to it.
+ *
+ * @param {Array<{key: string}>} pending the intents of this sync.
+ * @param {Map<string, number>} tombstones the deletes the merge keeps out.
+ * @param {string} wordKey the key of the word that was captured again.
+ */
+function cancelPendingVocabDelete(pending, tombstones, wordKey) {
+  const key = String(wordKey || "");
+  if (!key) return;
+  tombstones.delete(key);
+  const index = pending.findIndex((entry) => entry.key === key);
+  if (index >= 0) pending.splice(index, 1);
+}
+
+/**
+ * Cancels the delete of a word that was captured again.
+ *
+ * @param {Array<{key: string}>} pending the intents of this sync.
+ * @param {Map<string, number>} tombstones the deletes the merge keeps out.
+ * @param {object} item the word that was pushed.
+ * @param {(item: object) => string} keyOfLocal the key of a local word.
+ */
+function cancelPendingVocabDeleteForPushed(pending, tombstones, item, keyOfLocal) {
+  const key = keyOfLocal ? keyOfLocal(item) : "";
+  if (!key) return;
+  if (!tombstones.has(key)) return;
+  cancelPendingVocabDelete(pending, tombstones, key);
+}
+
+/**
+ * True when two lists of pending word deletes hold the same words in the
+ * same order. Used to avoid writing the same list over and over.
+ */
+function samePendingVocabDeletes(a, b) {
+  if (a.length !== b.length) return false;
+  return a.every((entry, index) => entry.key === b[index].key);
+}
+
+/**
+ * Finds the server's id for a word that was deleted without one.
+ *
+ * The server keeps one row per (word, sentence) pair, and a row can be
+ * there without this device ever having seen its id: the word was pushed
+ * from another device, or the local copy was never pushed at all. The
+ * delete is addressed by the server's id, so the id has to be looked up in
+ * the server's own list - otherwise the delete would be dropped and the
+ * word would come back on the next sync.
+ *
+ * @param {Array<{term: string, sentence: string, cloudId: string}>} pending
+ * @returns {Promise<Array<object>>} the entries whose server id is still
+ *   unknown because the lookup itself failed.
+ */
+async function findMissingVocabCloudIds(session, pending) {
+  const missing = pending.filter((entry) => !entry.cloudId);
+  if (missing.length === 0) return [];
+  let rows = [];
+  try {
+    const data = await cloudFetch("/api/vocabulary", { token: session.token });
+    rows = data && Array.isArray(data.vocabulary) ? data.vocabulary : [];
+  } catch (error) {
+    // The lookup failed, so the ids stay unknown and the deletes are sent
+    // again on the next sync. Dropping the intent here would let the word
+    // come back on the next pull.
+    return missing;
+  }
+  for (const entry of missing) {
+    const match = rows.find(
+      (row) =>
+        row &&
+        String(row.term || "") === entry.term &&
+        String(row.sentence || "") === entry.sentence,
+    );
+    if (match && match.id) {
+      entry.cloudId = String(match.id);
+    } else {
+      // The server does not have this word: there is nothing to delete
+      // there, so the intent is done.
+      entry.cloudId = "gone";
+    }
+  }
+  return [];
+}
+
+/**
+ * Sends the word deletes that have not reached the server yet.
+ *
+ * A delete the server confirms is done. A delete the server refuses
+ * because the word is not there any more is done too. Everything else -
+ * offline, a server error, a dead session - keeps the intent, and the next
+ * sync tries again.
+ */
+async function flushPendingVocabDeletes(session, pending, tombstones) {
+  const remaining = [];
+  // A word whose server id is unknown gets its id looked up first: without
+  // it the delete would be dropped and the word would come back.
+  const unresolved = await findMissingVocabCloudIds(session, pending);
+  for (const entry of pending) {
+    if (entry.cloudId === "gone") {
+      // The server never had this word: the intent has done its job.
+      tombstones.delete(entry.key);
+      continue;
+    }
+    if (unresolved.includes(entry)) {
+      // The id could not be looked up - the network is down or the server
+      // is unwell. The delete cannot be sent, but the intent stays, so the
+      // next sync tries again. Dropping it here would bring the word back.
+      remaining.push(entry);
+      continue;
+    }
+    try {
+      await cloudFetch("/api/vocabulary/" + encodeURIComponent(entry.cloudId), {
+        method: "DELETE",
+        token: session.token,
+      });
+    } catch (error) {
+      if (!isAlreadyGoneError(error)) {
+        reportSyncSessionExpired(error);
+        console.warn(
+          "[YouTube Digest] Pending word delete failed (it is sent again on the next sync):",
+          error.message,
+        );
+        remaining.push(entry);
+        continue;
+      }
+    }
+    // Confirmed, or already gone: the intent has done its job.
+    tombstones.delete(entry.key);
+  }
+  const stored = await readPendingVocabDeletes(session.githubId);
+  if (!samePendingVocabDeletes(stored, remaining)) {
+    await writePendingVocabDeletes(session.githubId, remaining);
+  }
+}
+
 async function handleDeleteVocabulary(id) {
   try {
     const namespace = await vocabularyNamespace();
     const items = await readLocalVocabulary(namespace);
     const target = items.find((item) => item.id === id);
-    const remaining = items.filter((item) => item.id !== id);
-    await writeLocalVocabulary(namespace, remaining);
     const session = await getGithubSession();
-    if (session && target && target.cloudId) {
-      await cloudFetch("/api/vocabulary/" + encodeURIComponent(target.cloudId), {
-        method: "DELETE",
-        token: session.token,
-      }).catch((error) => {
-        reportSyncSessionExpired(error);
-        console.warn("[YouTube Digest] Vocabulary cloud delete failed:", error.message);
-      });
+    const wordKey = target ? vocabKey(target) : "";
+    try {
+      if (session && target && wordKey) {
+        // The intent is recorded BEFORE the word leaves the device: a
+        // worker that dies in between must not lose the delete.
+        const pending = await readPendingVocabDeletes(session.githubId);
+        if (!pending.some((entry) => entry.key === wordKey)) {
+          pending.push({
+            key: wordKey,
+            term: String(target.term || ""),
+            sentence: String(target.sentence || ""),
+            cloudId: String(target.cloudId || ""),
+            deletedAt: Date.now(),
+          });
+          await writePendingVocabDeletes(session.githubId, pending);
+        }
+      }
+      // The word disappears from this device now, whether or not the
+      // network is up.
+      const remaining = items.filter((item) => item.id !== id);
+      await writeLocalVocabulary(namespace, remaining);
+    } catch (error) {
+      // The word is still on the device, so the delete did not happen: the
+      // intent is taken back, otherwise the next sync would delete a word
+      // the user still sees.
+      if (session && target && wordKey) {
+        await removePendingVocabDelete(session.githubId, wordKey);
+      }
+      return { success: false, error: error.message };
+    }
+
+    if (session && target && wordKey) {
+      if (!target.cloudId) {
+        // This device never learned the server's id for the word, so the
+        // delete cannot be addressed. The server may still have the word -
+        // another device pushed it - so the intent stays: the next sync
+        // looks the id up in the server's own list and deletes the word
+        // there. Dropping the intent here would bring the word back.
+        return { success: true };
+      }
+      try {
+        await cloudFetch("/api/vocabulary/" + encodeURIComponent(target.cloudId), {
+          method: "DELETE",
+          token: session.token,
+        });
+        // The server confirmed the delete: the intent has done its job.
+        await removePendingVocabDelete(session.githubId, wordKey);
+      } catch (error) {
+        if (isAlreadyGoneError(error)) {
+          // The server does not know the word: there is nothing left to
+          // delete, so the intent is done.
+          await removePendingVocabDelete(session.githubId, wordKey);
+        } else {
+          // The intent stays on the list and is sent again by the next
+          // sync. Until then the word is kept out of the merge, so it
+          // cannot come back.
+          reportSyncSessionExpired(error);
+          console.warn(
+            "[YouTube Digest] Word cloud delete failed (it is sent again on the next sync):",
+            error.message,
+          );
+        }
+      }
     }
     return { success: true };
   } catch (error) {
@@ -1473,6 +1902,20 @@ async function completeGithubLogin(token, tabId) {
     // them.
     await migrateLegacyLocalNotes(user.githubId);
     const sync = await fullSyncNotes();
+    // The words follow the same road as the notes: they are imported into
+    // the account namespace first, so a failed upload keeps them on the
+    // device and out of reach of the next account, and then they are
+    // mirrored to the cloud. A word that stays on the device only is a word
+    // that is lost with the device, so this is not optional.
+    try {
+      await migrateLegacyLocalVocabulary(user.githubId);
+      await fullSyncVocabulary();
+    } catch (error) {
+      console.warn(
+        "[YouTube Digest] The words could not be uploaded yet:",
+        error.message,
+      );
+    }
     chrome.runtime
       .sendMessage({ action: "githubLoginChanged", login: user.login, sync })
       .catch(() => {});
