@@ -180,7 +180,7 @@ test("the panel has a place to show the summary", () => {
   const html = read("sidepanel.html");
   assert.match(
     html,
-    /id="summaryText"|id="summary-text"|id="analysisSummary"/,
+    /id="summaryText"|id="summary-text"|id="analysisSummary"|id="summaryBlock"/,
     "the Summary tab has no element to hold the summary",
   );
 });
@@ -198,7 +198,7 @@ test("the Summary tab asks for the chapter list under the summary", () => {
   // The summary is the answer to "what is this video about". It has to come
   // before the chapters, not after them.
   const html = read("sidepanel.html");
-  const summaryAt = html.search(/id="summaryText"|id="summary-text"|id="analysisSummary"/);
+  const summaryAt = html.search(/id="summaryText"|id="summary-text"|id="analysisSummary"|id="summaryBlock"/);
   const chaptersAt = html.search(/id="chapterList"/);
   assert.ok(summaryAt > -1, "the summary element is missing");
   assert.ok(chaptersAt > -1, "the chapter list is missing");
