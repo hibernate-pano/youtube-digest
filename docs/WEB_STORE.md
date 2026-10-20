@@ -16,9 +16,9 @@
 
 - [ ] 注册 Chrome Web Store 开发者账号（$5 一次性）：https://chrome.google.com/webstore/devconsole
 - [ ] 隐私政策 URL：见下面「隐私政策 URL」一节。**线上只有一页**，它自带中英文切换。
-- [ ] 打包好的 ZIP：仓库根目录 npm run package 生成 dist/youtube-digest-v1.7.1.zip
+- [ ] 打包好的 ZIP：仓库根目录 npm run package 生成 dist/youtube-digest-v1.7.2.zip
   - 注意：商店不接受根目录直接打包，需要 zip 内包含 manifest.json（我们的脚本已满足）
-  - v1.7.1 的包现在有 27 个文件，SHA-256 以 `npm run package`
+  - v1.7.2 的包现在有 27 个文件，SHA-256 以 `npm run package`
     当次输出为准，不要抄旧记录
 - [ ] 数据使用披露表单（Data use disclosure）：勾选项必须和「商品信息」里的说法一致，
   尤其是 Supadata 和三个 AI 服务商。这张表和隐私政策对不上是常见的打回原因。
@@ -244,5 +244,5 @@ GitHub 登录名。它们不参与上架。
 - [ ] **支持邮箱**。商店要求一个有人看的联系方式，仓库现在没有。
 - [ ] **`manifest.json` 的 `name`**。如果因为商标问题换商店名称，这个文件要同步改
       （不在本文档组的改动范围内）。
-- [x] **版本号**。`manifest.json` 和 `package.json` 已经一起 bump 到 **1.7.1**，
-      `dist/youtube-digest-v1.7.1.zip` 已生成。上架时用这个包。
+- [x] **版本号**。`manifest.json` 和 `package.json` 已经一起 bump 到 **1.7.2**，
+      `dist/youtube-digest-v1.7.2.zip` 已生成。上架时用这个包。

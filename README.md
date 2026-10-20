@@ -20,6 +20,12 @@ YouTube Digest is a bring-your-own-key project installed locally from GitHub. It
 
 The absolute address of the image above, for use outside this repository. The file name contains a space, so it is written as `%20`: `https://raw.githubusercontent.com/hibernate-pano/youtube-digest/main/YouTube%20Digest%20demo.jpg`
 
+## New in v1.7.2
+
+- The panel no longer says a video has no subtitles when it has them. Clicking another video inside YouTube used to be answered too early, while the page was still showing the previous one, and the extension reported that as "this video has no subtitles". It now waits for the page to catch up, and if the page is still not ready it says the page was not ready and offers a button that really tries again.
+- Subtitles that YouTube has to make on the spot now arrive. The first request for a video whose subtitles do not exist yet is answered slowly, because the subtitles are being written at that moment; the extension asks the page to fetch them and waits as long as that takes.
+- A slow answer is no longer taken for a failure, and the captions you switched off stay switched off.
+
 ## New in v1.7.1
 
 - Captions are read again. The URL in YouTube's track list is a template, and YouTube answers a template with an empty body, so the free path returned nothing at all. The extension now asks for the URL the page's own player used, which is the one that carries the captions.

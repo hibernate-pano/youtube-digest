@@ -68,7 +68,7 @@ test("manifest uses minimized install-time permissions", () => {
   assert.ok(manifest.host_permissions.includes("https://api.minimaxi.com/*"));
   assert.ok(manifest.host_permissions.includes("https://opencode.ai/zen/go/*"));
   assert.equal(Object.hasOwn(manifest, "optional_host_permissions"), false);
-  assert.equal(manifest.version, "1.7.1");
+  assert.equal(manifest.version, "1.7.2");
 });
 
 test("release copy documents current scope without em dashes", () => {
