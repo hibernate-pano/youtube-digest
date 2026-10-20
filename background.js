@@ -457,6 +457,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.action === "setNoteStarred") {
+    // Starring a note is its own operation, not a text edit. It must never
+    // travel through the update path, because that path rewrites the note
+    // body and would carry whatever the text happened to be.
+    handleSetNoteStarred(message.noteId, message.starred)
+      .then(sendResponse)
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
   if (message.action === "getNotes") {
     // Get all saved notes
     handleGetNotes(message.videoId)
@@ -1924,6 +1934,7 @@ globalThis.__YTD_TRANSLATION_TESTING__ = {
   handleGetNotes,
   handleDeleteNote,
   handleUpdateNote,
+  handleSetNoteStarred,
   migrateLegacyLocalNotes,
   mergeVocabularyForSync,
   handleExtractVocabulary,
