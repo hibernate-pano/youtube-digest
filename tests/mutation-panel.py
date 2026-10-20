@@ -182,7 +182,7 @@ MUTATIONS = [
         "file": "sidepanel.js",
         "hunks": [
             (
-                """      if (signedOut) signedOut.hidden = result?.error !== "NO_SESSION";""",
+                """      if (signedOut) signedOut.hidden = !signedOutState;""",
                 """      if (signedOut) signedOut.hidden = true;""",
             )
         ],
@@ -282,8 +282,22 @@ MUTATIONS = [
         "file": "sidepanel.js",
         "hunks": [
             (
-                """    const count = Number(record?.lastCount) || 0;""",
-                """    const count = 0;""",
+                """        ? YTD_SETTINGS.notesDroppedKey(githubId)
+        : githubId
+          ? `ytd_notes_dropped_${githubId}`
+          : "ytd_notes_dropped";
+
+    const dropped = await chrome.storage.local.get(droppedKey);
+    const record = dropped?.[droppedKey];
+    const count = Number(record?.lastCount) || 0;""",
+                """        ? YTD_SETTINGS.notesDroppedKey(githubId)
+        : githubId
+          ? `ytd_notes_dropped_${githubId}`
+          : "ytd_notes_dropped";
+
+    const dropped = await chrome.storage.local.get(droppedKey);
+    const record = dropped?.[droppedKey];
+    const count = 0;""",
             )
         ],
         "expect": [
@@ -298,14 +312,28 @@ MUTATIONS = [
         "file": "sidepanel.js",
         "hunks": [
             (
-                """    const count = Number(record?.lastCount) || 0;
+                """        ? YTD_SETTINGS.notesDroppedKey(githubId)
+        : githubId
+          ? `ytd_notes_dropped_${githubId}`
+          : "ytd_notes_dropped";
+
+    const dropped = await chrome.storage.local.get(droppedKey);
+    const record = dropped?.[droppedKey];
+    const count = Number(record?.lastCount) || 0;
 
     if (!count) {
       notice.hidden = true;
       notice.textContent = "";
       return;
     }""",
-                """    let count = Number(record?.lastCount) || 0;
+                """        ? YTD_SETTINGS.notesDroppedKey(githubId)
+        : githubId
+          ? `ytd_notes_dropped_${githubId}`
+          : "ytd_notes_dropped";
+
+    const dropped = await chrome.storage.local.get(droppedKey);
+    const record = dropped?.[droppedKey];
+    let count = Number(record?.lastCount) || 0;
 
     if (!count) {
       count = 1;
@@ -422,6 +450,77 @@ MUTATIONS = [
             (
                 "panel-tabs.test.js",
                 "the library says how long it keeps things",
+            ),
+        ],
+    },
+    {
+        "name": "M21 the panel gives up on a paid translation after one try",
+        "file": "sidepanel.js",
+        "hunks": [
+            (
+                """  for (let attempt = 0; attempt <= TRANSLATION_MAX_AUTO_RETRIES; attempt += 1) {""",
+                """  for (let attempt = 0; attempt < 1; attempt += 1) {""",
+            )
+        ],
+        "expect": [
+            (
+                "translation-retry.test.js",
+                "a transcript batch that hit a rate limit is translated on the next try",
+            ),
+            (
+                "translation-retry.test.js",
+                "an interface segment that hit a rate limit is translated on the next try",
+            ),
+        ],
+    },
+    {
+        "name": "M22 a missing key is treated as worth another try",
+        "file": "sidepanel.js",
+        "hunks": [
+            (
+                """  if (code && TRANSLATION_NON_RETRYABLE_ERROR_CODES.has(code)) return false;""",
+                """  if (code && TRANSLATION_NON_RETRYABLE_ERROR_CODES.has(code)) return true;""",
+            ),
+            (
+                """  if (TRANSLATION_KEY_PROBLEM_PATTERN.test(error)) return false;""",
+                """  if (TRANSLATION_KEY_PROBLEM_PATTERN.test(error)) return true;""",
+            ),
+        ],
+        "expect": [
+            (
+                "translation-retry.test.js",
+                "a transcript batch with no API key is not asked again",
+            ),
+            (
+                "translation-retry.test.js",
+                "an interface segment with no API key is not asked again",
+            ),
+            (
+                "translation-retry.test.js",
+                "a failure that a new attempt cannot fix is not worth the user's balance",
+            ),
+        ],
+    },
+    {
+        "name": "M23 an interface segment goes on the deny list before the retries are used up",
+        "file": "sidepanel.js",
+        "hunks": [
+            (
+                """      const batch = missing.slice(start, start + TRANSLATION_BATCH_SIZE);
+      let result;""",
+                """      const batch = missing.slice(start, start + TRANSLATION_BATCH_SIZE);
+      batch.forEach((segment) => interfaceTranslationFailures.add(segment.cacheKey));
+      let result;""",
+            )
+        ],
+        "expect": [
+            (
+                "translation-retry.test.js",
+                "an interface segment that keeps failing goes on the deny list only after the attempts are used up",
+            ),
+            (
+                "translation-retry.test.js",
+                "an interface segment that hit a rate limit is translated on the next try",
             ),
         ],
     },
