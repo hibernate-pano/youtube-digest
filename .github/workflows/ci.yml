@@ -47,6 +47,11 @@ jobs:
       # The extension suite guards product-UI regressions (emoji bans, provider
       # key isolation, sync merge semantics). It previously only ran indirectly
       # through `npm run package`, so a failing test could not fail the build.
+      # The suite drives the real panel in a real DOM (jsdom), so the
+      # dependencies have to be installed first.
+      - name: Install extension test dependencies
+        run: npm ci
+
       - name: Test extension
         run: npm test
 
