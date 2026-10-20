@@ -332,6 +332,72 @@ test("the words of a signed-out account are not handed to the next account", asy
   );
 });
 
+test("a word that another account already took is not imported by the next one", async () => {
+  // The bucket still holds a word that Alice took: her import moved the
+  // word out of the bucket, but the bucket could not be cleared - the
+  // device ran out of space, or the worker was killed right after the
+  // move. The claim record is what stops Bob from taking the word.
+  const storage = {
+    ytd_vocabulary: [localWord("w1", "ephemeral", "")],
+    ytd_vocabulary_claim: { ids: { w1: "1001" } },
+  };
+  const { sandbox } = loadCloudSync({
+    storage,
+    fetchImpl: async (url, options) => {
+      if (String(url).endsWith("/api/me")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ user: accountOf(options) }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ notes: [], vocabulary: [] }),
+      };
+    },
+  });
+
+  // Bob signs in on a device that still holds Alice's word.
+  await sandbox.completeGithubLogin("bob-token", 2);
+
+  const asBob = await sandbox.handleGetVocabulary();
+  assert.equal(
+    asBob.items.length,
+    0,
+    "Bob inherited a word that Alice had already taken: the claim record " +
+      "is the only thing that stops it",
+  );
+
+  // Alice can take her own word again - a retry must never lose it.
+  const { sandbox: aliceSandbox } = loadCloudSync({
+    storage,
+    fetchImpl: async (url, options) => {
+      if (String(url).endsWith("/api/me")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ user: accountOf(options) }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ notes: [], vocabulary: [] }),
+      };
+    },
+  });
+  await aliceSandbox.completeGithubLogin("alice-token", 1);
+  const asAlice = await aliceSandbox.handleGetVocabulary();
+  assert.equal(
+    asAlice.items.length,
+    1,
+    "Alice could not take her own word back: the import has to work for " +
+      "the owner, not only for a stranger",
+  );
+});
+
 // ============================================================
 // 2. A word deleted while offline does not come back
 // ============================================================
@@ -517,6 +583,120 @@ test("a word delete survives a sync in which the server cannot be reached", asyn
   );
 });
 
+test("the vocabulary sync reads the word list, not the note list", async () => {
+  const storage = {
+    ytd_github_session: {
+      token: "alice-token",
+      login: "alice",
+      githubId: 1001,
+      savedAt: 1,
+    },
+  };
+  const { sandbox } = loadCloudSync({
+    storage,
+    fetchImpl: async (url, options) => {
+      if ((options && options.method) === "DELETE") {
+        return { ok: false, status: 500, json: async () => ({ error: "boom" }) };
+      }
+      // The response carries both lists. The vocabulary sync has to take
+      // the words out of it: the notes belong to another list, and a
+      // note read as a word is a word with no term and no translation.
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          notes: [
+            {
+              id: "note_1",
+              clientId: "note_1",
+              videoId: "abc123xyz",
+              videoTitle: "A video",
+              note: "a note",
+              createdAt: "2026-01-01T00:00:00Z",
+              updatedAt: "2026-01-01T00:00:00Z",
+            },
+          ],
+          vocabulary: [cloudWord("w1", "ephemeral")],
+          serverTime: new Date().toISOString(),
+        }),
+      };
+    },
+  });
+
+  await sandbox.fullSyncVocabulary();
+
+  const after = plain(storage.ytd_vocabulary_1001 || []);
+  assert.equal(
+    after.length,
+    1,
+    "the vocabulary sync read the wrong list: the note came down as a word",
+  );
+  assert.equal(after[0].term, "ephemeral");
+});
+
+test("a word captured again is not deleted from the server when the upload is slow", async () => {
+  const storage = {
+    ytd_github_session: {
+      token: "alice-token",
+      login: "alice",
+      githubId: 1001,
+      savedAt: 1,
+    },
+    ytd_vocabulary_1001: [localWord("w1", "ephemeral", "uuid-w1")],
+  };
+  let networkUp = false;
+  // The server refuses every write, so the upload of the word the user
+  // captured again never lands.
+  const fetchImpl = async (url, options) => {
+    if (!networkUp) throw new Error("the network is down");
+    const method = (options && options.method) || "GET";
+    if (method === "POST" || method === "DELETE") {
+      return { ok: false, status: 500, json: async () => ({ error: "boom" }) };
+    }
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        vocabulary: [cloudWord("w1", "ephemeral")],
+        serverTime: new Date().toISOString(),
+      }),
+    };
+  };
+  const { sandbox, calls } = loadCloudSync({ storage, fetchImpl });
+
+  // The user deletes the word while the network is down.
+  await sandbox.handleDeleteVocabulary("w1");
+
+  // The network comes back, but the server refuses the upload. The user
+  // captures the same word again.
+  networkUp = true;
+  await sandbox.handleSaveVocabulary({
+    term: "ephemeral",
+    translation: "短暂的",
+    explanation: "lasting a very short time",
+    sentence: "the sentence the word came from",
+    videoId: "abc123xyz",
+    videoTitle: "A video",
+    timestampSeconds: 42,
+  });
+
+  const deletesBefore = requestsOf(calls, "DELETE").length;
+  await sandbox.fullSyncVocabulary();
+
+  assert.equal(
+    requestsOf(calls, "DELETE").length,
+    deletesBefore,
+    "the server was asked to delete the word the user had just captured " +
+      "again, only because the upload had not landed yet: the word is on " +
+      "the device, so the delete must wait for it",
+  );
+  assert.equal(
+    plain(storage.ytd_vocabulary_1001 || []).length,
+    1,
+    "the word the user captured again is not on the device any more",
+  );
+});
+
 // ============================================================
 // 3. The cap does not drop words silently
 // ============================================================
@@ -555,22 +735,44 @@ test("the vocabulary store tells the user when it drops an old word", async () =
     ),
     `the user was not told that a word was dropped: ${JSON.stringify(warnings)}`,
   );
+
+  // The user cannot see the console, so a warning there is not a signal.
+  // The loss has to be written down where the panel can find it and say
+  // it out loud.
+  const record = plain(storage.ytd_vocabulary_dropped);
+  assert.ok(
+    record,
+    "the store dropped a word and left no record the user could ever see",
+  );
+  assert.equal(
+    Number(record.lastCount),
+    1,
+    `the record does not say how many words were dropped: ${JSON.stringify(record)}`,
+  );
 });
 
 test("the panel knows the vocabulary store's cap", () => {
   // The panel shows how many words are kept. If the cap changes, that
   // number has to change with it, so it must not be a second copy of the
-  // number that lives in the store.
+  // number that lives in the store. Both sides have to read the one
+  // number that settings.js holds.
   const panel = read("sidepanel.js");
   const cloudSync = read("cloud-sync.js");
+  const settings = read("settings.js");
+
+  assert.match(
+    settings,
+    /MAX_LOCAL_VOCABULARY\s*=\s*\d+/,
+    "settings.js does not hold the word cap",
+  );
   assert.match(
     panel,
-    /LOCAL_VOCAB_LIMIT|MAX_LOCAL_VOCAB|VOCAB_LIMIT/i,
-    "the panel does not know how many words are kept",
+    /YTD_SETTINGS\.MAX_LOCAL_VOCABULARY/,
+    "the panel keeps its own copy of the word limit instead of reading the shared one",
   );
   assert.match(
     cloudSync,
-    /items\.length > 500|MAX_LOCAL_VOCAB|VOCAB_LIMIT/i,
-    "the store's cap is not a named constant",
+    /YTD_SETTINGS\.MAX_LOCAL_VOCABULARY/,
+    "the store keeps its own copy of the word limit instead of reading the shared one",
   );
 });

@@ -1891,6 +1891,43 @@ body {
   border: 1px solid var(--border);
 }
 
+/* The vocabulary says the same thing about the words: how many are kept,
+   and what happens when the store has to let one go. */
+.words-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding-bottom: var(--sp-2);
+  margin-bottom: var(--sp-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.words-count {
+  font-family: var(--font-sans);
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+.words-warning {
+  font-family: var(--font-sans);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--accent-hover);
+  background: var(--accent-dim);
+  border-radius: var(--r-sm);
+  padding: var(--sp-2) var(--sp-3);
+  margin-bottom: var(--sp-3);
+}
+
+/* A word that was dropped is a loss the user has to know about, so it
+   gets its own tone - the same one the notes use. */
+.words-dropped {
+  color: var(--text);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+}
+
 /* The star. It is a real button, so it is reachable and it announces its
    state. */
 .note-star {

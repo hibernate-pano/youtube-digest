@@ -79,6 +79,13 @@ const LOCAL_NOTE_LIMIT =
   typeof YTD_SETTINGS !== "undefined" && YTD_SETTINGS.MAX_LOCAL_NOTES
     ? YTD_SETTINGS.MAX_LOCAL_NOTES
     : 100;
+// The same rule for the words: the number that really limits the user is
+// the one the store enforces, so the panel reads it from the shared
+// settings instead of keeping a second copy that drifts.
+const LOCAL_VOCAB_LIMIT =
+  typeof YTD_SETTINGS !== "undefined" && YTD_SETTINGS.MAX_LOCAL_VOCABULARY
+    ? YTD_SETTINGS.MAX_LOCAL_VOCABULARY
+    : 500;
 // The cached digests keep 20 videos for 30 days.
 const LIBRARY_MAX_ENTRIES = 20;
 const LIBRARY_MAX_AGE_DAYS = 30;
@@ -314,6 +321,11 @@ const PANEL_COPY = {
       "You are close to the note limit. When it is reached, the oldest note is dropped first.",
     notesDropped:
       "Last time you saved a note, {count} older note(s) were removed to stay under the {limit}-note limit on this device.",
+    wordsCount: "{count} / {limit}",
+    wordsNearLimit:
+      "You are close to the word limit. When it is reached, the oldest word is dropped first.",
+    wordsDropped:
+      "Last time you saved a word, {count} older word(s) were removed to stay under the {limit}-word limit on this device.",
     exportNotes: "Export Markdown",
     exportNotesCopied: "Markdown copied",
     exportNotesFailed: "The notes could not be copied.",
@@ -479,6 +491,10 @@ const PANEL_COPY = {
       "笔记快到上限了。达到上限后，最旧的笔记会先被清掉。",
     notesDropped:
       "上次保存笔记时，有 {count} 条更早的笔记被清理掉了（这台设备最多保留 {limit} 条）。",
+    wordsCount: "{count} / {limit}",
+    wordsNearLimit: "词汇快到上限了。达到上限后，最旧的生词会先被清掉。",
+    wordsDropped:
+      "上次保存生词时，有 {count} 条更早的生词被清理掉了（这台设备最多保留 {limit} 条）。",
     exportNotes: "导出 Markdown",
     exportNotesCopied: "Markdown 已复制",
     exportNotesFailed: "笔记没能复制成功。",
@@ -4424,6 +4440,79 @@ async function loadNotesDroppedNotice() {
 }
 
 /**
+ * Shows the word count against the limit that really applies, and warns
+ * before the oldest words start disappearing.
+ */
+function renderWordsCount() {
+  const countEl = document.getElementById("wordsCount");
+  const warningEl = document.getElementById("wordsLimitWarning");
+  const count = vocabularyItems.length;
+
+  if (countEl) {
+    countEl.textContent = panelCopyFormat("wordsCount", {
+      count: String(count),
+      limit: String(LOCAL_VOCAB_LIMIT),
+    });
+  }
+  if (warningEl) {
+    const nearLimit = count >= LOCAL_VOCAB_LIMIT - 10;
+    warningEl.hidden = !nearLimit;
+    if (nearLimit) warningEl.textContent = panelCopy("wordsNearLimit");
+  }
+}
+
+/**
+ * Says out loud that the store dropped old words.
+ *
+ * The same rule as the notes: the store records the drop, and this reads
+ * that record and puts it in front of the user. A word that disappears
+ * without a word is a word the user lost, and a word is exactly what a
+ * learner cannot afford to lose.
+ *
+ * The record is namespaced per account, the same way the words are, so a
+ * drop that happened under one account is never shown under another.
+ */
+async function loadWordsDroppedNotice() {
+  const notice = document.getElementById("wordsDroppedNotice");
+  if (!notice) return;
+
+  try {
+    let githubId = "";
+    const sessionKey =
+      typeof YTD_SETTINGS !== "undefined" && YTD_SETTINGS.GITHUB_SESSION_KEY
+        ? YTD_SETTINGS.GITHUB_SESSION_KEY
+        : "ytd_github_session";
+    const stored = await chrome.storage.local.get(sessionKey);
+    const session = stored?.[sessionKey];
+    if (session && session.githubId) githubId = session.githubId;
+
+    const droppedKey =
+      typeof YTD_SETTINGS !== "undefined" && YTD_SETTINGS.vocabularyDroppedKey
+        ? YTD_SETTINGS.vocabularyDroppedKey(githubId)
+        : githubId
+          ? `ytd_vocabulary_dropped_${githubId}`
+          : "ytd_vocabulary_dropped";
+
+    const dropped = await chrome.storage.local.get(droppedKey);
+    const record = dropped?.[droppedKey];
+    const count = Number(record?.lastCount) || 0;
+
+    if (!count) {
+      notice.hidden = true;
+      notice.textContent = "";
+      return;
+    }
+    notice.hidden = false;
+    notice.textContent = panelCopyFormat("wordsDropped", {
+      count: String(count),
+      limit: String(LOCAL_VOCAB_LIMIT),
+    });
+  } catch (error) {
+    notice.hidden = true;
+  }
+}
+
+/**
  * Stars or unstars a note. The star is the promise the dashboard's Favorites
  * tab makes, so the panel has to be able to set it.
  */
@@ -4561,6 +4650,8 @@ function renderVocabulary() {
   if (!list) return;
 
   list.innerHTML = "";
+  renderWordsCount();
+  void loadWordsDroppedNotice();
 
   if (!vocabularyItems.length) {
     const empty = document.createElement("p");
