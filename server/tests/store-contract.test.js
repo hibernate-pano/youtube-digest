@@ -185,6 +185,25 @@ for (const name of ["MemoryStore", "NeonStore"]) {
     assert.equal(await f.store.submitReview(ALICE, "no-such-vocabulary", 3), null);
   });
 
+  test(`[${name}] a brand-new note is not a favourite until the client says so`, async () => {
+    const f = createFixture(name);
+    const created = await f.store.createNote(ALICE, {
+      clientId: "note_new",
+      videoId: "abc123xyz",
+      videoTitle: "",
+      channelName: "",
+      timestampSeconds: 0,
+      quote: "",
+      note: "just a note",
+    });
+
+    assert.equal(
+      created.starred,
+      false,
+      "a note that never mentioned the flag must not become a favourite",
+    );
+  });
+
   test(`[${name}] notes keep the stored starred flag when the client omits it`, async () => {
     const f = createFixture(name);
     const created = await f.addNote(ALICE, { clientId: "note_1", note: "text", starred: true });
@@ -404,6 +423,30 @@ for (const name of ["MemoryStore", "NeonStore"]) {
     );
   });
 }
+
+test("[NeonStore] the sparse note update keeps the tri-state starred rule", async () => {
+  const { store, calls } = createFixture("NeonStore");
+  const created = await store.createNote(ALICE, {
+    clientId: "note_tri_state",
+    note: "text",
+    starred: true,
+  });
+
+  await store.updateNote(ALICE, created.id, { note: "edited", starred: true });
+
+  // The sparse update only writes `starred` when the client sent a boolean,
+  // so the bound parameter is never null here and the fallback of the
+  // coalesce cannot be observed through the store. The statement text is the
+  // only place the rule lives, so it is pinned here: a fallback of `false`
+  // would clear every favourite the moment a client ever sent a null.
+  const update = calls.find(/update notes set/).pop();
+  assert.ok(update, "the sparse update must run");
+  assert.match(
+    update.sql,
+    /starred = coalesce\(__VAL__, starred\)/,
+    "the sparse update must fall back to the stored flag, never to a literal",
+  );
+});
 
 test("[NeonStore] listDueReviews SQL scopes the joined vocabulary to the caller", async () => {
   const { store, calls } = createFixture("NeonStore");

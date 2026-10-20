@@ -187,76 +187,14 @@ function loadBackgroundHelpers({
           }),
       },
     },
-    // The real settings module is the base, so a function that is added to
-    // settings.js is available here the moment it exists. Only the pieces
-    // the test needs to control are overridden.
+    // The real settings module, with only the deployment value redirected.
+    // The worker reads its provider registry, its chat endpoint and its
+    // canonical URL builder from here, so a hand-written copy of those
+    // functions would test a module that no longer exists: a wrong endpoint
+    // in settings.js would still leave every test in this file green.
     YTD_SETTINGS: {
       ...require("../settings.js"),
-      STORAGE_KEY: "ytd_settings",
-      GITHUB_SESSION_KEY: "ytd_github_session",
-      SYNC_SESSION_EXPIRED: "SYNC_SESSION_EXPIRED",
-      SYNC_EXPIRED_KEY: "ytd_sync_expired",
-      UI_LANGUAGE_STORAGE_KEY: "ytd_options_language",
-      normalizeUiLanguage: (language) =>
-        language === "zh-CN" ? "zh-CN" : "en",
-      translateSyncCopy: (language, key, params = {}) => {
-        const zh = language === "zh-CN";
-        const table = {
-          expiredLabel: zh ? "同步已过期" : "Sync expired",
-          expiredTitle: zh
-            ? "笔记仍保存在这台设备上，但 GitHub 登录已过期，云端备份已停止。点击重新登录以恢复同步。"
-            : "Your notes are still saved on this device, but the cloud backup stopped because the GitHub session expired. Click to sign in again and resume syncing.",
-          signedInTitle: zh
-            ? `已登录为 ${params.login}。点击退出登录。`
-            : `Signed in as ${params.login}. Click to sign out.`,
-        };
-        return table[key] ?? "";
-      },
       SERVER_BASE_URL: "https://sync.test",
-      normalize: (value) => value,
-      getProvider: (id) => ({
-        deepseek: {
-          name: "DeepSeek V4 Flash",
-          baseUrl: "https://api.deepseek.com",
-          model: "deepseek-v4-flash",
-          apiKeyField: "aiApiKey",
-          usesThinkingDisabled: true,
-          supportsJsonMode: true,
-        },
-        minimax: {
-          name: "MiniMax M3",
-          baseUrl: "https://api.minimaxi.com/v1",
-          model: "MiniMax-M3",
-          apiKeyField: "minimaxApiKey",
-          usesThinkingDisabled: false,
-          supportsJsonMode: true,
-        },
-        "opencode-go": {
-          name: "OpenCode Go · DeepSeek V4 Flash",
-          baseUrl: "https://opencode.ai/zen/go/v1",
-          model: "deepseek-v4-flash",
-          apiKeyField: "opencodeGoApiKey",
-          usesThinkingDisabled: false,
-          supportsJsonMode: true,
-        },
-      })[id] || {
-        name: "AI provider",
-        baseUrl: "https://api.deepseek.com",
-        model: "deepseek-v4-flash",
-        apiKeyField: "aiApiKey",
-        usesThinkingDisabled: false,
-        supportsJsonMode: false,
-      },
-      chatCompletionsUrl: (providerId) => {
-        const baseUrl = {
-          deepseek: "https://api.deepseek.com",
-          minimax: "https://api.minimaxi.com/v1",
-          "opencode-go": "https://opencode.ai/zen/go/v1",
-        }[providerId] || "https://api.deepseek.com";
-        return `${baseUrl}/chat/completions`;
-      },
-      canonicalYouTubeUrl: (videoId) =>
-        `https://www.youtube.com/watch?v=${videoId}`,
     },
   };
   sandbox.globalThis = sandbox;

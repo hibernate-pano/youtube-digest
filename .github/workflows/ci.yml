@@ -49,8 +49,27 @@ jobs:
         with:
           node-version: "22"
 
+      # The release check has its own step, so a broken prompt file or a
+      # drifted manifest fails the build with its own message instead of
+      # surfacing as a confusing packaging error.
+      - name: Run the release check
+        run: npm run check
+
       - name: Build allowlisted ZIP
         run: npm run package
 
       - name: Show packaged files
         run: unzip -Z1 dist/youtube-digest-v*.zip
+
+      # Listing the archive is not enough: the ZIP has to contain exactly the
+      # allowlisted files, nothing missing and nothing extra.
+      - name: Verify the packaged file list
+        run: |
+          expected="$(bash scripts/check-release.sh --print-files | LC_ALL=C sort)"
+          actual="$(unzip -Z1 dist/youtube-digest-v*.zip | LC_ALL=C sort)"
+          if [ "$expected" != "$actual" ]; then
+            echo "The ZIP contents do not match the release file list" >&2
+            diff <(printf '%s\n' "$expected") <(printf '%s\n' "$actual") >&2 || true
+            exit 1
+          fi
+          echo "The ZIP contains exactly the allowlisted files."
