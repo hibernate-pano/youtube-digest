@@ -38,13 +38,99 @@
       <h1 data-i18n="heading">Privacy</h1>
       <p><em data-i18n="lastUpdated" data-date="2026-10-20">Last updated: 2026-10-20</em></p>
 
-      <h2 data-i18n="whatThisIsHeading">What this service is</h2>
+      <h2 data-i18n="whatThisIsHeading">What this is</h2>
       <p data-i18n="whatThisIs">
-        YouTube Digest is an open-source Chrome extension (bring-your-own-key) with an optional
-        GitHub-account sync service. This page covers the sync service at ytd.panbo.space.
+        YouTube Digest is an open-source Chrome extension you install yourself
+        (bring-your-own-key) with an optional GitHub-account sync service. This page covers
+        both: the extension, and the sync service at ytd.panbo.space.
       </p>
 
-      <h2 data-i18n="whatWeStoreHeading">What we store</h2>
+      <h2 data-i18n="extensionHeading">The extension</h2>
+      <p data-i18n="extensionIntro">
+        YouTube Digest has no account of its own, no analytics, no advertising and no
+        telemetry. It reads the captions of the video you are watching and turns them into
+        something you can search, translate and keep.
+      </p>
+
+      <h3 data-i18n="extensionHandlesHeading">What it handles</h3>
+      <ul>
+        <li data-i18n="handleVideo">
+          the video you are watching: its canonical URL, its video ID, and metadata such as
+          the title, the channel, the description and the duration;
+        </li>
+        <li data-i18n="handleTranscript">
+          the transcript: its text and its timestamps, the text you select in it, and the
+          transcript around it;
+        </li>
+        <li data-i18n="handleNotes">
+          what you keep: the notes you save, the words you keep for review, and the review
+          schedule attached to them;
+        </li>
+        <li data-i18n="handleKeys">
+          your settings: your API keys and which provider you picked;
+        </li>
+        <li data-i18n="handleCache">
+          cached results: transcripts, summaries and translations, so that opening a video
+          again costs nothing.
+        </li>
+      </ul>
+
+      <h3 data-i18n="extensionGoesHeading">Where that data goes</h3>
+      <ul>
+        <li>
+          <strong data-i18n="goesCaptionsLabel">Captions</strong>
+          <span data-i18n="goesCaptions">are read out of the page you are already watching. On that
+            path nothing is sent to anybody.</span>
+        </li>
+        <li>
+          <strong data-i18n="goesSupadataLabel">The fallback</strong>
+          <span data-i18n="goesSupadata">when the page cannot be read, the canonical video URL
+            goes to Supadata, with your own key, to fetch the transcript. The key is optional, and
+            the request asks for caption tracks only.</span>
+        </li>
+        <li>
+          <strong data-i18n="goesAiLabel">The AI features</strong>
+          <span data-i18n="goesAi">the text you ask to be summarised, translated,
+            explained or polished goes to the AI provider you chose in Settings, with your own
+            key. That provider receives the transcript, the text you selected, and the title,
+            channel and description of the video.</span>
+        </li>
+        <li>
+          <strong data-i18n="goesSessionLabel">One extra header</strong>
+          <span data-i18n="goesSession">OpenCode Go routes on a session id, so a request
+            to it also carries one. Your browser makes that id once, at random, and keeps it. It
+            says nothing about you, it goes to that provider only, and nobody else has it.</span>
+        </li>
+      </ul>
+
+      <h3 data-i18n="extensionLocalHeading">What stays on your device</h3>
+      <p data-i18n="extensionLocal">
+        Everything else stays in your Chrome profile: your API keys, your notes (the 100 most
+        recent), your words (the 500 most recent), and a cache limited to 20 videos and 30 days.
+        Your keys are never sent to the sync service. Settings can clear the cache, delete
+        every note, or reset the extension's data.
+      </p>
+
+      <h3 data-i18n="extensionPermissionsHeading">What the permissions are for</h3>
+      <ul>
+        <li data-i18n="permSidePanel">sidePanel: to show the panel beside the video.</li>
+        <li data-i18n="permStorage">storage: to keep your settings, keys, notes and cache on the device.</li>
+        <li data-i18n="permUnlimited">
+          unlimitedStorage: so the cached transcripts, translations and summaries of long
+          videos fit on the device. It sends nothing anywhere.
+        </li>
+        <li data-i18n="permTabs">tabs: to find the YouTube tab you are watching.</li>
+        <li data-i18n="permScripting">
+          scripting: to place the panel's controls on the YouTube page, and to read the
+          captions that page already carries.
+        </li>
+        <li data-i18n="permHosts">
+          Host access to YouTube, Supadata, the AI providers and this sync service, for
+          exactly those requests.
+        </li>
+      </ul>
+
+      <h2 data-i18n="whatWeStoreHeading">What the sync service stores</h2>
       <ul>
         <li><strong data-i18n="identityLabel">Your GitHub identity</strong><span data-i18n="storeIdentity">(id, login name) so your account can be recognised.</span></li>
         <li><strong data-i18n="notesLabel">Your notes</strong><span data-i18n="storeNotes">that you write while watching a video, plus the

@@ -15,10 +15,49 @@
       backToDashboard: "Back to dashboard",
       heading: "Privacy",
       lastUpdated: "Last updated: {date}",
-      whatThisIsHeading: "What this service is",
+      whatThisIsHeading: "What this is",
       whatThisIs:
-        "YouTube Digest is an open-source Chrome extension (bring-your-own-key) with an optional GitHub-account sync service. This page covers the sync service at ytd.panbo.space.",
-      whatWeStoreHeading: "What we store",
+        "YouTube Digest is an open-source Chrome extension you install yourself (bring-your-own-key) with an optional GitHub-account sync service. This page covers both: the extension, and the sync service at ytd.panbo.space.",
+      extensionHeading: "The extension",
+      extensionIntro:
+        "YouTube Digest has no account of its own, no analytics, no advertising and no telemetry. It reads the captions of the video you are watching and turns them into something you can search, translate and keep.",
+      extensionHandlesHeading: "What it handles",
+      handleVideo:
+        "the video you are watching: its canonical URL, its video ID, and metadata such as the title, the channel, the description and the duration;",
+      handleTranscript:
+        "the transcript: its text and its timestamps, the text you select in it, and the transcript around it;",
+      handleNotes:
+        "what you keep: the notes you save, the words you keep for review, and the review schedule attached to them;",
+      handleKeys: "your settings: your API keys and which provider you picked;",
+      handleCache:
+        "cached results: transcripts, summaries and translations, so that opening a video again costs nothing.",
+      extensionGoesHeading: "Where that data goes",
+      goesCaptionsLabel: "Captions",
+      goesCaptions:
+        "are read out of the page you are already watching. On that path nothing is sent to anybody.",
+      goesSupadataLabel: "The fallback:",
+      goesSupadata:
+        "when the page cannot be read, the canonical video URL goes to Supadata, with your own key, to fetch the transcript. The key is optional, and the request asks for caption tracks only.",
+      goesAiLabel: "The AI features:",
+      goesAi:
+        "the text you ask to be summarised, translated, explained or polished goes to the AI provider you chose in Settings, with your own key. That provider receives the transcript, the text you selected, and the title, channel and description of the video.",
+      goesSessionLabel: "One extra header:",
+      goesSession:
+        "OpenCode Go routes on a session id, so a request to it also carries one. Your browser makes that id once, at random, and keeps it. It says nothing about you, it goes to that provider only, and nobody else has it.",
+      extensionLocalHeading: "What stays on your device",
+      extensionLocal:
+        "Everything else stays in your Chrome profile: your API keys, your notes (the 100 most recent), your words (the 500 most recent), and a cache limited to 20 videos and 30 days. Your keys are never sent to the sync service. Settings can clear the cache, delete every note, or reset the extension's data.",
+      extensionPermissionsHeading: "What the permissions are for",
+      permSidePanel: "sidePanel: to show the panel beside the video.",
+      permStorage: "storage: to keep your settings, keys, notes and cache on the device.",
+      permUnlimited:
+        "unlimitedStorage: so the cached transcripts, translations and summaries of long videos fit on the device. It sends nothing anywhere.",
+      permTabs: "tabs: to find the YouTube tab you are watching.",
+      permScripting:
+        "scripting: to place the panel's controls on the YouTube page, and to read the captions that page already carries.",
+      permHosts:
+        "Host access to YouTube, Supadata, the AI providers and this sync service, for exactly those requests.",
+      whatWeStoreHeading: "What the sync service stores",
       identityLabel: "Your GitHub identity",
       notesLabel: "Your notes",
       exportLabel: "Export:",
@@ -59,10 +98,46 @@
       backToDashboard: "返回控制台",
       heading: "隐私",
       lastUpdated: "最后更新：{date}",
-      whatThisIsHeading: "这个服务是什么",
+      whatThisIsHeading: "这是什么",
       whatThisIs:
-        "YouTube Digest 是一个开源的 Chrome 扩展（需要自备 API Key），并附带一个可选的 GitHub 账号同步服务。本页说明的是 ytd.panbo.space 上的同步服务。",
-      whatWeStoreHeading: "我们保存什么",
+        "YouTube Digest 是一个你自己安装的开源 Chrome 扩展（需要自备 API Key），并附带一个可选的 GitHub 账号同步服务。本页同时说明这两部分：扩展本身，以及 ytd.panbo.space 上的同步服务。",
+      extensionHeading: "扩展本身",
+      extensionIntro:
+        "YouTube Digest 没有自己的账号体系，没有分析统计，没有广告，也没有行为追踪。它读出你正在看的视频的字幕，把它变成可以搜索、翻译和保存的东西。",
+      extensionHandlesHeading: "它会处理什么",
+      handleVideo:
+        "你正在看的视频：它的标准地址、视频 ID，以及标题、频道、简介和时长等元信息；",
+      handleTranscript:
+        "字幕：它的文字和时间戳、你在里面选中的文字，以及它前后的上下文；",
+      handleNotes:
+        "你留下的东西：你保存的笔记、你收集来复习的单词，以及附着在它们上面的复习计划；",
+      handleKeys: "你的设置：你的 API Key，以及你选了哪个服务商；",
+      handleCache: "缓存结果：字幕、摘要和翻译，所以同一个视频再打开一次不花钱。",
+      extensionGoesHeading: "这些数据去了哪里",
+      goesCaptionsLabel: "字幕",
+      goesCaptions: "是从你正在看的那个页面里读出来的。这条路上不发给任何人任何东西。",
+      goesSupadataLabel: "兜底那条路：",
+      goesSupadata:
+        "当页面读不到时，标准的视频地址会带着你自己的 Key 发给 Supadata 去取字幕。这个 Key 是可选的，而且请求只要字幕轨道。",
+      goesAiLabel: "AI 功能：",
+      goesAi:
+        "你要求摘要、翻译、讲解或润色的文字，会带着你自己的 Key 发给设置里选中的那个 AI 服务商。它会收到字幕、你选中的那段文字，以及视频的标题、频道和简介。",
+      goesSessionLabel: "多出来的一个请求头：",
+      goesSession:
+        "OpenCode Go 按会话 ID 路由，所以发往它的请求会带一个。你的浏览器随机生成一次就保存下来。它不包含关于你的任何信息，只发给那个服务商，别人也拿不到。",
+      extensionLocalHeading: "留在你设备上的东西",
+      extensionLocal:
+        "其余的全部留在你的 Chrome 用户配置里：你的 API Key、你的笔记（最近 100 条）、你的单词（最近 500 个），以及一个最多 20 个视频、保留 30 天的缓存。你的 Key 不会发给同步服务。设置里可以清缓存、删除全部笔记，或者重置扩展数据。",
+      extensionPermissionsHeading: "这些权限用来做什么",
+      permSidePanel: "sidePanel：在视频旁边显示面板。",
+      permStorage: "storage：把设置、Key、笔记和缓存留在设备上。",
+      permUnlimited:
+        "unlimitedStorage：让长视频的字幕、翻译和摘要缓存能装得下。它不会把任何东西发出去。",
+      permTabs: "tabs：找到你正在看的那个 YouTube 标签页。",
+      permScripting:
+        "scripting：在 YouTube 页面上放面板的控件，并读出那个页面本来就带着的字幕。",
+      permHosts: "对 YouTube、Supadata、AI 服务商和本同步服务的域名访问权限，只用于上面那些请求。",
+      whatWeStoreHeading: "同步服务保存什么",
       identityLabel: "你的 GitHub 身份",
       notesLabel: "你写下的笔记",
       exportLabel: "导出：",
@@ -212,7 +287,15 @@
     });
   }
 
-  window.YTD_PRIVACY = { copy, normalizeLanguage, detectLanguage, setLanguage };
+  window.YTD_PRIVACY = {
+    copy,
+    normalizeLanguage,
+    detectLanguage,
+    setLanguage,
+    // The tables are exposed so the tests can check that a key has a
+    // translation of its own, and not only the English fallback.
+    tables: COPY,
+  };
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", setup);

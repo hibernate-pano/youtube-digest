@@ -54,7 +54,7 @@ const text = (window) => window.document.body.textContent;
 test("the privacy page opens in the language the URL asks for", async () => {
   const { window } = await bootPrivacy({ url: "https://ytd.example/privacy.html?lang=zh-CN" });
   assert.equal(window.document.documentElement.lang, "zh-CN");
-  assert.match(text(window), /我们保存什么/);
+  assert.match(text(window), /同步服务保存什么/);
   assert.match(text(window), /你写下的笔记/);
 });
 
@@ -74,18 +74,18 @@ test("a reader whose browser is Chinese gets the Chinese page", async () => {
 test("the privacy page is English when nothing says otherwise", async () => {
   const { window } = await bootPrivacy({ language: "en-US" });
   assert.equal(window.document.documentElement.lang, "en");
-  assert.match(text(window), /What we store/);
+  assert.match(text(window), /What the sync service stores/);
 });
 
 test("the language switcher changes the page in place", async () => {
   const { window } = await bootPrivacy({ url: "https://ytd.example/privacy.html?lang=en" });
-  assert.match(text(window), /What we store/);
+  assert.match(text(window), /What the sync service stores/);
   window.document
     .querySelector('#langSwitch button[data-lang="zh-CN"]')
     .dispatchEvent(new window.Event("click", { bubbles: true }));
   await settle(window);
   assert.equal(window.document.documentElement.lang, "zh-CN");
-  assert.match(text(window), /我们保存什么/);
+  assert.match(text(window), /同步服务保存什么/);
   assert.doesNotMatch(text(window), /What we store/);
   // The choice is remembered for the next page.
   assert.equal(window.localStorage.getItem("ytd_dashboard_lang"), "zh-CN");
@@ -124,6 +124,41 @@ test("every marked string on the privacy page has a translation", async () => {
     assert.notEqual(copy(key), "", `no Chinese copy for "${key}"`);
     copy.language = "en";
   }
+  // The copy function falls back to English when a language is missing a
+  // key, so the check above cannot tell a translation from a fallback. The
+  // Chinese reader would simply get the English sentence, which is the one
+  // thing this page must not do.
+  const tables = window.YTD_PRIVACY.tables;
+  for (const key of keys) {
+    assert.ok(
+      typeof tables["zh-CN"][key] === "string" && tables["zh-CN"][key].length > 0,
+      `the Chinese page falls back to English for "${key}"`,
+    );
+    assert.ok(
+      typeof tables.en[key] === "string" && tables.en[key].length > 0,
+      `the English page has no copy for "${key}"`,
+    );
+  }
+});
+
+test("the privacy page says where the extension sends its data", async () => {
+  // The store's privacy policy URL has to answer for the whole extension,
+  // not only for the sync service. A reader has to learn here that the
+  // transcript can reach Supadata and the AI provider they picked, and
+  // that the API keys stay on the device.
+  const english = await bootPrivacy({ language: "en" });
+  const englishText = text(english.window);
+  assert.match(englishText, /Supadata/);
+  assert.match(englishText, /AI provider/);
+  assert.match(englishText, /session id/);
+  assert.match(englishText, /stays in your Chrome profile/);
+
+  const chinese = await bootPrivacy({ language: "zh-CN" });
+  const chineseText = text(chinese.window);
+  assert.match(chineseText, /Supadata/);
+  assert.match(chineseText, /AI 服务商/);
+  assert.match(chineseText, /会话 ID/);
+  assert.match(chineseText, /留在你的 Chrome 用户配置里/);
 });
 
 test("neither dashboard page can violate its own Content-Security-Policy", async () => {
