@@ -45,6 +45,7 @@ function loadWorker({
   hasSupadataKey = true,
   localRetryDelays = null,
   captionRequestTimeout = null,
+  captionStartTimeout = null,
 } = {}) {
   const listeners = { addListener() {} };
   const requests = [];
@@ -148,18 +149,24 @@ function loadWorker({
     YTD_SETTINGS: {
       ...require("../settings.js"),
       SERVER_BASE_URL: "https://sync.test",
-      // The wait between the attempts to read the captions. A test that
-      // only needs the page to be asked twice can make it quick.
-      ...(localRetryDelays ? { LOCAL_CAPTION_RETRY_DELAYS_MS: localRetryDelays } : {}),
-      // How long the page may take to finish its own caption request.
-      ...(captionRequestTimeout !== null
-        ? { LOCAL_CAPTION_REQUEST_TIMEOUT_MS: captionRequestTimeout }
-        : {}),
     },
   };
   sandbox.globalThis = sandbox;
   vm.runInNewContext(read("settings.js"), sandbox);
   sandbox.YTD_SETTINGS.SERVER_BASE_URL = "https://sync.test";
+  // The settings file assigns its own object when it runs, so an override
+  // put into the sandbox before it is loaded is thrown away. A test that
+  // asked for a quick timeout and quietly got the production one was
+  // testing the wrong thing, and slowly.
+  if (localRetryDelays) {
+    sandbox.YTD_SETTINGS.LOCAL_CAPTION_RETRY_DELAYS_MS = localRetryDelays;
+  }
+  if (captionRequestTimeout !== null) {
+    sandbox.YTD_SETTINGS.LOCAL_CAPTION_REQUEST_TIMEOUT_MS = captionRequestTimeout;
+  }
+  if (captionStartTimeout !== null) {
+    sandbox.YTD_SETTINGS.LOCAL_CAPTION_START_TIMEOUT_MS = captionStartTimeout;
+  }
   vm.runInNewContext(read("cloud-sync.js"), sandbox);
   vm.runInNewContext(read("background.js"), sandbox);
 
@@ -197,6 +204,20 @@ function loadWorker({
  *   to finish the caption request it was asked for. YouTube makes the
  *   automatic captions when they are first asked for, and the page only
  *   lists the request once it has come back.
+ * @param {number} options.playerStartsAfterMs how long the video takes to
+ *   start playing. YouTube asks the page for the captions when the video
+ *   plays, so a page that has not started yet has nothing to read.
+ * @param {boolean} options.playerLoadsTrackOnlyWhenPlaying the page asks
+ *   for the captions when the video starts, not when the player is asked.
+ * @param {boolean} options.videoNeverStarts the video never plays, so the
+ *   page never asks for the captions at all.
+ * @param {string} options.playerVideoId the video the player is running
+ *   right now. An advertisement is a different video, and the page asks for
+ *   the advertisement's captions while it runs.
+ * @param {number} options.playerVideoIdAfterMs how long the advertisement
+ *   runs before the video takes the player over.
+ * @param {number} options.playerState the state the player reports. 1 is
+ *   playing, -1 is unstarted.
  * @returns {{setOptionCalls: Array<Object>}} what the player was asked
  */
 function installFakePage(
@@ -210,6 +231,13 @@ function installFakePage(
   const sequence = options.videoIds || null;
   let reads = 0;
   let asked = false;
+  let playerState = Number(
+    options.playerState ?? (options.videoNeverStarts ? -1 : 1),
+  );
+  // Which video the player is running right now. An advertisement is a
+  // different video, and the page asks for the advertisement's captions,
+  // not the ones the user wants.
+  let runningVideoId = String(options.playerVideoId ?? videoId);
 
   // The page can be showing a different video than it was a moment ago.
   // The first read sees the first video in the list, the next read the
@@ -236,6 +264,24 @@ function installFakePage(
           }
         : undefined,
     }),
+    getPlayerState: () => playerState,
+    getVideoData: () => ({ video_id: runningVideoId }),
+  };
+
+  // The page asks for the captions when the video starts playing. That is
+  // what YouTube does, and it is why the read has to wait for the video.
+  const pushTrack = () => {
+    if (asked || !options.playerLoadsTrack) return;
+    asked = true;
+    // The page finishes the request after a while: YouTube makes the
+    // captions when they are first asked for, and the page only lists the
+    // request once it has come back.
+    const delay = Number(options.playerLoadsTrackAfterMs || 0);
+    if (delay > 0) {
+      setTimeout(() => used.push(options.playerLoadsTrack), delay);
+    } else {
+      used.push(options.playerLoadsTrack);
+    }
   };
 
   if (options.withPlayer) {
@@ -245,20 +291,29 @@ function installFakePage(
         group === "captions" &&
         (name === "track" || name === "load" || name === "reload") &&
         options.playerLoadsTrack &&
-        !asked
+        !options.playerLoadsTrackOnlyWhenPlaying
       ) {
-        asked = true;
-        // The page finishes the request after a while: YouTube makes the
-        // captions when they are first asked for, and the page only lists
-        // the request once it has come back.
-        const delay = Number(options.playerLoadsTrackAfterMs || 0);
-        if (delay > 0) {
-          setTimeout(() => used.push(options.playerLoadsTrack), delay);
-        } else {
-          used.push(options.playerLoadsTrack);
-        }
+        pushTrack();
       }
     };
+  }
+
+  const startsAfterMs = Number(options.playerStartsAfterMs || 0);
+  if (startsAfterMs > 0) {
+    setTimeout(() => {
+      playerState = 1;
+      if (options.playerLoadsTrackOnlyWhenPlaying) pushTrack();
+    }, startsAfterMs);
+  }
+
+  // The advertisement ends and the video takes over the player. The page
+  // asks for the captions then, and not before.
+  const adEndsAfterMs = Number(options.playerVideoIdAfterMs || 0);
+  if (adEndsAfterMs > 0) {
+    setTimeout(() => {
+      runningVideoId = videoId;
+      if (options.playerLoadsTrackOnlyWhenPlaying) pushTrack();
+    }, adEndsAfterMs);
   }
 
   sandbox.document = {
@@ -606,7 +661,10 @@ test("the page is given the time to finish its own caption request", async () =>
       withPlayer: true,
       playerLoadsTrack:
         "https://www.youtube.com/api/timedtext?v=dQw4w9WgXcQ&lang=en&pot=TOKEN",
-      playerLoadsTrackAfterMs: 400,
+      // The page takes a moment to answer. The wait has to be long enough
+      // for the answer, or the read gives up on a page that was about to
+      // reply.
+      playerLoadsTrackAfterMs: 900,
     },
   );
 
@@ -618,6 +676,166 @@ test("the page is given the time to finish its own caption request", async () =>
     request.url.includes("timedtext"),
   );
   assert.match(timedtext.url, /pot=TOKEN/, "the page's own caption URL was not used");
+  // The URL in the track list is a template, and YouTube answers a template
+  // with an empty body. A read that gives up on the page and uses the
+  // template has not read anything at all.
+  assert.equal(
+    worker.requests.filter(
+      (request) =>
+        request.url.includes("timedtext") && !request.url.includes("pot="),
+    ).length,
+    0,
+    "the worker gave up on the page and used the template URL",
+  );
+});
+
+test("the page is given time to start the video before the read gives up", async () => {
+  // YouTube asks the page for the captions when the video starts playing.
+  // A page that is still showing an advertisement has no caption request to
+  // read, and no amount of asking makes one. So the read waits for the
+  // video, and the subtitles arrive without a credit.
+  const worker = loadWorker({
+    captionRequestTimeout: 500,
+    captionStartTimeout: 3000,
+  });
+  installFakePage(
+    worker.sandbox,
+    [
+      {
+        baseUrl: "https://www.youtube.com/api/timedtext?v=dQw4w9WgXcQ&lang=en",
+        languageCode: "en",
+      },
+    ],
+    "dQw4w9WgXcQ",
+    {
+      withPlayer: true,
+      // The player says the video has not begun. It says so until the
+      // video starts, and the page asks for the captions only then.
+      playerState: -1,
+      playerLoadsTrack:
+        "https://www.youtube.com/api/timedtext?v=dQw4w9WgXcQ&lang=en&pot=TOKEN",
+      playerLoadsTrackOnlyWhenPlaying: true,
+      playerStartsAfterMs: 300,
+    },
+  );
+
+  const result = await worker.helpers.handleFetchTranscriptLocalFirst("dQw4w9WgXcQ", 7);
+
+  assert.equal(result.success, true, "the page was not waited for");
+  assert.equal(result.source, "local", "the subtitles were not read out of the page");
+  assert.equal(
+    worker.requests.filter((request) => request.url.includes("supadata")).length,
+    0,
+    "a credit was spent on a video the page was about to hand over",
+  );
+  const timedtext = worker.requests.find((request) =>
+    request.url.includes("timedtext"),
+  );
+  assert.match(timedtext.url, /pot=TOKEN/, "the page's own caption URL was not used");
+  // The URL in the track list is a template, and YouTube answers a template
+  // with an empty body. So a read that gives up on the page and uses the
+  // template has not read anything at all, and would spend a credit to
+  // find out.
+  assert.equal(
+    worker.requests.filter(
+      (request) =>
+        request.url.includes("timedtext") && !request.url.includes("pot="),
+    ).length,
+    0,
+    "the worker fell back to the template URL, which comes back empty",
+  );
+});
+
+test("a video behind an advertisement is waited for, and costs nothing", async () => {
+  // An advertisement is a video of its own, and the page asks for the
+  // advertisement's captions while it runs. The captions the user wants
+  // arrive when the advertisement is over and the video takes the player
+  // over. Giving up on the advertisement and reaching for the paid path
+  // would spend a credit on subtitles the page was about to hand over.
+  const worker = loadWorker({
+    captionRequestTimeout: 300,
+    captionStartTimeout: 3000,
+  });
+  installFakePage(
+    worker.sandbox,
+    [
+      {
+        baseUrl: "https://www.youtube.com/api/timedtext?v=dQw4w9WgXcQ&lang=en",
+        languageCode: "en",
+      },
+    ],
+    "dQw4w9WgXcQ",
+    {
+      withPlayer: true,
+      playerVideoId: "adVideo123",
+      playerVideoIdAfterMs: 800,
+      playerLoadsTrack:
+        "https://www.youtube.com/api/timedtext?v=dQw4w9WgXcQ&lang=en&pot=TOKEN",
+      playerLoadsTrackOnlyWhenPlaying: true,
+    },
+  );
+
+  const result = await worker.helpers.handleFetchTranscriptLocalFirst("dQw4w9WgXcQ", 7);
+
+  assert.equal(result.success, true, "the advertisement was not waited out");
+  assert.equal(result.source, "local", "the subtitles were not read out of the page");
+  assert.equal(
+    worker.requests.filter((request) => request.url.includes("supadata")).length,
+    0,
+    "a credit was spent while an advertisement was playing",
+  );
+  assert.equal(
+    worker.requests.filter(
+      (request) =>
+        request.url.includes("timedtext") && !request.url.includes("pot="),
+    ).length,
+    0,
+    "the worker fell back to the template URL, which comes back empty",
+  );
+});
+
+test("a video that has not started is said as such, and costs nothing", async () => {
+  // The page has the tracks, but the video has not started, so the page
+  // never asks for the captions. The user can start the video, and then
+  // the subtitles are there. Charging a credit for that would be charging
+  // for something the page was about to give away.
+  const worker = loadWorker({
+    captionRequestTimeout: 200,
+    captionStartTimeout: 400,
+  });
+  installFakePage(
+    worker.sandbox,
+    [
+      {
+        baseUrl: "https://www.youtube.com/api/timedtext?v=dQw4w9WgXcQ&lang=en",
+        languageCode: "en",
+      },
+    ],
+    "dQw4w9WgXcQ",
+    {
+      withPlayer: true,
+      videoNeverStarts: true,
+    },
+  );
+
+  const result = await worker.helpers.handleFetchTranscriptLocalFirst("dQw4w9WgXcQ", 7);
+
+  assert.equal(result.success, false);
+  assert.equal(
+    result.error,
+    "VIDEO_NOT_STARTED",
+    "a video that has not started is reported as something else",
+  );
+  assert.equal(
+    worker.requests.filter((request) => request.url.includes("supadata")).length,
+    0,
+    "a credit was spent on a video that had not started playing",
+  );
+  assert.equal(
+    worker.requests.filter((request) => request.url.includes("timedtext")).length,
+    0,
+    "the worker asked for captions it already knew the page had not made",
+  );
 });
 
 test("a lookup that fails outright is reported with a code, not a sentence", async () => {

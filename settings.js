@@ -133,6 +133,25 @@ var YTD_SETTINGS = (() => {
   const LOCAL_CAPTION_REQUEST_TIMEOUT_MS = 25_000;
 
   /**
+   * How long the video may be given to start playing.
+   *
+   * YouTube asks the page for the captions when the video starts playing.
+   * Until then the page has no caption request to read, and no amount of
+   * asking makes one: a page that is still showing an advertisement, or a
+   * video the user has not started yet, simply has nothing.
+   *
+   * So the read waits for the video to start. Waiting is free, the user is
+   * about to press play anyway, and without this wait a video with an
+   * advertisement in front of it would either fail or spend a credit on
+   * subtitles that the page was about to hand over for nothing.
+   *
+   * Thirty seconds is long enough for an advertisement to finish, and
+   * short enough that a user who has walked away is not left looking at a
+   * spinner. The panel says what to do when the wait is over.
+   */
+  const LOCAL_CAPTION_START_TIMEOUT_MS = 30_000;
+
+  /**
    * Interface language preference. The settings page owns the preference, but
    * the side panel reads the same key so the shared GitHub sync header speaks
    * the same language the user picked there.
@@ -594,6 +613,7 @@ var YTD_SETTINGS = (() => {
     TRANSCRIPT_REQUEST_TIMEOUT_MS,
     LOCAL_TRANSCRIPT_TIMEOUT_MS,
     LOCAL_CAPTION_REQUEST_TIMEOUT_MS,
+    LOCAL_CAPTION_START_TIMEOUT_MS,
     UI_LANGUAGE_STORAGE_KEY,
     PENDING_LOGIN_NONCE_KEY,
     NOTES_STORAGE_KEY,

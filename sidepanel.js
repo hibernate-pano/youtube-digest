@@ -276,6 +276,12 @@ const PANEL_COPY = {
     pageNotReadyTitle: "The page was not ready",
     pageNotReadyMessage:
       "The subtitles could not be read from the page yet. Try again in a moment.",
+    // The video has not started playing. YouTube asks the page for the
+    // captions when the video plays, so before that there is nothing to
+    // read. The screen says what the user can do about it.
+    videoNotStartedTitle: "The video has not started",
+    videoNotStartedMessage:
+      "The subtitles appear once the video is playing. Start it, then try again.",
     // The boot notice is shown before a single subtitle has been read, so it
     // cannot claim the video has none. It says what the key is for and stops.
     noFallbackKey:
@@ -519,6 +525,10 @@ const PANEL_COPY = {
     // 开口了。所以这一屏说的是发生了什么，给出的也是唯一有用的动作。
     pageNotReadyTitle: "页面还没准备好",
     pageNotReadyMessage: "暂时没能从页面里读到字幕，请稍后再试一次。",
+    // 视频还没开始播放。YouTube 是等视频开始播放才去要字幕的，在那之前
+    // 页面里根本没有东西可读。这一屏告诉用户他能做什么。
+    videoNotStartedTitle: "视频还没开始播放",
+    videoNotStartedMessage: "视频开始播放之后字幕才会出现。播放视频，然后再试一次。",
     // 开机提示出现在读到第一条字幕之前，所以不能说"没有字幕"。
     // 它只说这个密钥是干什么用的，说完就消失。
     noFallbackKey:
@@ -3439,6 +3449,19 @@ function showTranscriptError(result) {
       showError(
         panelCopy("pageNotReadyTitle"),
         panelCopy("pageNotReadyMessage"),
+        retry,
+      );
+      return;
+    case "VIDEO_NOT_STARTED":
+      // The video has not started playing. YouTube asks the page for the
+      // captions when the video plays, so there was nothing to read, and
+      // the video is not broken.
+      //
+      // The screen says what will make it work, and the button tries again
+      // when the user has done that.
+      showError(
+        panelCopy("videoNotStartedTitle"),
+        panelCopy("videoNotStartedMessage"),
         retry,
       );
       return;

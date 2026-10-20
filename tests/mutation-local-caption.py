@@ -113,8 +113,10 @@ MUTATIONS = [
         "hunks": [
             (
                 """  let usedUrl = captionTracks.usedUrl || null;
+  let videoNotStarted = false;
   if (!usedUrl) {""",
                 """  let usedUrl = captionTracks.usedUrl || null;
+  let videoNotStarted = false;
   if (false) {""",
             )
         ],
@@ -530,6 +532,62 @@ MUTATIONS = [
             (
                 "local-transcript.test.js",
                 "the page is given the time to finish its own caption request",
+            ),
+        ],
+    },
+    {
+        "name": "M28 the read is given no time to start the video",
+        "file": "background.js",
+        "hunks": [
+            (
+                """      startTimeoutMs: YTD_SETTINGS.LOCAL_CAPTION_START_TIMEOUT_MS,""",
+                """      startTimeoutMs: 100,""",
+            )
+        ],
+        "expect": [
+            (
+                "local-transcript.test.js",
+                "the page is given time to start the video before the read gives up",
+            ),
+        ],
+    },
+    {
+        "name": "M29 a video that has not started is reported as a page that was not ready",
+        "file": "background.js",
+        "hunks": [
+            (
+                """  if (localReason === LOCAL_READ_REASONS.VIDEO_NOT_STARTED) {
+    return { success: false, error: "VIDEO_NOT_STARTED" };
+  }
+
+  const remote = await handleFetchTranscript(videoId, options);""",
+                """  if (localReason === LOCAL_READ_REASONS.VIDEO_NOT_STARTED) {
+    return { success: false, error: "PAGE_NOT_READY" };
+  }
+
+  const remote = await handleFetchTranscript(videoId, options);""",
+            )
+        ],
+        "expect": [
+            (
+                "local-transcript.test.js",
+                "a video that has not started is said as such, and costs nothing",
+            ),
+        ],
+    },
+    {
+        "name": "M30 the advertisement is taken for the video",
+        "file": "background.js",
+        "hunks": [
+            (
+                """          const ours = !running || !videoId || running === videoId;""",
+                """          const ours = true;""",
+            )
+        ],
+        "expect": [
+            (
+                "local-transcript.test.js",
+                "a video behind an advertisement is waited for, and costs nothing",
             ),
         ],
     },

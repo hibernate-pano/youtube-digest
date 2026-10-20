@@ -721,6 +721,8 @@ test("the panel keeps the worker's sentence out of every failure", async () => {
     "EMPTY_TRANSCRIPT",
     "TRANSCRIPT_REQUEST_TIMEOUT",
     "TRANSCRIPT_FAILED",
+    "PAGE_NOT_READY",
+    "VIDEO_NOT_STARTED",
   ];
 
   for (const code of codes) {
@@ -1013,6 +1015,88 @@ test("the page that was not ready is said in the language the user picked", asyn
   assert.match(chinese.el("errorTitle").textContent, /页面/);
   assert.doesNotMatch(
     chinese.el("errorMessage").textContent,
+    /[A-Za-z]{6,}/,
+    "an English sentence slipped into the Chinese screen",
+  );
+});
+
+test("a video that has not started is told what to do, not blamed", async () => {
+  // The video was never played, so YouTube never asked the page for the
+  // captions and there was nothing to read. The video is not the problem,
+  // and the screen must not claim that it has no subtitles: the user would
+  // go looking for a problem that is not there.
+  const panel = createPanel({
+    sendMessageImpl: workerRouter({
+      fetchTranscript: { success: false, error: "VIDEO_NOT_STARTED" },
+    }),
+  });
+  await panel.boot();
+  await panel.helpers.startDigest(
+    "videoA",
+    "https://www.youtube.com/watch?v=videoA",
+  );
+
+  const title = panel.el("errorTitle").textContent;
+  const message = panel.el("errorMessage").textContent;
+  assert.doesNotMatch(
+    message,
+    /no subtitles/i,
+    "the video was blamed for a video that has not started",
+  );
+  assert.doesNotMatch(
+    title,
+    /no transcript/i,
+    "the title blamed the video for a video that has not started",
+  );
+  assert.match(
+    message,
+    /playing/i,
+    "the screen does not say what will make it work",
+  );
+  assert.equal(
+    panel.el("errorBtn").textContent,
+    "Try Again",
+    "the one action that helps is not on the screen",
+  );
+
+  await panel.click(panel.el("errorBtn"));
+  await flush();
+
+  const requests = panel.sentMessages.filter(
+    (message) => message.action === "fetchTranscript",
+  );
+  assert.equal(requests.length, 2, "the retry never reached the worker");
+  assert.equal(
+    requests[1].force,
+    true,
+    "the retry was answered from what the worker remembers, so it did nothing",
+  );
+});
+
+test("the video that has not started is said in the language the user picked", async () => {
+  const chinese = createPanel({
+    sendMessageImpl: workerRouter({
+      fetchTranscript: { success: false, error: "VIDEO_NOT_STARTED" },
+    }),
+    language: "zh-CN",
+  });
+  await chinese.boot();
+  await chinese.helpers.startDigest(
+    "videoA",
+    "https://www.youtube.com/watch?v=videoA",
+  );
+
+  const title = chinese.el("errorTitle").textContent;
+  const message = chinese.el("errorMessage").textContent;
+  assert.match(message, /播放/, "the Chinese sentence does not say what to do");
+  assert.match(title, /播放/, "the Chinese title does not say what to do");
+  assert.doesNotMatch(
+    message,
+    /没有字幕|无字幕/,
+    "the Chinese screen blamed the video for a video that has not started",
+  );
+  assert.doesNotMatch(
+    message,
     /[A-Za-z]{6,}/,
     "an English sentence slipped into the Chinese screen",
   );

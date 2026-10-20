@@ -1087,11 +1087,18 @@ async function readCaptionTracksFromTab(tabId) {
  * once it has come back. A deadline shorter than that would turn every
  * fresh video into a failure, when all it needed was a few more seconds.
  *
+ * The wait has two parts, because the page asks for the captions when the
+ * video starts playing. A page that is still showing an advertisement, or
+ * a video the user has not started yet, has no request to read, and no
+ * amount of asking makes one. So the page is first given time to start the
+ * video, and only then time to answer.
+ *
  * Runs in the page's MAIN world, where the player object lives.
  *
  * @param {number} tabId the YouTube tab to ask
  * @param {{videoId: string, languageCode: string, kind: string}} request
- * @returns {Promise<string|null>} the caption URL the page used, or null
+ * @returns {Promise<{url: string|null, videoNotStarted: boolean}>} the
+ *   caption URL the page used, and whether the video was never started
  */
 async function loadCaptionUrlInTab(tabId, request) {
   try {
@@ -1119,13 +1126,18 @@ async function loadCaptionUrlInTab(tabId, request) {
         };
 
         let used = findUsed();
-        if (used) return used;
+        if (used) return { url: used, videoNotStarted: false };
 
         const player = document.getElementById("movie_player");
-        if (!player) return null;
+        // A page without a player cannot be judged, and a page that cannot
+        // be judged is not a video that has not started. It is only a page
+        // that will not answer, and the caller has other ways to try.
+        if (!player) return { url: null, videoNotStarted: false };
         // A player without options cannot be asked. Waiting for a request
         // that will never come would only delay the fallback.
-        if (typeof player.setOption !== "function") return null;
+        if (typeof player.setOption !== "function") {
+          return { url: null, videoNotStarted: false };
+        }
 
         // Ask the player to load the track. The caption display is left
         // alone: the user did not ask for captions on their video, and
@@ -1155,19 +1167,86 @@ async function loadCaptionUrlInTab(tabId, request) {
           // Not every player build has this option.
         }
 
-        const deadline = Date.now() + (Number(wanted?.timeoutMs) || 0);
-        while (Date.now() < deadline) {
+        // The player says whether the video is playing. A page that has
+        // not started the video has no caption request to wait for, so the
+        // wait for the request only starts once the video is running.
+        const playerState = () => {
+          try {
+            if (typeof player.getPlayerState !== "function") return null;
+            return Number(player.getPlayerState());
+          } catch (error) {
+            return null;
+          }
+        };
+
+        // The player also says which video it is running right now. While
+        // an advertisement is playing that is the advertisement, and the
+        // advertisement's captions are not the ones being looked for. The
+        // wait for the video therefore only ends when the player is
+        // running the video that was asked for.
+        const currentVideoId = () => {
+          try {
+            if (typeof player.getVideoData !== "function") return null;
+            const data = player.getVideoData();
+            return String(data?.video_id || "") || null;
+          } catch (error) {
+            return null;
+          }
+        };
+
+        const requestTimeoutMs = Number(wanted?.timeoutMs) || 0;
+        const startTimeoutMs = Number(wanted?.startTimeoutMs) || requestTimeoutMs;
+        const hardDeadline = Date.now() + startTimeoutMs;
+        let requestDeadline = null;
+        let stateKnown = false;
+        let everPlayed = false;
+        while (Date.now() < hardDeadline) {
           await new Promise((resolve) => setTimeout(resolve, 200));
           used = findUsed();
-          if (used) return used;
+          if (used) return { url: used, videoNotStarted: false };
+          const state = playerState();
+          // A player that cannot say which video it is running is not
+          // guessed at. The state alone then has to do.
+          const running = currentVideoId();
+          const ours = !running || !videoId || running === videoId;
+          if (state === null) {
+            // The player does not say whether it is playing. A player this
+            // cannot judge is not a video that has not started, so the
+            // wait for the request is the old one.
+            if (requestDeadline === null) {
+              requestDeadline = Date.now() + requestTimeoutMs;
+            }
+          } else {
+            stateKnown = true;
+            // 1 is playing, 3 is buffering, 2 is paused and 0 is over.
+            // The last two mean the video has already run, so the page
+            // has asked for the captions already. Everything else,
+            // including a video that is paused before it began, means the
+            // page has not asked yet.
+            const started = state === 1 || state === 2 || state === 0 || state === 3;
+            if (ours && started) {
+              everPlayed = true;
+              if (requestDeadline === null) {
+                requestDeadline = Date.now() + requestTimeoutMs;
+              }
+            }
+          }
+          if (requestDeadline !== null && Date.now() > requestDeadline) {
+            // The video is running and the page still has not asked. There
+            // is nothing more to wait for.
+            return { url: null, videoNotStarted: false };
+          }
         }
-        return null;
+        return {
+          url: null,
+          videoNotStarted: stateKnown && !everPlayed,
+        };
       },
     });
-    return results?.[0]?.result || null;
+    return results?.[0]?.result || { url: null, videoNotStarted: false };
   } catch (error) {
     debugLog("[YouTube Digest BG] Caption request failed:", error.message);
-    return null;
+    return { url: null, videoNotStarted: false };
   }
 }
 
@@ -1380,6 +1459,10 @@ const LOCAL_READ_REASONS = {
   // The page knows which video it is showing, and that video has no
   // subtitles.
   NO_CAPTIONS: "no-captions",
+  // The video has not started playing. YouTube asks the page for the
+  // captions when the video starts, so until then the page has nothing to
+  // read, and no amount of asking changes that.
+  VIDEO_NOT_STARTED: "video-not-started",
   // The subtitles are there and could not be fetched.
   READ_FAILED: "read-failed",
 };
@@ -1390,6 +1473,10 @@ const LOCAL_READ_REASONS = {
  * The page catches up on its own, so reading again a moment later is
  * likely to work. A video without subtitles stays without subtitles, and
  * waiting for it would only be waiting for nothing.
+ *
+ * A video that has not started playing is not in this list on purpose.
+ * The page asks for the captions when the video plays, so reading again
+ * only helps if the user presses play, and they have a button for that.
  */
 const RETRYABLE_LOCAL_READ_REASONS = new Set([
   LOCAL_READ_REASONS.PAGE_NOT_READY,
@@ -1457,8 +1544,9 @@ async function tryLocalTranscript(tabId, expectedVideoId) {
   // used is the one that carries the captions. If the page has not used
   // one yet, ask it to make one.
   let usedUrl = captionTracks.usedUrl || null;
+  let videoNotStarted = false;
   if (!usedUrl) {
-    usedUrl = await loadCaptionUrlInTab(tabId, {
+    const asked = await loadCaptionUrlInTab(tabId, {
       videoId: pageVideoId,
       languageCode: track.languageCode || "",
       kind: track.kind || "",
@@ -1466,7 +1554,23 @@ async function tryLocalTranscript(tabId, expectedVideoId) {
       // it already has the captions and in seconds when YouTube has to make
       // them, and the difference decides whether this read works.
       timeoutMs: YTD_SETTINGS.LOCAL_CAPTION_REQUEST_TIMEOUT_MS,
+      // How long the video may be given to start. YouTube asks the page
+      // for the captions when the video starts playing, so a page that is
+      // still showing an advertisement has nothing to read yet.
+      startTimeoutMs: YTD_SETTINGS.LOCAL_CAPTION_START_TIMEOUT_MS,
     });
+    usedUrl = asked?.url || null;
+    videoNotStarted = asked?.videoNotStarted === true;
+  }
+
+  // The page has the tracks but never asked for them, and the video never
+  // started. Waiting longer will not help: the page asks when the video
+  // plays, and the user is the one who starts it.
+  if (!usedUrl && videoNotStarted) {
+    debugLog(
+      `[YouTube Digest BG] The video ${pageVideoId} has not started playing`,
+    );
+    return { success: false, reason: LOCAL_READ_REASONS.VIDEO_NOT_STARTED };
   }
 
   // The track the product wants first, then the track the player picked,
@@ -1577,6 +1681,15 @@ async function handleFetchTranscriptLocalFirst(videoId, tabId, options = {}) {
     );
   }
 
+  // A video that has not started playing is not a video whose subtitles
+  // cannot be read. The page asks for them when the video plays, and it
+  // is playing a moment later, so the paid path would spend a credit on
+  // subtitles the page was about to hand over for nothing. The user is
+  // told to press play instead.
+  if (localReason === LOCAL_READ_REASONS.VIDEO_NOT_STARTED) {
+    return { success: false, error: "VIDEO_NOT_STARTED" };
+  }
+
   const remote = await handleFetchTranscript(videoId, options);
   if (remote.success) return { ...remote, source: "supadata" };
 
@@ -1597,6 +1710,12 @@ async function handleFetchTranscriptLocalFirst(videoId, tabId, options = {}) {
     remote.error === "NO_SUPADATA_KEY" &&
     localReason !== LOCAL_READ_REASONS.NO_CAPTIONS
   ) {
+    // A video that has not started playing is not a page that was not
+    // ready. The user can start the video, and then the subtitles are
+    // there. Saying so is more useful than a sentence about waiting.
+    if (localReason === LOCAL_READ_REASONS.VIDEO_NOT_STARTED) {
+      return { success: false, error: "VIDEO_NOT_STARTED" };
+    }
     return { success: false, error: "PAGE_NOT_READY" };
   }
   return remote;
