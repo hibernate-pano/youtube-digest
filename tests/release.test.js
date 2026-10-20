@@ -302,6 +302,27 @@ test("selection actions use equal edge-to-edge hover areas", () => {
   );
 });
 
+test("the five tab names still fit in a panel dragged all the way in", () => {
+  const css = read("sidepanel.css");
+
+  // The English labels need 248px of text. A 320px panel leaves 264px for
+  // the whole strip, so without a narrow-panel rule every name loses a few
+  // pixels and the ellipsis takes over: "Transcr...", "Summ...", "Not...".
+  // The strip has to give up gap and padding instead.
+  const narrow = css.match(
+    /@media\s*\(max-width:\s*359px\)\s*\{[\s\S]*?\n\}/,
+  );
+  assert.ok(
+    narrow,
+    "the tab strip has no narrow-panel rule, so a 320px panel truncates every tab name",
+  );
+  assert.match(narrow[0], /\.tabs\s*\{[^}]*gap:\s*2px;/);
+  assert.match(narrow[0], /\.tab\s*\{[^}]*padding-right:\s*1px;[^}]*padding-left:\s*1px;/);
+  // The rule must not change the panel at its normal width.
+  const normal = css.match(/\.tabs\s*\{[^}]*gap:\s*var\(--sp-1\);/);
+  assert.ok(normal, "the tab strip no longer uses the shared spacing token");
+});
+
 test("note delete is an accessible SVG action at the end of the action row", () => {
   const js = read("sidepanel.js");
   const css = read("sidepanel.css");

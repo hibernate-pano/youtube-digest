@@ -219,6 +219,23 @@ body {
   white-space: nowrap;
 }
 
+/* A panel dragged all the way in still has to show all five names.
+   The English labels need 248px of text and a 320px panel leaves 264px for
+   the whole strip, so without help every name loses two to four pixels and
+   the ellipsis takes over: "Transcr...", "Summ...", "Not...". The strip
+   gives up 18px of gap and padding instead, and the names fit on one line.
+   The Chinese names are much narrower and never needed this. */
+@media (max-width: 359px) {
+  .tabs {
+    gap: 2px;
+  }
+
+  .tab {
+    padding-right: 1px;
+    padding-left: 1px;
+  }
+}
+
 .tab:hover {
   color: var(--text);
   background: var(--accent-dim);
