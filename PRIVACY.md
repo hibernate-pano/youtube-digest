@@ -1,8 +1,8 @@
 # Privacy
 
-Effective: July 28, 2026
+Effective: October 20, 2026
 
-YouTube Digest is a GitHub-only, bring-your-own-key Chrome extension. It has no YouTube Digest account, analytics, advertising, or telemetry. It does run an optional sync service, described in "GitHub sync (optional)" below, that stores your saved notes when you choose to sign in.
+YouTube Digest is a GitHub-only, bring-your-own-key Chrome extension. It has no YouTube Digest account, analytics, advertising, or telemetry. It does run an optional sync service, described in "GitHub sync (optional)" below, that stores your saved notes, vocabulary, and review progress when you choose to sign in.
 
 ## Data the extension handles
 
@@ -15,6 +15,7 @@ Depending on the feature you use, YouTube Digest handles:
 - transcript context around a timestamped note;
 - content you ask to translate;
 - notes you save;
+- vocabulary entries you capture, and the review schedule attached to them;
 - Supadata and AI provider configuration, including API keys; and
 - cached transcript, digest, and translation results.
 
@@ -22,17 +23,28 @@ Depending on the feature you use, YouTube Digest handles:
 
 ### GitHub sync (optional)
 
-If you sign in with GitHub, your saved notes are mirrored to the YouTube Digest sync
+If you sign in with GitHub, your saved notes, vocabulary, and review progress
+are mirrored to the YouTube Digest sync
 service at `https://ytd.panbo.space` (a Cloudflare
 Worker backed by a Neon PostgreSQL database). Sign-in uses the GitHub OAuth web
 flow: GitHub sends the OAuth code only to that Worker, which exchanges it with
 GitHub using the client secret and then issues a short-lived token the extension
 stores locally.
 
+The service stores the following per account:
+
+- **Account**: your GitHub numeric id, login name, and avatar URL.
+- **Notes**: the video id, video title, channel name, timestamp, the quote or
+  note text you saved, and whether you marked it as a favorite.
+- **Vocabulary**: the term, its translation, the sentence it was captured from,
+  the video it came from, and its learning status.
+- **Review progress**: when each vocabulary item is next due, its repetition
+  count, its current interval, and a difficulty score.
+
 - Notes are stored under your GitHub account id and only your account's rows are
   ever served: the server scopes every query by the verified token, and the
   extension keeps separate local namespaces per account.
-- Signing out keeps the token local until you remove it; notes remain on the
+- Signing out keeps the token local until you remove it; your data remains on the
   server under your account until deleted from the extension or with the account.
 - This sync service is optional and separate from AI and transcript processing:
   when you are not signed in, no note data leaves the device at all.
@@ -66,15 +78,15 @@ Those services process data under their own terms, privacy policies, retention p
 ## Local storage and retention
 
 YouTube Digest uses Chrome's local extension storage for its own data. The only
-data that also leaves the device is the saved notes you choose to sync, as
-described under "GitHub sync (optional)" above.
+data that also leaves the device is the notes, vocabulary, and review progress
+you choose to sync, as described under "GitHub sync (optional)" above.
 
 - Supadata and AI provider settings and API keys remain on the device in Chrome's extension storage. They are never sent to the sync service.
 - Keys for all supported AI providers are kept side by side so you can switch
   providers without re-entering keys. Only the selected provider ever receives
   requests; keys for providers you have not selected stay on the device until
   you clear those fields in Settings or reset extension data.
-- Saved notes remain until you delete them or remove/clear the extension's data. The extension keeps up to 100 notes. When you are signed in, those notes are also stored on the sync service until you delete them there or delete your account.
+- Saved notes remain until you delete them or remove/clear the extension's data. The extension keeps the 100 most recent notes on the device; older local notes are dropped to keep storage bounded, and the synced copy is unaffected. When you are signed in, your notes are also stored on the sync service until you delete them there or delete your account.
 - Recent transcript, digest, and per-segment translation cache entries are stored
   locally and are never synced. The cache is limited to 20 videos, and entries older than 30 days are
   removed when the side panel opens.
