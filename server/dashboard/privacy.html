@@ -2,79 +2,98 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Privacy · YouTube Digest</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- The privacy page loads only same-origin scripts and styles, and has no
+         inline handlers, so the strict policy costs it nothing. Cloudflare's
+         edge injects its own script into the served HTML; this policy blocks
+         it, which is the point. See server/SETUP.md. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; object-src 'none'"
+    />
+    <title data-i18n="pageTitle">Privacy · YouTube Digest</title>
     <link rel="stylesheet" href="/tokens.css" />
     <link rel="stylesheet" href="/style.css" />
-    <style>
-      .privacy-body { max-width: 760px; margin: 0 auto; padding: 28px 20px 80px; line-height: 1.7; }
-      .privacy-body h1 { font-size: 24px; }
-      .privacy-body h2 { font-size: 17px; margin-top: 26px; }
-      .privacy-body code { background: var(--accent-dim); padding: 1px 6px; border-radius: 6px; }
-    </style>
+    <link rel="stylesheet" href="/privacy.css" />
   </head>
   <body>
     <header class="topbar">
-      <div class="brand">YouTube Digest <span class="brand-sub">Privacy</span></div>
-      <a class="ghost-btn" href="/">
-        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M19 12H5a2 2 0 0 1 0-4h14a2 2 0 0 1 0 4"></path>
-          <path d="m12 15-3-3a2 2 0 0 1 3-3 2 2 0 0 1 3 3l-3 3"></path>
-        </svg>
-        Back to dashboard
-      </a>
+      <div class="brand">YouTube Digest <span class="brand-sub" data-i18n="brandSubtitle">Privacy</span></div>
+      <div class="privacy-actions">
+        <div class="lang-switch" id="langSwitch" role="group" aria-label="Language" data-i18n-aria-label="languageLabel">
+          <button type="button" class="ghost-btn lang-btn" data-lang="en" aria-pressed="false">English</button>
+          <button type="button" class="ghost-btn lang-btn" data-lang="zh-CN" aria-pressed="false">简体中文</button>
+        </div>
+        <a class="ghost-btn" href="/">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M19 12H5a2 2 0 0 1 0-4h14a2 2 0 0 1 0 4"></path>
+            <path d="m12 15-3-3a2 2 0 0 1 3-3 2 2 0 0 1 3 3l-3 3"></path>
+          </svg>
+          <span data-i18n="backToDashboard">Back to dashboard</span>
+        </a>
+      </div>
     </header>
     <main class="privacy-body">
-      <h1>Privacy</h1>
-      <p><em>Last updated: 2026-10-20</em></p>
+      <h1 data-i18n="heading">Privacy</h1>
+      <p><em data-i18n="lastUpdated" data-date="2026-10-20">Last updated: 2026-10-20</em></p>
 
-      <h2>What this service is</h2>
-      <p>
+      <h2 data-i18n="whatThisIsHeading">What this service is</h2>
+      <p data-i18n="whatThisIs">
         YouTube Digest is an open-source Chrome extension (bring-your-own-key) with an optional
         GitHub-account sync service. This page covers the sync service at ytd.panbo.space.
       </p>
 
-      <h2>What we store</h2>
+      <h2 data-i18n="whatWeStoreHeading">What we store</h2>
       <ul>
-        <li><strong>Your GitHub identity</strong> (id, login name) so your account can be recognised.</li>
-        <li><strong>Your notes</strong> that you write while watching a video, plus the
-            <strong>words you keep for review</strong> and the review progress this service
+        <li><strong data-i18n="identityLabel">Your GitHub identity</strong><span data-i18n="storeIdentity">(id, login name) so your account can be recognised.</span></li>
+        <li><strong data-i18n="notesLabel">Your notes</strong><span data-i18n="storeNotes">that you write while watching a video, plus the
+            words you keep for review and the review progress this service
             schedules for them. Words are collected in the extension; this service only stores
-            them and schedules their reviews.</li>
+            them and schedules their reviews.</span></li>
       </ul>
-      <p>
+      <p data-i18n="storeIsolation">
         Data is stored in a Neon (PostgreSQL) database and is isolated per GitHub account:
         the server only ever serves the rows belonging to the authenticated user.
       </p>
 
-      <h2>What we never do</h2>
+      <h2 data-i18n="edgeHeading">The network in between</h2>
+      <p data-i18n="edge">
+        This service runs on Cloudflare Workers, so Cloudflare's network handles every request
+        before it reaches the application. Cloudflare processes the request's IP address and
+        user agent for routing, abuse prevention and bot management, and may serve a challenge
+        page instead of the application. That is Cloudflare's processing under its own terms and
+        privacy policy.
+      </p>
+
+      <h2 data-i18n="neverHeading">What we never do</h2>
       <ul>
-        <li>No advertising, analytics, or tracking.</li>
-        <li>No selling or sharing of your data with third parties.</li>
-        <li>Transcript and AI requests go directly from the extension to Supadata and your chosen
+        <li data-i18n="neverAnalytics">No advertising, analytics, or tracking.</li>
+        <li data-i18n="neverSell">No selling or sharing of your data with third parties.</li>
+        <li data-i18n="neverProviders">Transcript and AI requests go directly from the extension to Supadata and your chosen
             AI provider under their own terms; the sync service is not involved.</li>
       </ul>
 
-      <h2>Your controls</h2>
+      <h2 data-i18n="controlsHeading">Your controls</h2>
       <ul>
-        <li><strong>Export:</strong> download all your data as JSON from the dashboard (Export button).</li>
-        <li><strong>Delete:</strong> delete your account and all your data from the dashboard
-            (Delete account button). This is permanent and cannot be undone.</li>
-        <li><strong>Sign out on this page</strong> only clears the sign-in this page keeps in
+        <li><strong data-i18n="exportLabel">Export:</strong><span data-i18n="controlExport">download all your data as JSON from the dashboard (Export button).</span></li>
+        <li><strong data-i18n="deleteLabel">Delete:</strong><span data-i18n="controlDelete">delete your account and all your data from the dashboard
+            (Delete account button). This is permanent and cannot be undone.</span></li>
+        <li><strong data-i18n="signOutLabel">Sign out on this page</strong><span data-i18n="controlSignOut">only clears the sign-in this page keeps in
             your browser; the extension keeps its own session and keeps syncing. To stop the
             extension from syncing, click your account name in the side panel header. Either way
-            your data stays in your account, and you can sign back in at any time.</li>
+            your data stays in your account, and you can sign back in at any time.</span></li>
       </ul>
 
-      <h2>Security</h2>
-      <p>
+      <h2 data-i18n="securityHeading">Security</h2>
+      <p data-i18n="security">
         Sign-in uses GitHub OAuth; the extension stores only the access token this service
         issues, and that token expires after 30 days. There is no refresh token, so you sign in
         again once it expires. Connections are HTTPS. The database is not publicly accessible.
       </p>
 
-      <h2>Contact</h2>
-      <p>Questions? Open an issue on the project repository (github.com/hibernate-pano/youtube-digest).</p>
+      <h2 data-i18n="contactHeading">Contact</h2>
+      <p data-i18n="contact">Questions? Open an issue on the project repository (github.com/hibernate-pano/youtube-digest).</p>
     </main>
+    <script src="/privacy.js"></script>
   </body>
 </html>

@@ -1,0 +1,49 @@
+/* The privacy page's own rules.
+   They used to live in an inline <style> block, which the page's own
+   Content-Security-Policy blocks: the page has been served unstyled since
+   it was first deployed. A same-origin stylesheet is allowed by
+   `style-src 'self'`, so the rules live here. */
+
+.privacy-body {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 28px 20px 80px;
+  line-height: 1.7;
+}
+
+.privacy-body h1 {
+  font-size: 24px;
+  margin: 0 0 4px;
+}
+
+.privacy-body h2 {
+  font-size: 17px;
+  margin: 26px 0 8px;
+}
+
+.privacy-body p {
+  margin: 0 0 10px;
+}
+
+.privacy-body ul {
+  margin: 0 0 10px;
+  padding-left: 22px;
+}
+
+.privacy-body li {
+  margin: 6px 0;
+}
+
+.privacy-body code {
+  background: var(--accent-dim);
+  padding: 1px 6px;
+  border-radius: 6px;
+}
+
+.privacy-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
