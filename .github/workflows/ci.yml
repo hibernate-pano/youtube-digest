@@ -14,6 +14,27 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
+    # A real PostgreSQL server. The store's SQL used to be validated by a
+    # test double that answered from the SHAPE of the statement, so it
+    # could not tell an executable statement from a broken one. Two
+    # statements that Postgres rejects shipped to production while a
+    # hundred tests stayed green. The store now runs against a real
+    # server, and this is the server it runs against.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -29,11 +50,21 @@ jobs:
       - name: Test extension
         run: npm test
 
+      # The server suite needs its own dependencies: the `pg` client that
+      # drives the real PostgreSQL service above.
+      - name: Install server dependencies
+        run: npm ci
+        working-directory: server
+
       # The server suite covers the Worker: auth, per-account isolation, the
       # vocabulary ownership gate, and the MemoryStore/NeonStore contract.
+      # YTD_TEST_DATABASE_URL turns on the real-PostgreSQL suite; without it
+      # those tests are skipped rather than silently passed.
       - name: Test Worker backend
         run: npm test
         working-directory: server
+        env:
+          YTD_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres_test
 
   release-check:
     name: Validate public extension package
