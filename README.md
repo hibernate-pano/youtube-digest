@@ -10,6 +10,7 @@ Turn every YouTube video into a resource for deep learning. YouTube Digest bring
 - Navigate long videos by clicking timestamps in the transcript, summary, or notes.
 - Save polished timestamped notes for later study.
 - Build a vocabulary notebook from the transcript, with spaced review built in.
+- Keep the videos you have read in a 30-day library, so opening one again costs nothing.
 - Read your notes, favorites and vocabulary on any device through the web dashboard that comes with the sync service.
 - Keep control of your data with your own API keys, local Chrome storage, and no analytics or telemetry.
 
@@ -17,7 +18,21 @@ YouTube Digest is a bring-your-own-key project installed locally from GitHub. It
 
 ![YouTube Digest demo](YouTube%20Digest%20demo.jpg)
 
-## New in v1.5.0
+The absolute address of the image above, for use outside this repository. The file name contains a space, so it is written as `%20`: `https://raw.githubusercontent.com/hibernate-pano/youtube-digest/main/YouTube%20Digest%20demo.jpg`
+
+## New in v1.6.0
+
+- Failures are visible now. When something does not work, the panel says so in a sentence on screen, not only to a screen reader. Saving a note that could not be saved says why, instead of the button quietly going back to normal.
+- The panel works with the keyboard alone. Select transcript text with Shift and the arrow keys, and the Explain, Note and Word buttons appear.
+- Dialogs keep the focus inside them, and give it back to the button that opened them when they close.
+- "Reduce motion" is respected in the panel and in Settings.
+- Requests have a deadline. A transcript or sync service that stops answering no longer leaves the panel spinning forever, and a slow service is no longer mistaken for an expired session.
+- A full device storage no longer loses notes quietly. The extension asks for unlimited storage, makes room by dropping the cached copies that can be fetched again, and tells you what it dropped.
+- "Delete my account" is in the extension's Settings page. It removes the account, its notes, its words and its review progress from the sync service, and this device's copy of them.
+- Signing in is bound to the browser that started it. A token copied out of another browser is refused, so a stray link cannot switch the panel to somebody else's account.
+- The review section now sits above the word list in the Words tab, because that is the part that is waiting for you.
+- The library says "just now" and "3 minutes ago" in your own language.
+
 
 - The side panel is now five tabs: **Transcript**, **Summary**, **Notes**, **Words**, and **Library**. The old Overview tab is now Summary, and it carries a written summary of the video, not only a list of chapters.
 - Capture words from the transcript into a vocabulary notebook: select a word and save it, or let your AI provider pick the words worth learning out of a sentence. Each word keeps its meaning, its sentence, and the moment it came from.

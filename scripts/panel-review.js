@@ -293,7 +293,7 @@ async function main() {
           }
         },
         getURL: (resourcePath) => `chrome-extension://test/${resourcePath}`,
-        getManifest: () => ({ version: "1.5.0" }),
+        getManifest: () => ({ version: "1.6.0" }),
       },
       storage: { local, session, onChanged: { addListener() {} } },
       tabs: {

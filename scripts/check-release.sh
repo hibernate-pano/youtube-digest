@@ -49,6 +49,7 @@ public_allowlist=(
   "README.md"
   "README.zh-CN.md"
   "PRIVACY.md"
+  "PRIVACY.zh-CN.md"
   "SECURITY.md"
   "LICENSE"
 )
@@ -70,12 +71,30 @@ required_public_files=(
   "README.md"
   "README.zh-CN.md"
   "PRIVACY.md"
+  "PRIVACY.zh-CN.md"
   "SECURITY.md"
   "LICENSE"
 )
 
 for file in "${required_public_files[@]}"; do
   [[ -f "$file" ]] || fail "required public file is missing: $file"
+done
+
+# The two lists have to agree about the files that must ship. A required
+# file that is not on the allowlist would pass the existence check and then
+# be missing from the ZIP, and the count printed at the end would be wrong
+# in exactly the way a reader would not notice.
+for file in "${required_public_files[@]}"; do
+  allowed=0
+  for candidate in "${public_allowlist[@]}"; do
+    if [[ "$candidate" == "$file" ]]; then
+      allowed=1
+      break
+    fi
+  done
+  if ((allowed == 0)); then
+    fail "required public file is not on the release allowlist: $file"
+  fi
 done
 
 # The web dashboard serves its own copy of the shared design tokens. A drifted
