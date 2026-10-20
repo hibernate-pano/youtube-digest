@@ -241,6 +241,8 @@ const PANEL_COPY = {
       "The sync service did not answer in time. Check your connection and try again.",
     errorCodeTranscriptRequestTimeout:
       "The transcript service did not answer in time. Try again in a moment.",
+    errorCodeTranscriptFailed:
+      "The transcript service could not be reached. Try again in a moment.",
     errorCodeStorageQuotaExceeded:
       "This device's storage is full, so the change was not saved. Free some space in YouTube Digest Settings and try again.",
     cacheNotSaved:
@@ -251,12 +253,14 @@ const PANEL_COPY = {
     tryAgain: "Try Again",
     openSettings: "Open Settings",
     apiKeysMissingTitle: "API Keys Missing",
-    apiKeyMissingTitle: "API key missing",
     addSupadataKey: "Add your Supadata API key in YouTube Digest Settings.",
     // The subtitles are read out of the page itself, so the Supadata key is
     // only a fallback. The AI key is what the summary and the translation
     // need, so that is the one the dead end names first.
     addAiKey: "Add your AI provider key in YouTube Digest Settings.",
+    // The title says what happened, not what is missing from the setup. The
+    // key is the second half of the story, and the body tells it.
+    noCaptionsNoKeyTitle: "No subtitles to read",
     noCaptionsNoKey:
       "This video has no subtitles that could be read, and no Supadata key is set as a fallback. Add the key in YouTube Digest Settings to try the paid service.",
     // The boot notice is shown before a single subtitle has been read, so it
@@ -273,6 +277,7 @@ const PANEL_COPY = {
     noTranscriptMessage: "No subtitles found for this video.",
     emptyTranscriptTitle: "Empty transcript",
     transcriptTimeoutTitle: "The transcript service did not answer",
+    transcriptFailedTitle: "The transcript service failed",
     emptyTranscriptMessage:
       "Supadata returned an empty transcript for this video.",
     outOfCreditsTitle: "Out of credits",
@@ -473,6 +478,8 @@ const PANEL_COPY = {
       "同步服务没有在规定时间内响应。请检查网络后重试。",
     errorCodeTranscriptRequestTimeout:
       "字幕服务没有在规定时间内响应。请稍等一下再试。",
+    errorCodeTranscriptFailed:
+      "字幕服务连接不上。请稍等一下再试。",
     errorCodeStorageQuotaExceeded:
       "这台设备的存储空间已满，这次改动没有保存。请在 YouTube Digest 设置里清理空间后重试。",
     cacheNotSaved:
@@ -483,11 +490,13 @@ const PANEL_COPY = {
     tryAgain: "重试",
     openSettings: "打开设置",
     apiKeysMissingTitle: "缺少 API 密钥",
-    apiKeyMissingTitle: "缺少 API 密钥",
     addSupadataKey: "请在 YouTube Digest 设置中填写 Supadata API 密钥。",
     // 字幕直接从页面里读，Supadata 密钥只是兜底。摘要和翻译要的是 AI 密钥，
     // 所以死胡同先说它。
     addAiKey: "请在 YouTube Digest 设置中填写你的 AI 服务商密钥。",
+    // 标题说发生了什么，而不是设置里少了什么。密钥是故事的另一半，
+    // 正文会把它说出来。
+    noCaptionsNoKeyTitle: "没有字幕可读",
     noCaptionsNoKey:
       "这个视频没有能读到的字幕，也没有设置 Supadata 密钥作为兜底。请在 YouTube Digest 设置里填入密钥，改用付费服务再试。",
     // 开机提示出现在读到第一条字幕之前，所以不能说"没有字幕"。
@@ -502,6 +511,7 @@ const PANEL_COPY = {
     noTranscriptMessage: "这个视频没有可用的字幕。",
     emptyTranscriptTitle: "字幕为空",
     transcriptTimeoutTitle: "字幕服务没有响应",
+    transcriptFailedTitle: "字幕服务出错了",
     emptyTranscriptMessage: "Supadata 返回了空字幕。",
     outOfCreditsTitle: "额度已用完",
     outOfCreditsMessage: "Supadata 额度已用完，请前往 dash.supadata.ai 充值。",
@@ -685,6 +695,7 @@ const PANEL_ERROR_CODE_COPY = {
   SYNC_SESSION_EXPIRED: "errorCodeSyncSessionExpired",
   SYNC_REQUEST_TIMEOUT: "errorCodeSyncRequestTimeout",
   TRANSCRIPT_REQUEST_TIMEOUT: "errorCodeTranscriptRequestTimeout",
+  TRANSCRIPT_FAILED: "errorCodeTranscriptFailed",
   STORAGE_QUOTA_EXCEEDED: "errorCodeStorageQuotaExceeded",
 };
 
@@ -3361,60 +3372,87 @@ function goToWelcome() {
  * Supadata failure mode has its own title: "No transcript found" for an
  * invalid key or an exhausted balance sent people hunting for subtitles
  * that were never missing.
+ *
+ * The wording belongs to the panel. The worker says what went wrong with a
+ * code, and a code is the same in every language. A sentence from the worker
+ * would arrive in the worker's language, which on a Chinese screen is the
+ * one English sentence the user sees.
+ *
+ * Every branch has a button that does something. A button that says "Try
+ * Again" and does nothing is worse than no button at all.
  */
 function showTranscriptError(result) {
   const code = String(result?.error || "");
+
+  // Most of the failures are answered by one free action: look the video up
+  // again. The user asked for it, so the credit is theirs. The button says
+  // the same thing on every screen, whatever went wrong.
+  const retry = {
+    buttonLabel: panelCopy("tryAgain"),
+    action: () => {
+      void retryTranscript();
+    },
+    // A failure the user cannot get out of is a dead end. Another video is
+    // one click away in the browser, and the panel follows it there.
+    secondaryAction: goToWelcome,
+  };
+
   switch (code) {
     case "NO_SUPADATA_KEY":
       // The subtitles are read out of the page itself when they can be. The
       // key is the fallback, so the panel says which half of the story
       // failed instead of pretending the product cannot work.
+      //
+      // Without a key there is nothing to retry: the page read already
+      // failed and the paid path is not available. The key is the one thing
+      // that can change this, so that is what the button does.
+      //
+      // The panel is waiting for that key, so it comes back by itself once
+      // the user has added one. A dead end that stays dead after the user
+      // did the thing it asked for is the worst kind of dead end.
+      awaitingApiKey = true;
       showError(
-        panelCopy("apiKeyMissingTitle"),
+        panelCopy("noCaptionsNoKeyTitle"),
         panelCopy("noCaptionsNoKey"),
         {
           action: openOptions,
+          secondaryAction: goToWelcome,
         },
       );
       return;
     case "INVALID_SUPADATA_KEY":
       showError(
         panelCopy("invalidApiKeyTitle"),
-        result?.message || panelCopy("invalidSupadataKey"),
-        { action: openOptions },
+        panelCopy("invalidSupadataKey"),
+        { action: openOptions, secondaryAction: goToWelcome },
       );
       return;
     case "OUT_OF_CREDITS":
       showError(
         panelCopy("outOfCreditsTitle"),
-        result?.message || panelCopy("outOfCreditsMessage"),
+        panelCopy("outOfCreditsMessage"),
+        retry,
       );
       return;
     case "RATE_LIMITED":
       showError(
         panelCopy("rateLimitedTitle"),
-        result?.message || panelCopy("rateLimitedMessage"),
+        panelCopy("rateLimitedMessage"),
+        retry,
       );
       return;
     case "NO_TRANSCRIPT":
       showError(
         panelCopy("noTranscriptTitle"),
-        result?.message || panelCopy("noTranscriptMessage"),
-        {
-          // A video without subtitles is not a dead end: the user can ask
-          // again, or go and pick a different video.
-          buttonLabel: panelCopy("retry"),
-          action: () => {
-            void retryTranscript();
-          },
-          secondaryAction: goToWelcome,
-        },
+        panelCopy("noTranscriptMessage"),
+        retry,
       );
       return;
     case "EMPTY_TRANSCRIPT":
       showError(
         panelCopy("emptyTranscriptTitle"),
-        result?.message || panelCopy("emptyTranscriptMessage"),
+        panelCopy("emptyTranscriptMessage"),
+        retry,
       );
       return;
     case "TRANSCRIPT_REQUEST_TIMEOUT":
@@ -3423,19 +3461,26 @@ function showTranscriptError(result) {
       showError(
         panelCopy("transcriptTimeoutTitle"),
         panelCopy("errorCodeTranscriptRequestTimeout"),
-        {
-          buttonLabel: panelCopy("retry"),
-          action: () => {
-            void retryTranscript();
-          },
-          secondaryAction: goToWelcome,
-        },
+        retry,
+      );
+      return;
+    case "TRANSCRIPT_FAILED":
+      // The service itself failed. That is not a missing subtitle either.
+      showError(
+        panelCopy("transcriptFailedTitle"),
+        panelCopy("errorCodeTranscriptFailed"),
+        retry,
       );
       return;
     default:
+      // A code the panel has no sentence for is a failure the product does
+      // not understand yet. The worker's own words are not shown: they are
+      // in the worker's language, and the panel is the layer that speaks
+      // the user's.
       showError(
         panelCopy("noTranscriptTitle"),
-        panelFailureMessage(result),
+        panelCopy(PANEL_ERROR_CODE_COPY[code] || "errorMessage"),
+        retry,
       );
   }
 }

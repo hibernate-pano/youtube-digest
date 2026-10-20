@@ -623,6 +623,86 @@ test("a video with no captions and no fallback key says both things", async () =
   );
 });
 
+test("a failure is never shown in the worker's language", async () => {
+  const panel = createPanel({ sendMessageImpl: workerRouter(), language: "zh-CN" });
+  await panel.helpers.loadPanelLanguage();
+
+  // The worker knows what went wrong. The panel knows how to say it in the
+  // language the user reads. Only one of the two may write the sentence:
+  // a sentence from the worker reaches a Chinese screen in English.
+  panel.helpers.showTranscriptError({
+    error: "NO_TRANSCRIPT",
+    message: "No subtitles found for this video.",
+  });
+
+  const message = panel.el("errorMessage").textContent;
+  assert.doesNotMatch(
+    message,
+    /[A-Za-z]{3,}/,
+    "the worker's English reached a Chinese screen",
+  );
+  assert.match(message, /字幕/, "the Chinese sentence is missing");
+});
+
+test("the panel keeps the worker's sentence out of every failure", async () => {
+  const panel = createPanel({ sendMessageImpl: workerRouter() });
+
+  const codes = [
+    "NO_SUPADATA_KEY",
+    "INVALID_SUPADATA_KEY",
+    "OUT_OF_CREDITS",
+    "RATE_LIMITED",
+    "NO_TRANSCRIPT",
+    "EMPTY_TRANSCRIPT",
+    "TRANSCRIPT_REQUEST_TIMEOUT",
+    "TRANSCRIPT_FAILED",
+  ];
+
+  for (const code of codes) {
+    panel.helpers.showTranscriptError({
+      error: code,
+      message: "A sentence the worker wrote in its own language.",
+    });
+    const message = panel.el("errorMessage").textContent;
+    assert.doesNotMatch(
+      message,
+      /worker wrote/i,
+      `${code} shows the sentence the worker sent`,
+    );
+    assert.ok(
+      message.trim().length > 10,
+      `${code} has no sentence of its own`,
+    );
+  }
+
+  // A code the panel has no sentence for is a failure the product does not
+  // understand yet. The worker's own words are still not the ones the user
+  // reads: they are in the worker's language.
+  panel.helpers.showTranscriptError({
+    error: "A_CODE_WE_DO_NOT_KNOW",
+    message: "A sentence the worker wrote in its own language.",
+  });
+  assert.doesNotMatch(
+    panel.el("errorMessage").textContent,
+    /worker wrote/i,
+    "an unknown failure shows the sentence the worker sent",
+  );
+});
+
+test("an exhausted balance still says where to add credits", async () => {
+  const panel = createPanel({ sendMessageImpl: workerRouter() });
+
+  panel.helpers.showTranscriptError({ error: "OUT_OF_CREDITS" });
+
+  const message = panel.el("errorMessage").textContent;
+  assert.match(message, /credits/i, "the balance is not mentioned");
+  assert.match(
+    message,
+    /dash\.supadata\.ai/,
+    "the place to add credits is not named",
+  );
+});
+
 test("the panel works without a Supadata key and says so once", async () => {
   const panel = createPanel({
     sendMessageImpl: workerRouter({
@@ -720,7 +800,7 @@ test("a video without captions still offers a way out", async () => {
   );
   assert.equal(
     panel.el("errorBtn").textContent,
-    "Retry",
+    "Try Again",
     "a caption-less video leaves the user with no way out",
   );
 });

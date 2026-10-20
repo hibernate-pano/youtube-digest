@@ -344,6 +344,112 @@ MUTATIONS = [
             ),
         ],
     },
+    {
+        "name": "M17 the panel shows the worker's sentence again",
+        "file": "sidepanel.js",
+        "hunks": [
+            (
+                """        panelCopy("noTranscriptMessage"),""",
+                """        result?.message || panelCopy("noTranscriptMessage"),""",
+            )
+        ],
+        "expect": [
+            (
+                "panel-feedback.test.js",
+                "the panel keeps the worker's sentence out of every failure",
+            ),
+        ],
+    },
+    {
+        "name": "M18 the worker writes the sentence the user reads",
+        "file": "background.js",
+        "hunks": [
+            (
+                """      return {
+        success: false,
+        error: "NO_SUPADATA_KEY",
+      };""",
+                """      return {
+        success: false,
+        error: "NO_SUPADATA_KEY",
+        message: "Supadata API key not configured.",
+      };""",
+            )
+        ],
+        "expect": [
+            (
+                "local-transcript.test.js",
+                "without a key and without captions, the worker names the failure and stops",
+            ),
+        ],
+    },
+    {
+        "name": "M19 the panel does not wait for the key the user went to add",
+        "file": "sidepanel.js",
+        "hunks": [
+            (
+                """      awaitingApiKey = true;
+      showError(
+        panelCopy("noCaptionsNoKeyTitle"),""",
+                """      showError(
+        panelCopy("noCaptionsNoKeyTitle"),""",
+            )
+        ],
+        "expect": [
+            (
+                "panel-ux.test.js",
+                "adding the fallback key later brings the transcript back",
+            ),
+        ],
+    },
+    {
+        "name": "M20 the dead end is titled like a missing subtitle",
+        "file": "sidepanel.js",
+        "hunks": [
+            (
+                """        panelCopy("noCaptionsNoKeyTitle"),""",
+                """        panelCopy("noTranscriptTitle"),""",
+            )
+        ],
+        "expect": [
+            (
+                "panel-ux.test.js",
+                "every Supadata failure gets its own title",
+            ),
+        ],
+    },
+    {
+        "name": "M21 the worker sends the raw error as the failure",
+        "file": "background.js",
+        "hunks": [
+            (
+                """      error: error.code || "TRANSCRIPT_FAILED",""",
+                """      error: error.code || error.message || "TRANSCRIPT_FAILED",""",
+            )
+        ],
+        "expect": [
+            (
+                "local-transcript.test.js",
+                "a lookup that fails outright is reported with a code, not a sentence",
+            ),
+        ],
+    },
+    {
+        "name": "M22 an unknown failure shows the worker's sentence",
+        "file": "sidepanel.js",
+        "hunks": [
+            (
+                """        panelCopy(PANEL_ERROR_CODE_COPY[code] || "errorMessage"),""",
+                """        panelFailureMessage(result),""",
+            )
+        ],
+        "expect": [
+            (
+                "panel-feedback.test.js",
+                "the panel keeps the worker's sentence out of every failure",
+            ),
+        ],
+    },
 ]
 
 

@@ -457,23 +457,42 @@ test("the paid path takes over when the page's captions cannot be fetched", asyn
   assert.equal(result.source, "supadata");
 });
 
-test("without a key and without captions, the product says both things", async () => {
+test("without a key and without captions, the worker names the failure and stops", async () => {
   const worker = loadWorker({ hasSupadataKey: false });
   installFakePage(worker.sandbox, null);
 
   const result = await worker.helpers.handleFetchTranscriptLocalFirst("dQw4w9WgXcQ", 7);
 
   assert.equal(result.success, false);
-  assert.equal(result.error, "NO_TRANSCRIPT");
-  assert.match(
-    result.message,
-    /no subtitles/i,
-    "the panel is not told that the video has no subtitles",
+  assert.equal(
+    result.error,
+    "NO_SUPADATA_KEY",
+    "the failure is reported as something the panel cannot act on",
   );
-  assert.match(
+  assert.equal(
     result.message,
-    /Supadata/i,
-    "the panel is not told that the fallback needs a key",
+    undefined,
+    "the worker wrote a sentence the panel cannot translate",
+  );
+});
+
+test("a lookup that fails outright is reported with a code, not a sentence", async () => {
+  const worker = loadWorker({
+    supadata: Promise.reject(new Error("The network is down")),
+  });
+
+  const result = await worker.helpers.handleFetchTranscript("dQw4w9WgXcQ");
+
+  assert.equal(result.success, false);
+  assert.equal(
+    result.error,
+    "TRANSCRIPT_FAILED",
+    "the failure is reported as something the panel cannot act on",
+  );
+  assert.equal(
+    result.message,
+    undefined,
+    "the worker wrote a sentence the panel cannot translate",
   );
 });
 

@@ -1368,18 +1368,14 @@ async function handleFetchTranscriptLocalFirst(videoId, tabId, options = {}) {
   const remote = await handleFetchTranscript(videoId, options);
   if (remote.success) return { ...remote, source: "supadata" };
 
-  // The local path was tried and did not work, and there is no key to fall
-  // back on. Saying only "add a Supadata key" would hide the half of the
-  // story the user can act on right now: the page had no captions to read.
-  if (tabId && remote.error === "NO_SUPADATA_KEY") {
-    return {
-      success: false,
-      error: "NO_TRANSCRIPT",
-      message:
-        "This video has no subtitles that could be read, and no Supadata key is set to fall back on.",
-    };
-  }
-
+  // The worker does not own the words on the screen. It says what went
+  // wrong with a code, and the panel turns that into a sentence in the
+  // user's language. A sentence sent from here would arrive in this
+  // language only, and on a Chinese screen it would be the one English
+  // sentence the user sees.
+  //
+  // The panel says both halves of the story on its own: that the subtitles
+  // could not be read, and that the fallback needs a key.
   return remote;
 }
 
@@ -1545,10 +1541,11 @@ async function fetchTranscriptFromSupadata(videoId) {
   try {
     const settings = await getSettings();
     if (!settings.supadataApiKey) {
+      // The worker says what went wrong with a code. The panel owns the
+      // sentence the user reads, so that it can be said in their language.
       return {
         success: false,
         error: "NO_SUPADATA_KEY",
-        message: "Supadata API key not configured. Open YouTube Digest Settings.",
       };
     }
 
@@ -1615,7 +1612,6 @@ async function fetchTranscriptFromSupadata(videoId) {
       return {
         success: false,
         error: "NO_TRANSCRIPT",
-        message: "No native subtitle track is available for this video.",
       };
     }
 
@@ -1625,30 +1621,24 @@ async function fetchTranscriptFromSupadata(videoId) {
         return {
           success: false,
           error: "INVALID_SUPADATA_KEY",
-          message: "Your Supadata API key is invalid. Open YouTube Digest Settings.",
         };
       }
       if (response.status === 404) {
         return {
           success: false,
           error: "NO_TRANSCRIPT",
-          message: "No subtitles found for this video.",
         };
       }
       if (response.status === 402) {
         return {
           success: false,
           error: "OUT_OF_CREDITS",
-          message:
-            "Your Supadata credits are exhausted. Add credits at dash.supadata.ai.",
         };
       }
       if (response.status === 429) {
         return {
           success: false,
           error: "RATE_LIMITED",
-          message:
-            "Supadata rate limit reached. Please wait a minute and try again.",
         };
       }
       throw new Error(
@@ -1700,7 +1690,6 @@ async function fetchTranscriptFromSupadata(videoId) {
       return {
         success: false,
         error: "EMPTY_TRANSCRIPT",
-        message: "Supadata returned an empty transcript for this video.",
       };
     }
 
@@ -1715,9 +1704,10 @@ async function fetchTranscriptFromSupadata(videoId) {
     console.error("Transcript fetch error:", error);
     return {
       success: false,
-      // The code is what the panel turns into a sentence. Only the failures
-      // that never had a code of their own fall back to their message.
-      error: error.code || error.message || "Failed to fetch transcript",
+      // The code is what the panel turns into a sentence. The error's own
+      // message is not sent: it is in this language only, and the panel is
+      // the layer that speaks the user's.
+      error: error.code || "TRANSCRIPT_FAILED",
       code: error.code,
     };
   }
@@ -1775,9 +1765,14 @@ async function handleFetchTranscript(videoId, options = {}) {
   } catch (error) {
     // The lookup itself never throws, but the panel expects a failure it can
     // show, not an exception it has to make sense of.
+    //
+    // The failure is a code, never a sentence. The panel has a sentence for
+    // every code, and a sentence from here would be in this language only.
+    // The detail stays in the log, where it belongs.
+    debugLog("[YouTube Digest BG] The transcript lookup failed:", error);
     return {
       success: false,
-      error: error?.code || error?.message || "Failed to fetch transcript",
+      error: error?.code || "TRANSCRIPT_FAILED",
       code: error?.code,
     };
   } finally {

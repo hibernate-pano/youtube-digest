@@ -527,6 +527,57 @@ test("adding the missing key later brings the panel back to life", async () => {
   assert.notEqual(harness.el("errorState").style.display, "block");
 });
 
+test("adding the fallback key later brings the transcript back", async () => {
+  let hasKey = false;
+  const harness = createYoutubeHarness({
+    sendMessageImpl: async (message) => {
+      if (message.action === "checkConfig") {
+        return { hasSupadataKey: hasKey, hasAiKey: true };
+      }
+      if (message.action === "fetchTranscript") {
+        return { success: false, error: "NO_SUPADATA_KEY" };
+      }
+      return undefined;
+    },
+  });
+
+  await harness.fire("DOMContentLoaded");
+  await harness.flush();
+
+  // The video has no subtitles that could be read, and there is no key to
+  // fall back on. The panel says so.
+  assert.equal(harness.el("errorState").style.display, "block");
+  assert.match(
+    harness.el("errorMessage").textContent,
+    /Supadata/,
+    "the fallback key is not named",
+  );
+
+  const lookups = harness.sentMessages.filter(
+    (message) => message.action === "fetchTranscript",
+  );
+  assert.equal(lookups.length, 1, "the video was not looked up at all");
+
+  // The user adds the key. The panel asked for it, so the panel must not
+  // stay on the dead end: a dead end that stays dead after the user did
+  // the thing it asked for is the worst kind of dead end.
+  hasKey = true;
+  harness.fireStorageChange({
+    ytd_settings: { oldValue: {}, newValue: { supadataApiKey: "sd_test" } },
+  });
+  await harness.flush();
+  await harness.flush();
+
+  const afterKey = harness.sentMessages.filter(
+    (message) => message.action === "fetchTranscript",
+  );
+  assert.equal(
+    afterKey.length,
+    2,
+    "the panel did not look the video up again after the key arrived",
+  );
+});
+
 test("opening the panel does not pull the whole vocabulary list", async () => {
   const harness = createPanelHarness({
     sendMessageImpl: async (message) => {
@@ -552,7 +603,7 @@ test("opening the panel does not pull the whole vocabulary list", async () => {
 
 test("every Supadata failure gets its own title", async () => {
   const cases = [
-    ["NO_SUPADATA_KEY", /API key missing/i],
+    ["NO_SUPADATA_KEY", /No subtitles to read/i],
     ["INVALID_SUPADATA_KEY", /Invalid API key/i],
     ["RATE_LIMITED", /Too many requests/i],
     ["NO_TRANSCRIPT", /No transcript found/i],

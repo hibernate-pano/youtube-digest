@@ -1819,8 +1819,14 @@ test("an exhausted Supadata balance has its own error code", async () => {
 
   assert.equal(result.success, false);
   assert.equal(result.error, "OUT_OF_CREDITS");
-  assert.match(result.message, /credits/i);
-  assert.match(result.message, /dash\.supadata\.ai/);
+  // The worker names the failure with a code. The sentence the user reads
+  // lives in the panel, which is the only place that can say it in the
+  // user's language.
+  assert.equal(
+    result.message,
+    undefined,
+    "the worker wrote a sentence the panel cannot translate",
+  );
 });
 
 test("note ids cannot collide inside the same millisecond", async () => {
