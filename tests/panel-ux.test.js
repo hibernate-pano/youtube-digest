@@ -564,6 +564,46 @@ test("an analysis failure shows the provider message, never the error code", asy
 });
 
 // ============================================================
+// A failed analysis must not leave the panel in a dead state
+// ============================================================
+
+test("a failed analysis releases the Overview tab so it can be retried", async () => {
+  let analysisCalls = 0;
+  const harness = createPanelHarness({
+    sendMessageImpl: async (message) => {
+      if (message.action === "fetchTranscript") return transcriptPayload("A");
+      if (message.action === "analyzeTranscript") {
+        analysisCalls += 1;
+        return {
+          success: false,
+          error: "NO_AI_KEY",
+          message: "DeepSeek V4 Flash API key not configured.",
+        };
+      }
+      if (message.action === "getNotes") return { success: true, notes: [] };
+      return { success: true };
+    },
+  });
+
+  await harness.helpers.startDigest("videoA", VIDEO_URL);
+  await harness.helpers.triggerAnalysis();
+
+  assert.equal(
+    harness.helpers.getState().isAnalysisLoading,
+    false,
+    "the analysis flag stayed set, so the Overview tab is dead for the rest of the panel's life",
+  );
+
+  // The user fixes the key and comes back: the tab has to run again.
+  await harness.helpers.triggerAnalysis();
+  assert.equal(
+    analysisCalls,
+    2,
+    "the second attempt never reached the provider",
+  );
+});
+
+// ============================================================
 // P0-B: a stale transcript must never land on the next video
 // ============================================================
 
