@@ -795,6 +795,16 @@ body {
    TRANSCRIPT TAB
    ============================================================ */
 
+/* The transcript is static text, so the browser gives it no caret of its own.
+   One tab stop on the list gives the region a landing place for the
+   keyboard, and the ring is drawn inside the list so it does not add a frame
+   around the whole panel. */
+#transcriptList:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+  border-radius: 0;
+}
+
 .transcript-entry {
   display: flex;
   gap: var(--sp-3);
@@ -2371,4 +2381,33 @@ body {
   background: var(--accent-dim);
   color: var(--accent);
   border-color: var(--accent);
+}
+
+/* ============================================================
+   REDUCED MOTION
+   ============================================================ */
+/* The panel moves: panels fade in, a spinner turns, a loading bar sweeps
+   across. A user who asked the system for less movement must not get any of
+   it. The animations are cut short rather than removed, so every element
+   still ends in the state the animation was heading for and nothing is left
+   invisible. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* The loading bar sweeps a highlight across an empty track. Without the
+     movement the highlight would sit outside the bar, so it becomes a plain
+     filled bar: the state is still shown, it just stops moving. */
+  .loading-bar::after {
+    animation: none !important;
+    left: 0;
+    width: 100%;
+    opacity: 0.7;
+  }
 }

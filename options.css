@@ -521,3 +521,21 @@ footer {
 .setup-guide-steps { margin: 0; padding-left: var(--sp-5); color: var(--text); font-size: var(--fs-md); }
 .setup-guide-steps li { margin-bottom: var(--sp-1); }
 
+/* ============================================================
+   REDUCED MOTION
+   ============================================================ */
+/* The settings page moves a little: cards and rows fade and slide. A user
+   who asked the system for less movement must not get any of it. The
+   transitions are cut short rather than removed, so every element still
+   ends in the state the transition was heading for. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
