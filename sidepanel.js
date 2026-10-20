@@ -1219,10 +1219,12 @@ async function checkCurrentTab() {
       return;
     }
 
-    currentVideoTitle = metadata?.title || "";
-    currentChannelName = metadata?.channelName || "";
-    currentVideoDescription = metadata?.description || "";
-    currentVideoDuration = metadata?.duration || 0;
+    if (metadata) {
+      currentVideoTitle = metadata.title || "";
+      currentChannelName = metadata.channelName || "";
+      currentVideoDescription = metadata.description || "";
+      currentVideoDuration = metadata.duration || 0;
+    }
     currentVideoUrl = tab.url;
 
     startDigest(videoId, tab.url);
@@ -2537,8 +2539,8 @@ function renderAnalysisPending() {
  * video the user already left must never be rendered for - or cached under -
  * the new one.
  */
-async function applyAnalysisResult(videoId, analysisResult) {
-  if (videoId !== currentVideoId) return;
+async function applyAnalysisResult(videoId, ticket, analysisResult) {
+  if (videoId !== currentVideoId || ticket !== videoTicket) return;
 
   try {
     if (!analysisResult?.success) {
@@ -2580,6 +2582,9 @@ async function triggerAnalysis() {
   // video must never be rendered for - or cached under - the new one.
   const videoId = currentVideoId;
   if (!videoId) return;
+  // The ticket of the video on screen. It only changes when the video
+  // changes, so a re-run for the same video never invalidates the work.
+  const ticket = videoTicket;
 
   // An analysis for this video is already paid for. Wait for the request
   // that is on the wire - or reuse the result it produced - instead of
@@ -2587,7 +2592,7 @@ async function triggerAnalysis() {
   const running = analysisLedger.get(videoId);
   if (running) {
     const analysisResult = await running.promise;
-    await applyAnalysisResult(videoId, analysisResult);
+    await applyAnalysisResult(videoId, ticket, analysisResult);
     return;
   }
 
@@ -2608,7 +2613,7 @@ async function triggerAnalysis() {
   );
 
   const analysisResult = await analysisRequest.promise;
-  await applyAnalysisResult(videoId, analysisResult);
+  await applyAnalysisResult(videoId, ticket, analysisResult);
 }
 
 /**

@@ -1127,7 +1127,9 @@ test("opening the panel on a YouTube video buys one transcript, not two", async 
 test("a paid analysis survives the refresh a navigation starts", async () => {
   const analysis = deferred();
   let analysisCalls = 0;
+  let frontTab = { id: 7, url: VIDEO_URL };
   const harness = createYoutubeHarness({
+    tabs: () => [frontTab],
     sendMessageImpl: async (message) => {
       if (message.action === "analyzeTranscript") {
         analysisCalls += 1;
@@ -1145,12 +1147,20 @@ test("a paid analysis survives the refresh a navigation starts", async () => {
   await harness.flush();
   assert.match(harness.htmlOf("chapterList"), /Generating overview/);
 
-  // YouTube fires another navigation event while the AI is still working.
+  // The user moves to another video and back while the AI is still working.
+  // The refresh the first navigation scheduled fires for the video that is
+  // on screen now, so the panel runs the digest for it again.
   harness.fireTabUpdate(
     7,
-    { url: VIDEO_URL },
-    { id: 7, url: VIDEO_URL, active: true, windowId: 1 },
+    { url: "https://www.youtube.com/watch?v=videoB" },
+    {
+      id: 7,
+      url: "https://www.youtube.com/watch?v=videoB",
+      active: true,
+      windowId: 1,
+    },
   );
+  frontTab = { id: 7, url: VIDEO_URL };
   harness.runTimers();
   await harness.flush();
 
