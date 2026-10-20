@@ -20,6 +20,13 @@ YouTube Digest is a bring-your-own-key project installed locally from GitHub. It
 
 The absolute address of the image above, for use outside this repository. The file name contains a space, so it is written as `%20`: `https://raw.githubusercontent.com/hibernate-pano/youtube-digest/main/YouTube%20Digest%20demo.jpg`
 
+## New in v1.7.1
+
+- Captions are read again. The URL in YouTube's track list is a template, and YouTube answers a template with an empty body, so the free path returned nothing at all. The extension now asks for the URL the page's own player used, which is the one that carries the captions.
+- The OpenCode Go provider works. Every request to it was turned away before the model was reached, because that gateway routes on a session id and the extension did not send one.
+- Failures are said in your language. The extension used to put a sentence written in the background worker's language on the screen; the panel now owns every sentence it shows, and says which provider's key is missing.
+- Every error screen has one button that does what it says. A failure the panel does not recognise is tried again with a real new lookup.
+
 ## New in v1.7.0
 
 - The transcript is read out of the page you are already watching, so most videos cost nothing. The Supadata key is now optional, and it is only used when the page cannot be read.
