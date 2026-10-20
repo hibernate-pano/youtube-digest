@@ -200,8 +200,10 @@ const PANEL_COPY = {
     outOfCreditsTitle: "Out of credits",
     outOfCreditsMessage:
       "Your Supadata credits are exhausted. Add credits at dash.supadata.ai.",
-    chaptersEmpty: "Chapters will appear here",
-    quotesEmpty: "Quotes will be extracted when you view this tab...",
+    chaptersEmpty: "The chapters come with the summary.",
+    quotesEmpty: "The quotes come with the summary.",
+    chaptersNone: "This summary came without any chapters.",
+    quotesNone: "This summary came without any quotes.",
     fullTranscript: "Full Transcript",
     savedNotes: "Saved Notes",
     noNotesForVideo:
@@ -372,8 +374,10 @@ const PANEL_COPY = {
     emptyTranscriptMessage: "Supadata 返回了空字幕。",
     outOfCreditsTitle: "额度已用完",
     outOfCreditsMessage: "Supadata 额度已用完，请前往 dash.supadata.ai 充值。",
-    chaptersEmpty: "章节会显示在这里",
-    quotesEmpty: "切换到这个标签后会提取精彩引用...",
+    chaptersEmpty: "章节会跟着摘要一起出现。",
+    quotesEmpty: "精彩引用会跟着摘要一起出现。",
+    chaptersNone: "这份摘要里没有章节。",
+    quotesNone: "这份摘要里没有精彩引用。",
     fullTranscript: "完整字幕",
     savedNotes: "已保存的笔记",
     noNotesForVideo:
@@ -2053,6 +2057,17 @@ function renderAnalysisResults(analysis) {
     });
     chapterList.appendChild(li);
   });
+  if (!chapterList.children.length) {
+    // The model wrote a summary but no chapters. An empty list under a
+    // heading looks like the panel broke, so it says what happened.
+    const item = document.createElement("li");
+    item.className = "chapter-item";
+    item.style.color = "var(--text-muted)";
+    item.style.cursor = "default";
+    item.style.borderColor = "var(--border)";
+    item.textContent = panelCopy("chaptersNone");
+    chapterList.appendChild(item);
+  }
 
   // Quotes - sort by timestamp (chronological order)
   const quotesList = document.getElementById("quotesList");
@@ -2113,6 +2128,21 @@ function renderAnalysisResults(analysis) {
 
     quotesList.appendChild(div);
   });
+  if (!quotesList.children.length) {
+    // The model wrote a summary but no quotes. An empty list under a
+    // heading looks like the panel broke, so it says what happened.
+    const item = document.createElement("div");
+    item.className = "quote-item";
+    item.style.color = "var(--text-muted)";
+    item.style.borderLeftColor = "var(--border)";
+    item.style.cursor = "default";
+    const text = document.createElement("div");
+    text.className = "quote-text";
+    text.style.fontStyle = "normal";
+    text.textContent = panelCopy("quotesNone");
+    item.appendChild(text);
+    quotesList.appendChild(item);
+  }
 
   if (
     currentTranscriptMode !== "original" &&

@@ -424,6 +424,55 @@ test("a summary that is missing does not leave an empty shell", () => {
   assert.equal(panel.el("summaryText").textContent.trim(), "");
 });
 
+test("a summary without chapters or quotes says so instead of showing nothing", () => {
+  // An empty list under a heading looks like the panel broke. The user
+  // has to be told what actually happened: the model wrote a summary and
+  // no chapters.
+  const panel = createPanel({ sendMessageImpl: workerRouter() });
+
+  panel.helpers.renderAnalysisResults({
+    summary: "The video argues that spaced repetition beats cramming.",
+    chapters: [],
+    keyQuotes: [],
+  });
+
+  const chapters = panel.el("chapterList");
+  const quotes = panel.el("quotesList");
+  assert.ok(chapters.children.length > 0, "the chapter list is empty and says nothing");
+  assert.ok(quotes.children.length > 0, "the quote list is empty and says nothing");
+  assert.match(
+    chapters.textContent,
+    /without any chapters/i,
+    "the empty chapter list does not say why it is empty",
+  );
+  assert.match(
+    quotes.textContent,
+    /without any quotes/i,
+    "the empty quote list does not say why it is empty",
+  );
+});
+
+test("the summary tab does not promise quotes that only come with the summary", () => {
+  // The quotes are part of the paid analysis. A placeholder that says
+  // "the quotes will be extracted when you view this tab" tells the user
+  // to wait for something that never happens on its own.
+  const panel = createPanel({ sendMessageImpl: workerRouter() });
+
+  const quotes = panel.el("quotesList");
+  const text = quotes.textContent.toLowerCase();
+  assert.ok(text.length > 0, "the quote list has no placeholder at all");
+  assert.doesNotMatch(
+    text,
+    /when you view this tab/,
+    "the placeholder promises quotes on view, but the quotes come with the summary",
+  );
+  assert.match(
+    text,
+    /with the summary/,
+    "the placeholder does not say where the quotes come from",
+  );
+});
+
 /* ============================================================
    B2: the vocabulary tab
    ============================================================ */
