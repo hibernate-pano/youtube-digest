@@ -229,6 +229,73 @@ describe("the store's SQL is executable by a real PostgreSQL", async (t) => {
     assert.equal(data.vocabulary.length, 0);
   });
 
+  await t.test("deleting an account removes the account and everything in it", async () => {
+    await resetTables(pool);
+    const store = realStore();
+    const user = await store.upsertUser({ githubId: 1007, login: "leaving" });
+    await store.createNote(user.id, {
+      clientId: "c1",
+      videoId: "vid1",
+      videoTitle: "Title",
+      channelName: "Channel",
+      timestampSeconds: 10,
+      quote: "",
+      note: "a note",
+    });
+    const word = await store.upsertVocabulary(user.id, {
+      clientId: "w1",
+      term: "habit",
+      translation: "\u4e60\u60ef",
+      sentence: "A system is a climate.",
+      sentenceTranslation: "",
+      videoId: "vid1",
+      videoTitle: "Title",
+      timestampSeconds: 10,
+      status: "learning",
+    });
+    await store.submitReview(user.id, word.id, 3);
+
+    assert.ok((await store.listNotes(user.id)).length, "the note was never saved");
+    assert.ok(
+      (await store.listVocabulary(user.id)).length,
+      "the word was never saved",
+    );
+
+    // "Delete my account" has to mean the account too, not only the rows
+    // that hang off it. The old code kept the user row as a tombstone and
+    // only bumped a token version, so the GitHub identity survived a
+    // deletion the user was told was permanent.
+    const deleted = await store.deleteUserData(user.id);
+    assert.ok(deleted, "nothing was deleted");
+
+    const { rows } = await pool.query("select id from users where id = $1", [
+      user.id,
+    ]);
+    assert.equal(rows.length, 0, "the account row survived the deletion");
+    const { rows: noteRows } = await pool.query(
+      "select id from notes where user_id = $1",
+      [user.id],
+    );
+    assert.equal(noteRows.length, 0, "the notes survived the deletion");
+    const { rows: wordRows } = await pool.query(
+      "select id from vocabulary where user_id = $1",
+      [user.id],
+    );
+    assert.equal(wordRows.length, 0, "the words survived the deletion");
+    const { rows: reviewRows } = await pool.query(
+      "select id from review_items where user_id = $1",
+      [user.id],
+    );
+    assert.equal(reviewRows.length, 0, "the review history survived");
+    // A token names an account. An account that no longer exists cannot
+    // be found, so the token is refused.
+    assert.equal(
+      await store.getTokenVersion(user.id),
+      null,
+      "a deleted account can still act",
+    );
+  });
+
   await t.test("a note can be deleted and starred through the store", async () => {
     await resetTables(pool);
     const store = realStore();
