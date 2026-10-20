@@ -20,6 +20,14 @@ YouTube Digest is a bring-your-own-key project installed locally from GitHub. It
 
 The absolute address of the image above, for use outside this repository. The file name contains a space, so it is written as `%20`: `https://raw.githubusercontent.com/hibernate-pano/youtube-digest/main/YouTube%20Digest%20demo.jpg`
 
+## New in v1.7.0
+
+- The transcript is read out of the page you are already watching, so most videos cost nothing. The Supadata key is now optional, and it is only used when the page cannot be read.
+- A video longer than an hour shows the real time. A chapter 90 minutes in used to read "90:00", the same as 150 minutes; it now reads "1:30:00", and clicking it takes you to the right place.
+- A translation that fails is retried by itself. A dropped connection no longer leaves a paragraph of subtitles in the original language for good.
+- A video with no subtitles costs one credit instead of one per visit. The extension remembers for a day, and "Try again" always performs a real new lookup.
+- Long videos scroll more smoothly, because the extension stopped asking the browser the same question twice a second.
+
 ## New in v1.6.0
 
 - Failures are visible now. When something does not work, the panel says so in a sentence on screen, not only to a screen reader. Saving a note that could not be saved says why, instead of the button quietly going back to normal.
