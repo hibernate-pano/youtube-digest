@@ -15,6 +15,7 @@ const vm = require("node:vm");
 const root = path.resolve(__dirname, "..", "..");
 const contentScript = fs.readFileSync(path.join(root, "content.js"), "utf8");
 const tokensScript = fs.readFileSync(path.join(root, "tokens.js"), "utf8");
+const settingsScript = fs.readFileSync(path.join(root, "settings.js"), "utf8");
 
 class FakeElement {
   constructor({
@@ -331,9 +332,12 @@ function createHarness({
     clearInterval() {},
   });
 
-  // tokens.js first, exactly as the manifest loads them: the content
-  // script reads the token table from the global it leaves behind.
+  // tokens.js and settings.js first, exactly as the manifest loads them:
+  // the content script reads the token table from the global tokens.js
+  // leaves behind, and the shared stamp formatter from the one settings.js
+  // leaves behind.
   vm.runInContext(tokensScript, context);
+  vm.runInContext(settingsScript, context);
   vm.runInContext(contentScript, context);
 
   return {

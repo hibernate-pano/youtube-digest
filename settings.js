@@ -366,6 +366,62 @@ var YTD_SETTINGS = (() => {
   }
 
   /**
+   * Turns a position inside a video into the stamp the whole product shows.
+   *
+   * Under an hour the stamp is M:SS. From an hour on it is H:MM:SS, because
+   * "90:00" is unreadable on its own: a reader who sees it cannot tell
+   * ninety minutes from ninety seconds, and clicking the wrong one lands
+   * them a whole hour off. One hour, one minute and one second are written
+   * "1:00:00" and "1:01:01"; the hour is not padded.
+   *
+   * Every surface that shows a position goes through here: the panel, the
+   * transcript, the notes, the cloud copy of a note and the markers the
+   * model reads. That is deliberate. When the reader's stamp and the
+   * model's marker were produced by different code, they could drift apart,
+   * and a chapter the model placed at 1:30:00 would be shown as 90:00.
+   *
+   * @param {number} seconds - The position inside the video.
+   * @returns {string} The stamp, e.g. "0:59", "1:00", "1:30:00".
+   */
+  function formatTimestamp(seconds) {
+    const total = Math.max(0, Math.floor(Number(seconds) || 0));
+    const minutes = Math.floor(total / 60);
+    const rest = total % 60;
+    if (minutes < 60) {
+      return `${minutes}:${String(rest).padStart(2, "0")}`;
+    }
+    const hours = Math.floor(minutes / 60);
+    return `${hours}:${String(minutes % 60).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
+  }
+
+  /**
+   * Reads a stamp back into seconds.
+   *
+   * Two shapes exist. A video under an hour is stamped "M:SS", where the
+   * minutes may run past 59 — "90:00" is the ninetieth minute, not ninety
+   * seconds. A video over an hour is stamped "H:MM:SS". Two fields are
+   * minutes and seconds, three fields are hours, minutes and seconds.
+   *
+   * The short shape is still read on purpose: a transcript cached by an
+   * older release carries it, and that cached text is still analyzed after
+   * an update. Reading only the long shape would make a ninety-minute
+   * video look an hour shorter than it is, and the chapters would stop
+   * early without anything failing.
+   *
+   * @param {string} value - A stamp, with or without its brackets.
+   * @returns {number|null} The position in seconds, or null when unreadable.
+   */
+  function parseTimestampToSeconds(value) {
+    const text = value === null || value === undefined ? "" : String(value).trim();
+    const match = text.match(/^\[?(\d+):(\d{2})(?::(\d{2}))?\]?$/);
+    if (!match) return null;
+    const first = Number(match[1]);
+    const second = Number(match[2]);
+    if (match[3] === undefined) return first * 60 + second;
+    return first * 3600 + second * 60 + Number(match[3]);
+  }
+
+  /**
    * The URL that starts the GitHub sign-in.
    *
    * The language travels with the request, because the page the user lands
@@ -513,6 +569,8 @@ var YTD_SETTINGS = (() => {
     migrateLegacyCustom,
     chatCompletionsUrl,
     canonicalYouTubeUrl,
+    formatTimestamp,
+    parseTimestampToSeconds,
   };
 })();
 

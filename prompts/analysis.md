@@ -39,11 +39,17 @@ The transcript is formatted EXACTLY like this:
 [0:32] We wanted to think outside the box
 [1:05] The results were incredible
 
+A video longer than an hour carries an hours part, so its markers look like this:
+[1:02:15] This is where the second hour begins
+
 RULES FOR EXTRACTING TIMESTAMPS:
-1. Every line starts with a timestamp in [M:SS] or [MM:SS] format
+1. Every line starts with a timestamp: [M:SS] for a video under an hour, [H:MM:SS] for a video over an hour. Copy the marker exactly as it appears — do not convert it into the other shape.
 2. To get the timestamp for a quote, find the LINE containing those words
-3. The timestamp is the [X:XX] at the START of that line
-4. Convert M:SS to seconds: [2:30] = 150 seconds, [0:45] = 45 seconds
+3. The timestamp is the [X:XX] or [X:XX:XX] at the START of that line
+4. Convert the marker to seconds:
+   - [M:SS] is minutes and seconds: [2:30] = 2*60+30 = 150 seconds, [0:45] = 45 seconds
+   - [H:MM:SS] is hours, minutes and seconds: [1:02:15] = 1*3600 + 2*60 + 15 = 3735 seconds
+   - The number of fields tells you which one you are looking at. Two fields means minutes. Three fields means hours first.
 
 EXAMPLE: If the transcript shows:
 [2:30] We wanted to think outside the box and play with animations
@@ -51,6 +57,13 @@ EXAMPLE: If the transcript shows:
 Then the timestamp for "We wanted to think outside the box" is:
 - timestamp: "2:30"
 - timestampSeconds: 150
+
+EXAMPLE for a video over an hour. If the transcript shows:
+[1:02:15] We wanted to think outside the box and play with animations
+
+Then the timestamp for "We wanted to think outside the box" is:
+- timestamp: "1:02:15"
+- timestampSeconds: 3735
 
 DO NOT:
 - Make up timestamps that don't exist in the transcript
@@ -71,8 +84,8 @@ Output JSON (no markdown fences):
 }
 
 CRITICAL:
-- timestamp: The [M:SS] from the transcript line (e.g., "2:30")
-- timestampSeconds: Convert to seconds (2:30 = 2*60+30 = 150)
+- timestamp: The [M:SS] or [H:MM:SS] from the transcript line, copied exactly (e.g., "2:30" or "1:02:15")
+- timestampSeconds: Convert to seconds (2:30 = 2*60+30 = 150; 1:02:15 = 1*3600+2*60+15 = 3735)
 - NEVER use 0:00/0 unless the content actually starts at [0:00]
 - EVERY timestamp must exist in the transcript — look it up!
 ```
@@ -93,8 +106,8 @@ TRANSCRIPT:
 
 ## Variables
 
-- `{durationFormatted}` — video duration as `MM:SS`.
-- `{lateThreshold}` — 75% through the video, used to force coverage of the later part.
+- `{durationFormatted}` — video duration as `M:SS`, or as `H:MM:SS` for a video over an hour. It is written in the same shape as the transcript markers, so the two can be compared directly.
+- `{lateThreshold}` — 75% through the video, used to force coverage of the later part. Written in the same shape as the transcript markers.
 - `{maxTimestampSeconds}` — total video length in seconds.
 - `{videoTitle}` — video title.
 - `{channelName}` — channel name.

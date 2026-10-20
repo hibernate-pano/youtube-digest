@@ -995,9 +995,11 @@ async function handleFetchTranscript(videoId) {
 
           // offset is in milliseconds, convert to seconds
           const startSeconds = Math.floor((chunk.offset || 0) / 1000);
-          const minutes = Math.floor(startSeconds / 60);
-          const seconds = startSeconds % 60;
-          const timestamp = `${minutes}:${String(seconds).padStart(2, "0")}`;
+          // The marker the model reads is written by the same formatter the
+          // reader's stamp comes from. If the two could drift apart, a
+          // chapter the model placed at 1:30:00 would be shown as 90:00 and
+          // would point at a completely different minute.
+          const timestamp = YTD_SETTINGS.formatTimestamp(startSeconds);
 
           transcript.push({
             text: cleanText,
@@ -1009,8 +1011,9 @@ async function handleFetchTranscript(videoId) {
           // Plain text without timestamps (for display/export)
           transcriptTextPlain += cleanText + " ";
 
-          // Timestamped text for DeepSeek (format: [MM:SS] text)
-          // This allows the model to reference actual transcript positions.
+          // Timestamped text for the model (format: [M:SS] text, or
+          // [H:MM:SS] for a video over an hour). This allows the model to
+          // reference actual transcript positions.
           transcriptTextTimestamped += `[${timestamp}] ${cleanText}\n`;
         }
       }
@@ -1109,9 +1112,9 @@ async function pollTranscriptJob(jobId, supadataApiKey) {
             if (!cleanText) continue;
 
             const startSeconds = Math.floor((chunk.offset || 0) / 1000);
-            const minutes = Math.floor(startSeconds / 60);
-            const seconds = startSeconds % 60;
-            const timestamp = `${minutes}:${String(seconds).padStart(2, "0")}`;
+            // Same formatter as the synchronous path above: the model has to
+            // see one transcript, not two that depend on which fetch ran.
+            const timestamp = YTD_SETTINGS.formatTimestamp(startSeconds);
 
             transcript.push({
               text: cleanText,
@@ -1193,6 +1196,31 @@ function parseLooseJson(text) {
 // ============================================================
 
 /**
+ * Where the transcript actually ends, in seconds.
+ *
+ * The markers are written by the same formatter the reader's stamp comes
+ * from, so they are H:MM:SS for a video over an hour and M:SS for a shorter
+ * one. A transcript cached by an older release still carries the short
+ * shape, so both have to be understood here.
+ *
+ * That matters more than it looks. This number is the length the model is
+ * told the video has, the ceiling every chapter timestamp is checked
+ * against, and the point the last chapter has to come after. Read the long
+ * shape as if it were the short one and a ninety-minute video looks an hour
+ * short: the chapters stop at the fifty-minute mark, and nothing anywhere
+ * reports a failure.
+ *
+ * @param {string} transcriptText - The timestamped transcript.
+ * @returns {number} The last marked position in seconds, 0 when unmarked.
+ */
+function transcriptLengthSeconds(transcriptText) {
+  const stamps =
+    String(transcriptText || "").match(/\[\d+:\d{2}(?::\d{2})?\]/g) || [];
+  if (!stamps.length) return 0;
+  return YTD_SETTINGS.parseTimestampToSeconds(stamps[stamps.length - 1]) || 0;
+}
+
+/**
  * Sends the transcript to DeepSeek for analysis.
  *
  * The prompt asks the model to produce chapters covering the whole video
@@ -1220,35 +1248,29 @@ async function handleAnalyzeTranscript(
       };
     }
 
-    // Convert duration to MM:SS format for context
-    // The transcript text is already prefixed with [M:SS] markers. Its LAST
-    // marker is the most reliable signal of where the content actually ends —
-    // more trustworthy than the duration metadata, which is sometimes missing
-    // or wrong. We use the larger of (metadata duration, last transcript stamp).
-    let lastTranscriptSeconds = 0;
-    const stampMatches = transcriptText.match(/\[(\d+):(\d{2})\]/g) || [];
-    if (stampMatches.length) {
-      const last =
-        stampMatches[stampMatches.length - 1].match(/\[(\d+):(\d{2})\]/);
-      lastTranscriptSeconds = parseInt(last[1]) * 60 + parseInt(last[2]);
-    }
+    // The transcript text is already prefixed with [M:SS] or [H:MM:SS]
+    // markers. Its LAST marker is the most reliable signal of where the
+    // content actually ends — more trustworthy than the duration metadata,
+    // which is sometimes missing or wrong. We use the larger of (metadata
+    // duration, last transcript stamp).
+    const lastTranscriptSeconds = transcriptLengthSeconds(transcriptText);
 
     const effectiveSeconds = Math.max(
       Math.floor(videoDuration || 0),
       lastTranscriptSeconds,
     );
-    const durationMinutes = Math.floor(effectiveSeconds / 60);
-    const durationSeconds = Math.floor(effectiveSeconds % 60);
-    const durationFormatted = `${durationMinutes}:${String(durationSeconds).padStart(2, "0")}`;
+    // The duration and the threshold are written in the same format the
+    // markers are, so the model compares two numbers in one notation. A
+    // threshold of "1:07:30" against markers of "1:30:00" is a comparison
+    // it can make; "67:30" against "1:30:00" is not.
+    const durationFormatted = YTD_SETTINGS.formatTimestamp(effectiveSeconds);
     const maxTimestampSeconds = effectiveSeconds;
 
     // The "last chapter must be after" threshold (75% in) forces the model to
     // cover the WHOLE video instead of front-loading chapters near the start.
     // We do NOT prescribe a chapter count — the model picks the natural splits.
     const lateThresholdSeconds = Math.floor(effectiveSeconds * 0.75);
-    const lateThreshold = `${Math.floor(lateThresholdSeconds / 60)}:${String(
-      lateThresholdSeconds % 60,
-    ).padStart(2, "0")}`;
+    const lateThreshold = YTD_SETTINGS.formatTimestamp(lateThresholdSeconds);
 
     const promptVariables = {
       durationFormatted,
@@ -1331,13 +1353,6 @@ function validateAndFixTimestamps(analysis, maxSeconds) {
       ? Number(maxSeconds)
       : Number.MAX_SAFE_INTEGER;
 
-  // Helper to format seconds as MM:SS
-  const formatTimestamp = (seconds) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${mins}:${String(secs).padStart(2, "0")}`;
-  };
-
   const safeString = (value, maxLength) =>
     typeof value === "string" ? value.trim().slice(0, maxLength) : "";
   const safeSeconds = (value) => {
@@ -1358,7 +1373,7 @@ function validateAndFixTimestamps(analysis, maxSeconds) {
         title,
         summary: safeString(chapter?.summary, 1500),
         timestampSeconds: seconds,
-        timestamp: formatTimestamp(seconds),
+        timestamp: YTD_SETTINGS.formatTimestamp(seconds),
       };
     })
     .filter(Boolean)
@@ -1375,7 +1390,7 @@ function validateAndFixTimestamps(analysis, maxSeconds) {
       return {
         quote: text,
         timestampSeconds: seconds,
-        timestamp: formatTimestamp(seconds),
+        timestamp: YTD_SETTINGS.formatTimestamp(seconds),
       };
     })
     .filter(Boolean)
@@ -1463,8 +1478,6 @@ async function handleSaveNote(
     // request: the quote the user picked must survive, and the user must
     // not pay for a second lookup or a second model call.
     if (exactText) {
-      const minutes = Math.floor(safeTimestamp / 60);
-      const seconds = safeTimestamp % 60;
       const note = {
         id: createNoteId(),
         videoId,
@@ -1474,7 +1487,7 @@ async function handleSaveNote(
             : "Untitled Video",
         channelName:
           typeof channelName === "string" ? channelName.slice(0, 300) : "",
-        timestamp: `${minutes}:${String(seconds).padStart(2, "0")}`,
+        timestamp: YTD_SETTINGS.formatTimestamp(safeTimestamp),
         timestampSeconds: safeTimestamp,
         timestampedUrl: `${canonicalVideoUrl}&t=${safeTimestamp}s`,
         text: exactText,
@@ -1586,10 +1599,8 @@ async function handleSaveNote(
       videoTitle,
     );
 
-    // Format timestamp as MM:SS
-    const minutes = Math.floor(safeTimestamp / 60);
-    const seconds = safeTimestamp % 60;
-    const formattedTimestamp = `${minutes}:${String(seconds).padStart(2, "0")}`;
+    // The stamp a reader sees comes from the shared formatter.
+    const formattedTimestamp = YTD_SETTINGS.formatTimestamp(safeTimestamp);
 
     // Create timestamped URL
     const timestampedUrl = `${canonicalVideoUrl}&t=${safeTimestamp}s`;

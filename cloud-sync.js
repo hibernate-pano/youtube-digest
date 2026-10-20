@@ -570,16 +570,17 @@ async function recordServerTime(serverTime, requestStartedAt, responseReceivedAt
   return { known: true, offset, trusted };
 }
 
+/**
+ * The stamp a note carries.
+ *
+ * It is the same stamp the panel shows and the same one the worker writes
+ * into a note it saved here, so a note reads the same whether it was saved
+ * on this device or pulled back from the cloud. One formatter, one answer:
+ * a note saved locally used to read "90:00" while the same note synced
+ * read "1:30:00".
+ */
 function formatSyncTimestamp(seconds) {
-  const safe = Math.max(0, Number(seconds) || 0);
-  const whole = Math.floor(safe);
-  const minutes = Math.floor(whole / 60);
-  const remaining = whole % 60;
-  const hours = Math.floor(minutes / 60);
-  if (hours > 0) {
-    return hours + ":" + String(minutes % 60).padStart(2, "0") + ":" + String(remaining).padStart(2, "0");
-  }
-  return minutes + ":" + String(remaining).padStart(2, "0");
+  return YTD_SETTINGS.formatTimestamp(seconds);
 }
 
 /**

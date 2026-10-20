@@ -651,7 +651,11 @@ body {
   font-size: var(--fs-sm);
   font-weight: 500;
   color: var(--accent);
-  min-width: 46px;
+  /* The longest stamp is "1:30:00": seven monospace characters at 12px,
+     plus the padding. The pill is that wide for every chapter, so the
+     titles of a long video stay in one straight column instead of
+     stepping in and out with the length of each stamp. */
+  min-width: 66px;
   padding: 3px 8px;
   background: var(--accent-dim);
   border-radius: var(--r-sm);
@@ -841,7 +845,9 @@ body {
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   color: var(--accent);
-  min-width: 46px;
+  /* Wide enough for "1:30:00", and the same width for every row, so the
+     transcript text starts at one place down the whole list. */
+  min-width: 52px;
   padding-top: 2px;
   flex-shrink: 0;
 }
