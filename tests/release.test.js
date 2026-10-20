@@ -278,16 +278,19 @@ test("product UI contains no emoji or emoji-like pictographs", () => {
   assert.doesNotMatch(productUi, /&#(?:9655|9888);/);
 });
 
-test("selection actions use two equal edge-to-edge hover areas", () => {
+test("selection actions use equal edge-to-edge hover areas", () => {
   const css = read("sidepanel.css");
 
   assert.match(
     css,
     /\.explain-tooltip\s*\{[^}]*padding:\s*0;[^}]*overflow:\s*hidden;/,
   );
+  // Three actions share the bar evenly: Explain, Note and Word. The third
+  // button is the one that adds a paid action, so it has to sit next to the
+  // other two in the same bar, not in a row of its own.
   assert.match(
     css,
-    /\.explain-btn,\s*\.selection-note-btn\s*\{[^}]*flex:\s*1 1 50%;[^}]*border-radius:\s*0;/,
+    /\.explain-btn,\s*\.selection-note-btn,\s*\.selection-word-btn\s*\{[^}]*flex:\s*1 1 33%;[^}]*border-radius:\s*0;/,
   );
   assert.match(
     css,
@@ -297,6 +300,27 @@ test("selection actions use two equal edge-to-edge hover areas", () => {
     css,
     /@keyframes selectionToolbarIn\s*\{[\s\S]*transform:\s*translate\(-50%, 4px\);[\s\S]*transform:\s*translate\(-50%, 0\);/,
   );
+});
+
+test("the five tab names still fit in a panel dragged all the way in", () => {
+  const css = read("sidepanel.css");
+
+  // The English labels need 248px of text. A 320px panel leaves 264px for
+  // the whole strip, so without a narrow-panel rule every name loses a few
+  // pixels and the ellipsis takes over: "Transcr...", "Summ...", "Not...".
+  // The strip has to give up gap and padding instead.
+  const narrow = css.match(
+    /@media\s*\(max-width:\s*359px\)\s*\{[\s\S]*?\n\}/,
+  );
+  assert.ok(
+    narrow,
+    "the tab strip has no narrow-panel rule, so a 320px panel truncates every tab name",
+  );
+  assert.match(narrow[0], /\.tabs\s*\{[^}]*gap:\s*2px;/);
+  assert.match(narrow[0], /\.tab\s*\{[^}]*padding-right:\s*1px;[^}]*padding-left:\s*1px;/);
+  // The rule must not change the panel at its normal width.
+  const normal = css.match(/\.tabs\s*\{[^}]*gap:\s*var\(--sp-1\);/);
+  assert.ok(normal, "the tab strip no longer uses the shared spacing token");
 });
 
 test("note delete is an accessible SVG action at the end of the action row", () => {

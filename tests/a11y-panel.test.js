@@ -1213,14 +1213,14 @@ test("the tab bar uses the tabs pattern", () => {
   assert.equal(tablist.getAttribute("role"), "tablist");
 
   const tabs = harness.all(".tab");
-  assert.equal(tabs.length, 3);
+  assert.equal(tabs.length, 5);
   for (const tab of tabs) {
     assert.equal(tab.getAttribute("role"), "tab");
     assert.ok(tab.getAttribute("aria-selected"));
   }
 
   const panels = harness.all(".tab-panel");
-  assert.equal(panels.length, 3);
+  assert.equal(panels.length, 5);
   for (const panel of panels) {
     assert.equal(panel.getAttribute("role"), "tabpanel");
     const labelledBy = panel.getAttribute("aria-labelledby");

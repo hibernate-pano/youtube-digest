@@ -58,6 +58,7 @@
         <div class="video-info" id="videoInfo" style="display: none">
           <div class="video-title" id="videoTitle"></div>
           <div class="video-channel" id="videoChannel"></div>
+          <p class="cached-view-note" id="cachedViewNote" hidden></p>
         </div>
         <div class="header-actions">
           <button
@@ -154,6 +155,11 @@
         data-i18n-aria-label="tabListLabel"
         style="display: none"
       >
+        <!--
+          The label lives in its own span: the tab is a flex box, and text
+          overflow only applies to a block box, so the ellipsis that keeps a
+          narrow panel readable has to hang off the label itself.
+        -->
         <button
           class="tab active"
           id="tab-transcript"
@@ -162,9 +168,8 @@
           data-tab="transcript"
           aria-selected="true"
           aria-controls="panel-transcript"
-          data-i18n="tabTranscript"
         >
-          Transcript
+          <span class="tab-label" data-i18n="tabTranscript">Transcript</span>
         </button>
         <button
           class="tab"
@@ -175,9 +180,8 @@
           aria-selected="false"
           aria-controls="panel-overview"
           tabindex="-1"
-          data-i18n="tabOverview"
         >
-          Overview
+          <span class="tab-label" data-i18n="tabSummary">Summary</span>
         </button>
         <button
           class="tab"
@@ -188,9 +192,32 @@
           aria-selected="false"
           aria-controls="panel-notes"
           tabindex="-1"
-          data-i18n="tabNotes"
         >
-          Notes
+          <span class="tab-label" data-i18n="tabNotes">Notes</span>
+        </button>
+        <button
+          class="tab"
+          id="tab-words"
+          type="button"
+          role="tab"
+          data-tab="words"
+          aria-selected="false"
+          aria-controls="panel-words"
+          tabindex="-1"
+        >
+          <span class="tab-label" data-i18n="tabWords">Words</span>
+        </button>
+        <button
+          class="tab"
+          id="tab-library"
+          type="button"
+          role="tab"
+          data-tab="library"
+          aria-selected="false"
+          aria-controls="panel-library"
+          tabindex="-1"
+        >
+          <span class="tab-label" data-i18n="tabLibrary">Library</span>
         </button>
       </div>
     </div>
@@ -206,6 +233,34 @@
         <div class="welcome-desc" data-i18n="welcomeDescription">
           Navigate to a YouTube video and click the extension icon to get an
           AI-powered digest.
+        </div>
+        <!--
+          The vocabulary and the library do not need a video, so the welcome
+          page offers them as a way in instead of hiding them.
+        -->
+        <div class="welcome-actions" id="welcomeActions">
+          <button
+            class="welcome-action"
+            id="welcomeWordsBtn"
+            type="button"
+            data-i18n-aria-label="openVocabularyTitle"
+          >
+            <span class="welcome-action-label" data-i18n="openVocabulary">
+              Vocabulary
+            </span>
+            <span class="welcome-action-count" id="welcomeWordsCount"></span>
+          </button>
+          <button
+            class="welcome-action"
+            id="welcomeLibraryBtn"
+            type="button"
+            data-i18n-aria-label="openLibraryTitle"
+          >
+            <span class="welcome-action-label" data-i18n="openLibrary">
+              Library
+            </span>
+            <span class="welcome-action-count" id="welcomeLibraryCount"></span>
+          </button>
         </div>
       </div>
 
@@ -235,6 +290,17 @@
           <button class="error-btn" id="errorBtn" data-i18n="tryAgain">
             Try Again
           </button>
+          <!-- A failure with no way out is a dead end. The secondary action
+               appears only for the failures that have somewhere else to go. -->
+          <button
+            class="error-btn error-btn-secondary"
+            id="errorSecondaryBtn"
+            type="button"
+            hidden
+            data-i18n="chooseAnotherVideo"
+          >
+            Choose another video
+          </button>
         </div>
       </div>
 
@@ -248,6 +314,12 @@
           aria-labelledby="tab-transcript"
           data-panel="transcript"
         >
+          <div class="panel-empty" id="emptyTranscript" hidden>
+            <p class="panel-empty-text" data-i18n="emptyNoVideoTranscript">
+              Open a YouTube video to read its transcript.
+            </p>
+          </div>
+          <div id="transcriptContent">
           <div class="section">
             <div class="section-header transcript-section-header">
               <div class="section-title" data-i18n="fullTranscript">
@@ -346,9 +418,10 @@
             </div>
             <div id="transcriptList"></div>
           </div>
+          </div>
         </div>
 
-        <!-- TAB: Overview (chapters + key quotes) - requires LLM -->
+        <!-- TAB: Summary (chapters + key quotes) - requires LLM -->
         <div
           class="tab-panel"
           id="panel-overview"
@@ -356,7 +429,40 @@
           aria-labelledby="tab-overview"
           data-panel="overview"
         >
-          <!-- Chapters -->
+          <div class="panel-empty" id="emptyOverview" hidden>
+            <p class="panel-empty-text" data-i18n="emptyNoVideoSummary">
+              Open a YouTube video to generate its summary.
+            </p>
+          </div>
+          <div id="overviewContent">
+            <!--
+              The summary costs the user money, so it is never bought
+              without a click. The card states what the call costs, and the
+              button is the only thing that starts it.
+            -->
+            <div class="summary-gate" id="summaryGate">
+              <div class="summary-gate-title" data-i18n="summaryTitle">
+                AI summary
+              </div>
+              <button
+                class="primary-btn"
+                id="summaryGenerateBtn"
+                type="button"
+                data-i18n="generateSummary"
+              >
+                Generate summary
+              </button>
+            </div>
+
+            <!-- The summary itself, above the chapters. -->
+            <div class="summary-block" id="summaryBlock" hidden>
+              <div class="summary-block-title" data-i18n="summaryTitle">
+                AI summary
+              </div>
+              <div class="summary-text" id="summaryText"></div>
+            </div>
+
+            <!-- Chapters -->
           <div class="section">
             <div class="section-title" data-i18n="chapters">Chapters</div>
             <ul class="chapter-list" id="chapterList">
@@ -396,6 +502,7 @@
               </div>
             </div>
           </div>
+          </div>
         </div>
 
         <!-- TAB: Notes -->
@@ -406,33 +513,194 @@
           aria-labelledby="tab-notes"
           data-panel="notes"
         >
-          <div class="section">
-            <div class="section-header">
-              <div class="section-title" data-i18n="savedNotes">Saved Notes</div>
-              <div class="notes-filter">
-                <button
-                  class="enhance-btn active"
-                  id="notesFilterThis"
-                  aria-pressed="true"
-                  data-i18n="thisVideo"
-                >
-                  This Video
-                </button>
+          <div class="panel-empty" id="emptyNotes" hidden>
+            <p class="panel-empty-text" data-i18n="emptyNoVideoNotes">
+              Open a YouTube video to see the notes for it.
+            </p>
+          </div>
+          <div id="notesContent">
+            <div class="section">
+              <div class="section-header">
+                <div class="section-title" data-i18n="savedNotes">
+                  Saved Notes
+                </div>
+                <div class="notes-filter">
+                  <button
+                    class="enhance-btn active"
+                    id="notesFilterThis"
+                    aria-pressed="true"
+                    data-i18n="thisVideo"
+                  >
+                    This Video
+                  </button>
+                  <button
+                    class="enhance-btn"
+                    id="notesFilterAll"
+                    aria-pressed="false"
+                    data-i18n="allNotes"
+                  >
+                    All Notes
+                  </button>
+                </div>
+              </div>
+
+              <!-- A note can be written in the panel, not only on the video. -->
+              <div class="notes-composer">
+                <textarea
+                  class="quick-note-input"
+                  id="quickNoteInput"
+                  rows="2"
+                  autocomplete="off"
+                  data-i18n-placeholder="quickNotePlaceholder"
+                  data-i18n-aria-label="quickNoteLabel"
+                ></textarea>
+                <div class="notes-composer-actions">
+                  <span class="notes-current-time" id="notesCurrentTime"></span>
+                  <button
+                    class="enhance-btn"
+                    id="quickNoteSaveBtn"
+                    type="button"
+                    data-i18n="quickNoteSave"
+                  >
+                    Save note
+                  </button>
+                </div>
+              </div>
+
+              <div class="notes-meta">
+                <span class="notes-count" id="notesCount"></span>
                 <button
                   class="enhance-btn"
-                  id="notesFilterAll"
-                  aria-pressed="false"
-                  data-i18n="allNotes"
+                  id="exportNotesBtn"
+                  type="button"
+                  data-i18n="exportNotes"
                 >
-                  All Notes
+                  Export
                 </button>
               </div>
+              <p class="notes-warning" id="notesLimitWarning" hidden></p>
+              <p class="notes-warning notes-dropped" id="notesDroppedNotice" hidden></p>
+
+              <p class="notes-intro" id="notesIntro" data-i18n="notesIntro">
+                Move your mouse over the video and click Note to save a
+                timestamped note, or press the "n" key while the video is focused.
+              </p>
+              <div id="notesList"></div>
             </div>
-            <p class="notes-intro" id="notesIntro" data-i18n="notesIntro">
-              Move your mouse over the video and click Note to save a
-              timestamped note, or press the "n" key while the video is focused.
+          </div>
+        </div>
+
+        <!-- TAB: Words (the vocabulary the learner built) -->
+        <div
+          class="tab-panel"
+          id="panel-words"
+          role="tabpanel"
+          aria-labelledby="tab-words"
+          data-panel="words"
+        >
+          <div class="section">
+            <div class="section-header">
+              <div class="section-title" data-i18n="wordsTitle">
+                My vocabulary
+              </div>
+              <button
+                class="enhance-btn"
+                id="wordsRefreshBtn"
+                type="button"
+                data-i18n="refresh"
+              >
+                Refresh
+              </button>
+            </div>
+            <p class="panel-hint" id="wordsIntro" data-i18n="wordsIntro">
+              Select a word in the transcript and choose Word to add it here.
             </p>
-            <div id="notesList"></div>
+            <div id="wordsList"></div>
+          </div>
+
+          <div class="section">
+            <div class="section-header">
+              <div class="section-title" data-i18n="reviewTitle">Review</div>
+            </div>
+            <div id="reviewArea">
+              <p class="panel-hint" id="reviewSignedOut" data-i18n="reviewSignIn">
+                Sign in to review your vocabulary on a schedule.
+              </p>
+              <p class="panel-hint" id="reviewEmpty" data-i18n="reviewEmptyState" hidden>
+                Nothing is due for review right now.
+              </p>
+              <button
+                class="review-card"
+                id="reviewCard"
+                type="button"
+                aria-expanded="false"
+                hidden
+              >
+                <span class="review-term" id="reviewTerm"></span>
+                <span class="review-sentence" id="reviewSentence"></span>
+                <span class="review-translation" id="reviewTranslation" hidden></span>
+                <span class="review-explanation" id="reviewExplanation" hidden></span>
+                <span class="review-hint" id="reviewHint" data-i18n="reviewShowAnswer">
+                  Show answer
+                </span>
+              </button>
+              <div class="review-actions" id="reviewActions" hidden>
+                <button class="grade-btn" type="button" data-grade="1" data-i18n="reviewAgain">
+                  Again
+                </button>
+                <button class="grade-btn" type="button" data-grade="2" data-i18n="reviewHard">
+                  Hard
+                </button>
+                <button class="grade-btn" type="button" data-grade="3" data-i18n="reviewGood">
+                  Good
+                </button>
+                <button class="grade-btn" type="button" data-grade="5" data-i18n="reviewEasy">
+                  Easy
+                </button>
+              </div>
+              <p class="review-progress" id="reviewProgress"></p>
+            </div>
+          </div>
+        </div>
+
+        <!-- TAB: Library (the videos that were read already) -->
+        <div
+          class="tab-panel"
+          id="panel-library"
+          role="tabpanel"
+          aria-labelledby="tab-library"
+          data-panel="library"
+        >
+          <div class="section">
+            <div class="section-header">
+              <div class="section-title" data-i18n="libraryTitle">
+                Videos you have read
+              </div>
+            </div>
+            <div class="transcript-search" role="search">
+              <svg
+                class="transcript-search-icon"
+                viewBox="0 0 20 20"
+                aria-hidden="true"
+              >
+                <circle cx="8.5" cy="8.5" r="5.5"></circle>
+                <path d="m12.5 12.5 4 4"></path>
+              </svg>
+              <input
+                class="transcript-search-input"
+                id="librarySearchInput"
+                type="search"
+                autocomplete="off"
+                spellcheck="false"
+                data-i18n-placeholder="librarySearchPlaceholder"
+                data-i18n-aria-label="librarySearchLabel"
+              />
+            </div>
+            <p class="panel-hint" id="libraryRetention" data-i18n="libraryRetention">
+              The library keeps the last 20 videos for 30 days.
+            </p>
+            <p class="panel-hint library-cleanup" id="libraryCleanup" hidden></p>
+            <div id="libraryList"></div>
           </div>
         </div>
 

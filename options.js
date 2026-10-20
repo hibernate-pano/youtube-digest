@@ -43,10 +43,12 @@ const YTD_OPTIONS = (() => {
       setupGuideStep1: "Open any YouTube video with captions.",
       setupGuideStep2: "Click the YouTube Digest icon to open the side panel.",
       setupGuideStep3:
-        'Read the bilingual transcript, open {tabOverview} for the AI digest, and press "n" on the video to save a note.',
+        'Read the bilingual transcript, open {tabSummary} for the AI summary, and press "n" on the video to save a note.',
       tabTranscript: "Transcript",
-      tabOverview: "Overview",
+      tabSummary: "Summary",
       tabNotes: "Notes",
+      tabWords: "Words",
+      tabLibrary: "Library",
       githubSync: "GitHub sync",
       githubSyncIntro:
         "Sign in with GitHub to back up your saved notes to this project's sync service at ytd.panbo.space. Every GitHub account has its own isolated data. Sign in with a different account to switch learner profiles.",
@@ -139,10 +141,12 @@ const YTD_OPTIONS = (() => {
       setupGuideTitle: "配置完成！接下来：",
       setupGuideStep1: "打开任意一个有字幕的 YouTube 视频。",
       setupGuideStep2: "点击 YouTube Digest 扩展图标，打开侧边栏。",
-      setupGuideStep3: "阅读双语字幕；点 {tabOverview} 查看 AI 摘要；在视频上按 n 键保存笔记。",
+      setupGuideStep3: "阅读双语字幕；点 {tabSummary} 查看 AI 摘要；在视频上按 n 键保存笔记。",
       tabTranscript: "字幕",
-      tabOverview: "概览",
+      tabSummary: "摘要",
       tabNotes: "笔记",
+      tabWords: "词汇",
+      tabLibrary: "资料库",
       githubSync: "GitHub 同步",
       githubSyncIntro:
         "使用 GitHub 登录，把你的笔记备份到本项目自建的同步服务 ytd.panbo.space。每个 GitHub 账户的数据相互隔离，换一个账户登录即可切换学习者档案。",
@@ -204,7 +208,7 @@ const YTD_OPTIONS = (() => {
     const normalizedLanguage = normalizeLanguage(language);
     const value = COPY[normalizedLanguage][key] ?? COPY.en[key] ?? "";
     if (typeof value === "function") return value(params);
-    // Copy that names another part of the interface writes it as {tabOverview}
+    // Copy that names another part of the interface writes it as {tabSummary}
     // and gets the name the user actually sees. A Chinese instruction that
     // says "click Overview" while the panel calls the tab 概览 points at
     // nothing.
@@ -224,8 +228,10 @@ const YTD_OPTIONS = (() => {
   function i18nParams(language) {
     return {
       tabTranscript: translate(language, "tabTranscript"),
-      tabOverview: translate(language, "tabOverview"),
+      tabSummary: translate(language, "tabSummary"),
       tabNotes: translate(language, "tabNotes"),
+      tabWords: translate(language, "tabWords"),
+      tabLibrary: translate(language, "tabLibrary"),
     };
   }
 

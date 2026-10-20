@@ -26,6 +26,10 @@ let currentChannelName = "";
 let currentVideoDescription = "";
 let currentVideoDuration = 0;
 let youtubeTabId = null; // Store the YouTube tab ID for reliable messaging
+// True when the panel shows a saved copy of a video instead of the video in
+// the front tab. The user has to be told: a note written here belongs to the
+// saved video, not to what the tab is playing.
+let showingCachedVideo = false;
 let errorAction = null;
 // True while the panel waits for the user to add a missing API key. The
 // settings watcher uses it to know when a settings change should bring the
@@ -54,6 +58,30 @@ let currentNotes = [];
 let currentNotesFilterVideoId = null;
 const TRANSLATION_MESSAGE_TIMEOUT_MS = 130_000;
 const TRANSLATION_BATCH_SIZE = 3;
+
+// --- Vocabulary, review and library state ---
+// The vocabulary is local-first: it works without a sign-in, so the Words
+// tab is usable in the welcome state too.
+let vocabularyItems = [];
+let reviewQueue = [];
+let reviewIndex = 0;
+let reviewRevealed = false;
+let libraryEntries = [];
+let librarySearchQuery = "";
+// The library cleanup is a fact the user must be able to see: entries that
+// were dropped are remembered here so the panel can say how many.
+const LIBRARY_CLEANUP_KEY = "ytd_library_cleanup";
+let libraryCleanup = null;
+// The local note store keeps the most recent notes. The number that really
+// limits the user is the one the store enforces, so the panel reads it from
+// the shared settings instead of keeping a second copy that drifts.
+const LOCAL_NOTE_LIMIT =
+  typeof YTD_SETTINGS !== "undefined" && YTD_SETTINGS.MAX_LOCAL_NOTES
+    ? YTD_SETTINGS.MAX_LOCAL_NOTES
+    : 100;
+// The cached digests keep 20 videos for 30 days.
+const LIBRARY_MAX_ENTRIES = 20;
+const LIBRARY_MAX_AGE_DAYS = 30;
 
 // The video on screen changed. This ticket changes ONLY when that happens,
 // so a response that is still perfectly valid - because the user re-ran the
@@ -138,7 +166,7 @@ const PANEL_COPY = {
   en: {
     welcomeTitle: "Ready to Digest",
     welcomeDescription:
-      "Navigate to a YouTube video and click the extension icon to get an AI-powered digest.",
+      "Open a YouTube video and click the extension icon to read its transcript and build a summary. Your vocabulary and library are one click away.",
     fetchingTranscript: "Fetching transcript",
     extractingCaptions: "Extracting captions from video...",
     loadingQuotes: "Loading quotes...",
@@ -188,8 +216,10 @@ const PANEL_COPY = {
     modeBilingual: "Bilingual",
     tabListLabel: "Panel sections",
     tabTranscript: "Transcript",
-    tabOverview: "Overview",
+    tabSummary: "Summary",
     tabNotes: "Notes",
+    tabWords: "Words",
+    tabLibrary: "Library",
     copy: "Copy",
     export: "Export",
     chapters: "Chapters",
@@ -227,11 +257,87 @@ const PANEL_COPY = {
     saving: "Saving...",
     saved: "Saved",
     selectionActions: "Selected transcript actions",
+    openVocabulary: "Vocabulary",
+    openVocabularyTitle: "Open your vocabulary",
+    openLibrary: "Library",
+    openLibraryTitle: "Open the videos you have read",
+    emptyNoVideoTranscript: "Open a YouTube video to read its transcript.",
+    emptyNoVideoSummary: "Open a YouTube video to build its summary.",
+    emptyNoVideoNotes: "Open a YouTube video to see the notes for it.",
+    chooseAnotherVideo: "Choose another video",
+    summaryTitle: "AI summary",
+    generateSummary: "Build summary",
+    summaryCostNote:
+      "One AI call, charged to your own provider (DeepSeek, MiniMax or OpenCode Go).",
+    summaryFailed: "The summary could not be built.",
+    wordsTitle: "My vocabulary",
+    wordsIntro:
+      "Select a word in the transcript and choose Word to add it here. Words are stored on this device.",
+    wordsEmpty: "No words yet. Select a word in the transcript and choose Word.",
+    refresh: "Refresh",
+    wordStatusLearning: "Learning",
+    wordStatusReviewing: "Reviewing",
+    wordStatusMastered: "Mastered",
+    deleteWord: "Delete word",
+    reviewTitle: "Review",
+    reviewSignIn:
+      "Sign in with GitHub to review your words on a schedule.",
+    reviewEmptyState: "Nothing is due for review right now.",
+    reviewShowAnswer: "Show answer",
+    reviewHideAnswer: "Hide answer",
+    reviewAgain: "Again",
+    reviewHard: "Hard",
+    reviewGood: "Good",
+    reviewEasy: "Easy",
+    reviewProgress: "Card {index} of {total}",
+    extractWord: "Word",
+    extractWordTitle: "Add words to your vocabulary",
+    extractWordCost:
+      "This calls your own AI provider once, so it uses your provider balance.",
+    extractWordConfirm:
+      "Your AI provider will read this sentence and pick out the words worth learning.",
+    extractWordRun: "Find words",
+    extractWordCancel: "Cancel",
+    extractWordResults: "Words found",
+    extractWordSave: "Save to vocabulary",
+    extractWordFailed: "No words could be read from this sentence.",
+    extractWordSaved: "Saved to your vocabulary.",
+    quickNoteLabel: "Write a note",
+    noteAtCurrentMoment:
+      "Saved at the start of the video: the panel could not read the playback position.",
+    quickNotePlaceholder: "Write a note at the current moment...",
+    quickNoteSave: "Save note",
+    quickNoteSaved: "Note saved.",
+    quickNoteEmpty: "Write something before saving.",
+    notesCount: "{count} / {limit}",
+    notesNearLimit:
+      "You are close to the note limit. When it is reached, the oldest note is dropped first.",
+    notesDropped:
+      "Last time you saved a note, {count} older note(s) were removed to stay under the {limit}-note limit on this device.",
+    exportNotes: "Export Markdown",
+    exportNotesCopied: "Markdown copied",
+    exportNotesFailed: "The notes could not be copied.",
+    starNote: "Star this note",
+    unstarNote: "Remove the star",
+    libraryTitle: "Videos you have read",
+    librarySearchPlaceholder: "Search by title or channel",
+    librarySearchLabel: "Search the library",
+    libraryEmpty:
+      "Nothing here yet. Every video you open is kept for 30 days, so you can read it again without spending another credit.",
+    libraryHasSummary: "Summary",
+    libraryTranscriptOnly: "Transcript only",
+    libraryRetention:
+      "The library keeps the last {count} videos for {days} days. Opening one costs nothing.",
+    libraryCleaned: "{count} entries older than {days} days were removed.",
+    libraryOpenVideo: "Open this video on YouTube",
+    libraryOpenInPanel: "Read in the panel",
+    libraryCachedView:
+      "This is a saved copy, not the video in this tab. Notes you write here belong to the saved video.",
   },
   "zh-CN": {
     welcomeTitle: "准备开始",
     welcomeDescription:
-      "打开一个 YouTube 视频并点击扩展图标，即可获得 AI 摘要。",
+      "打开一个 YouTube 视频并点击扩展图标，即可阅读字幕并生成摘要。词汇本和资料库就在手边。",
     fetchingTranscript: "正在获取字幕",
     extractingCaptions: "正在从视频中提取字幕...",
     loadingQuotes: "正在加载引用...",
@@ -258,8 +364,10 @@ const PANEL_COPY = {
     quotesEmpty: "切换到这个标签后会提取精彩引用...",
     fullTranscript: "完整字幕",
     savedNotes: "已保存的笔记",
-    noNotesForVideo: "这个视频还没有笔记。把鼠标移到视频上并点击 Note 即可保存。",
-    noNotesYet: "还没有保存任何笔记。把鼠标移到视频上并点击 Note 即可保存。",
+    noNotesForVideo:
+      "这个视频还没有笔记。把鼠标移到视频上并点击视频上的「笔记」按钮即可保存。",
+    noNotesYet:
+      "还没有保存任何笔记。把鼠标移到视频上并点击视频上的「笔记」按钮即可保存。",
     costDisclosure:
       "AI 调用使用你自己的服务额度。每次字幕查询会消耗 1 个 Supadata 额度。",
     translationUnavailable: "翻译不可用。",
@@ -275,8 +383,10 @@ const PANEL_COPY = {
     modeBilingual: "双语",
     tabListLabel: "面板分区",
     tabTranscript: "字幕",
-    tabOverview: "概览",
+    tabSummary: "摘要",
     tabNotes: "笔记",
+    tabWords: "词汇",
+    tabLibrary: "资料库",
     copy: "复制",
     export: "导出",
     chapters: "章节",
@@ -284,7 +394,7 @@ const PANEL_COPY = {
     thisVideo: "本视频",
     allNotes: "全部笔记",
     notesIntro:
-      "把鼠标移到视频上并点击 Note 保存带时间戳的笔记，也可以在视频获得焦点时按 \"n\" 键。",
+      "把鼠标移到视频上并点击视频上的「笔记」按钮保存带时间戳的笔记，也可以在视频获得焦点时按 \"n\" 键。",
     followPlayback: "跟随播放",
     searchPlaceholder: "搜索词语或短语",
     searchTranscript: "搜索字幕",
@@ -314,6 +424,80 @@ const PANEL_COPY = {
     saving: "保存中...",
     saved: "已保存",
     selectionActions: "选中的字幕操作",
+    openVocabulary: "词汇本",
+    openVocabularyTitle: "打开你的词汇本",
+    openLibrary: "资料库",
+    openLibraryTitle: "打开你看过的视频",
+    emptyNoVideoTranscript: "打开一个 YouTube 视频即可阅读字幕。",
+    emptyNoVideoSummary: "打开一个 YouTube 视频即可生成摘要。",
+    emptyNoVideoNotes: "打开一个 YouTube 视频即可查看它的笔记。",
+    chooseAnotherVideo: "换一个视频",
+    summaryTitle: "AI 摘要",
+    generateSummary: "生成摘要",
+    summaryCostNote:
+      "一次 AI 调用，使用你自己的服务额度（DeepSeek、MiniMax 或 OpenCode Go）。",
+    summaryFailed: "摘要生成失败。",
+    wordsTitle: "我的词汇本",
+    wordsIntro:
+      "在字幕里选中一个词并点「生词」，它就会出现在这里。词汇保存在这台设备上。",
+    wordsEmpty: "还没有生词。在字幕里选中一个词并点「生词」即可。",
+    refresh: "刷新",
+    wordStatusLearning: "学习中",
+    wordStatusReviewing: "复习中",
+    wordStatusMastered: "已掌握",
+    deleteWord: "删除生词",
+    reviewTitle: "复习",
+    reviewSignIn: "使用 GitHub 登录后，可以按计划复习你的生词。",
+    reviewEmptyState: "现在没有需要复习的生词。",
+    reviewShowAnswer: "显示答案",
+    reviewHideAnswer: "收起答案",
+    reviewAgain: "忘了",
+    reviewHard: "有点难",
+    reviewGood: "记得",
+    reviewEasy: "太简单",
+    reviewProgress: "第 {index} 张，共 {total} 张",
+    extractWord: "生词",
+    extractWordTitle: "把生词加入词汇本",
+    extractWordCost:
+      "这会调用你自己的 AI 服务一次，因此会消耗你自己的服务额度。",
+    extractWordConfirm:
+      "你的 AI 服务会读这句话，并挑出值得学习的词。",
+    extractWordRun: "找生词",
+    extractWordCancel: "取消",
+    extractWordResults: "找到的生词",
+    extractWordSave: "存进词汇本",
+    extractWordFailed: "没能从这句话里读出生词。",
+    extractWordSaved: "已存进词汇本。",
+    quickNoteLabel: "写笔记",
+    noteAtCurrentMoment: "已保存在视频开头，因为面板读不到当前的播放进度。",
+    quickNotePlaceholder: "在当前这一刻写一条笔记...",
+    quickNoteSave: "保存笔记",
+    quickNoteSaved: "笔记已保存。",
+    quickNoteEmpty: "先写点内容再保存。",
+    notesCount: "{count} / {limit}",
+    notesNearLimit:
+      "笔记快到上限了。达到上限后，最旧的笔记会先被清掉。",
+    notesDropped:
+      "上次保存笔记时，有 {count} 条更早的笔记被清理掉了（这台设备最多保留 {limit} 条）。",
+    exportNotes: "导出 Markdown",
+    exportNotesCopied: "Markdown 已复制",
+    exportNotesFailed: "笔记没能复制成功。",
+    starNote: "收藏这条笔记",
+    unstarNote: "取消收藏",
+    libraryTitle: "你看过的视频",
+    librarySearchPlaceholder: "按标题或频道搜索",
+    librarySearchLabel: "搜索资料库",
+    libraryEmpty:
+      "这里还是空的。每个打开过的视频都会保留 30 天，你可以免费重读，不会再花额度。",
+    libraryHasSummary: "有摘要",
+    libraryTranscriptOnly: "只有字幕",
+    libraryRetention:
+      "资料库保留最近 {count} 个视频，共 {days} 天。打开它们不花钱。",
+    libraryCleaned: "已清理 {count} 条超过 {days} 天的记录。",
+    libraryOpenVideo: "在 YouTube 上打开这个视频",
+    libraryOpenInPanel: "在面板里重看",
+    libraryCachedView:
+      "这是已保存的副本，不是当前标签页里的视频。在这里写的笔记属于这个已保存的视频。",
   },
 };
 
@@ -350,13 +534,31 @@ function panelCopyFormat(key, values = {}) {
 }
 
 /**
+ * The numbers the product's own limits produce. A sentence that says "the
+ * library keeps the last {count} videos for {days} days" has to be told
+ * what those limits are, or it ships with the braces still in it.
+ */
+function copyPlaceholders() {
+  return {
+    count: String(LIBRARY_MAX_ENTRIES),
+    days: String(LIBRARY_MAX_AGE_DAYS),
+    limit: String(LOCAL_NOTE_LIMIT),
+  };
+}
+
+/**
  * Applies the translated copy to the static markup. Dynamic copy (errors,
  * empty states) is written at render time through panelCopy().
  */
 function applyPanelCopy() {
   document.querySelectorAll("[data-i18n]").forEach((element) => {
     const key = element.getAttribute("data-i18n");
-    const value = panelCopy(key);
+    // A few sentences carry numbers that change with the product's limits.
+    // A placeholder that is never filled is worse than no sentence at all:
+    // the user would read "{count} videos" and have to guess.
+    const value = /\{\w+\}/.test(panelCopy(key))
+      ? panelCopyFormat(key, copyPlaceholders())
+      : panelCopy(key);
     if (value) element.textContent = value;
   });
 
@@ -719,6 +921,7 @@ async function loadPanelContent() {
     .catch(() => null);
   await applySyncSessionSignal(notesSync);
   await loadNotes(notesFilterShowAll ? null : currentVideoId);
+  await updateWelcomeCounts();
   await checkCurrentTab();
 }
 
@@ -1038,6 +1241,64 @@ function setupEventListeners() {
     tab.addEventListener("keydown", handleTabKeydown);
   });
 
+  // The welcome page is a way in, not a dead end: the vocabulary and the
+  // library do not need a video.
+  document.getElementById("welcomeWordsBtn")?.addEventListener("click", () => {
+    showState("results");
+    switchTab("words");
+  });
+  document.getElementById("welcomeLibraryBtn")?.addEventListener("click", () => {
+    showState("results");
+    switchTab("library");
+  });
+
+  // The summary is bought with one click, and the click is the consent.
+  document
+    .getElementById("summaryGenerateBtn")
+    ?.addEventListener("click", () => {
+      void triggerAnalysis();
+    });
+
+  // Notes: compose, export.
+  document
+    .getElementById("quickNoteSaveBtn")
+    ?.addEventListener("click", () => {
+      void saveQuickNote();
+    });
+  document.getElementById("quickNoteInput")?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      void saveQuickNote();
+    }
+  });
+  document
+    .getElementById("exportNotesBtn")
+    ?.addEventListener("click", () => {
+      void exportNotesAsMarkdown();
+    });
+
+  // Words: refresh and review.
+  document.getElementById("wordsRefreshBtn")?.addEventListener("click", () => {
+    void loadVocabulary();
+    void loadDueReviews();
+  });
+  document.getElementById("reviewCard")?.addEventListener("click", () => {
+    revealReviewAnswer();
+  });
+  document
+    .querySelectorAll("#reviewActions .grade-btn")
+    .forEach((button) => {
+      button.addEventListener("click", () => {
+        void submitReviewGrade(Number(button.dataset.grade));
+      });
+    });
+
+  // Library: search.
+  document.getElementById("librarySearchInput")?.addEventListener("input", (event) => {
+    librarySearchQuery = String(event.target?.value || "");
+    renderLibrary();
+  });
+
   // Error retry
   document.getElementById("errorBtn").addEventListener("click", () => {
     if (errorAction) {
@@ -1285,6 +1546,9 @@ function onVideoChanged(videoId) {
   // left can never be applied to the one on screen.
   videoTicket += 1;
   currentAnalysis = null;
+  // A new video on screen is the live one, not a saved copy.
+  showingCachedVideo = false;
+  renderCachedViewNote();
   clearOverviewLists();
 }
 
@@ -1626,6 +1890,12 @@ async function translateInterfaceSegments(surface, segments, rerender) {
 function getOverviewTranslationSegments() {
   if (!currentAnalysis) return [];
   const segments = [];
+  // The summary is the first thing the reader sees, so it is translated too.
+  // Its id is stable, so a summary that was already translated is not paid
+  // for twice.
+  if (currentAnalysis.summary) {
+    segments.push({ id: "summary", text: currentAnalysis.summary });
+  }
   (currentAnalysis.chapters || []).forEach((chapter, index) => {
     if (chapter.title) {
       segments.push({ id: `chapter-${index}-title`, text: chapter.title });
@@ -1683,6 +1953,13 @@ function translateNotesContent() {
  * previous video under the new one.
  */
 function clearOverviewLists() {
+  // The summary belongs to the video that was open before, so it goes with
+  // the chapters and the quotes.
+  const summaryBlock = document.getElementById("summaryBlock");
+  if (summaryBlock) summaryBlock.hidden = true;
+  const summaryText = document.getElementById("summaryText");
+  if (summaryText) summaryText.innerHTML = "";
+
   const chapterList = document.getElementById("chapterList");
   if (chapterList) {
     chapterList.innerHTML = "";
@@ -1717,6 +1994,22 @@ function clearOverviewLists() {
  * Shows chapters and key quotes only.
  */
 function renderAnalysisResults(analysis) {
+  // The summary is here, so the invitation to pay for it is not.
+  hideSummaryGate();
+
+  // The summary text is the first thing the reader sees. An old cache or a
+  // model that wrote no summary leaves the block out entirely, so there is
+  // never an empty shell on screen.
+  const summaryBlock = document.getElementById("summaryBlock");
+  const summaryText = document.getElementById("summaryText");
+  const summary = String(analysis?.summary || "").trim();
+  if (summaryBlock) summaryBlock.hidden = !summary;
+  if (summaryText) {
+    summaryText.innerHTML = summary
+      ? renderLocalizedContent(summary, "overview", "summary")
+      : "";
+  }
+
   // Chapters
   const chapterList = document.getElementById("chapterList");
   chapterList.innerHTML = "";
@@ -2266,7 +2559,7 @@ function showState(state) {
   document.getElementById("resultsState").style.display =
     state === "results" ? "block" : "none";
 
-  // The tab bar only belongs on the results view. We toggle it HERE, in one
+  // The tab bar belongs on the results view. We toggle it HERE, in one
   // place, so it tracks the view automatically. Previously each caller had to
   // remember to re-show it after showState("results"), and one path forgot —
   // which is why the tabs could vanish when re-opening an already-analyzed video.
@@ -2286,6 +2579,76 @@ function showState(state) {
   } else if (state === "welcome") {
     announceStatus(panelCopy("welcomeTitle"));
   }
+
+  updateEmptyStates();
+}
+
+/**
+ * Shows how many words and videos the welcome page can take the user to.
+ *
+ * The numbers are read from the local stores, so they cost nothing and are
+ * available without a sign-in.
+ */
+async function updateWelcomeCounts() {
+  const wordsCount = document.getElementById("welcomeWordsCount");
+  const libraryCount = document.getElementById("welcomeLibraryCount");
+
+  if (wordsCount) {
+    try {
+      const result = await chrome.runtime.sendMessage({
+        action: "getVocabulary",
+      });
+      const count = result?.success && Array.isArray(result.items)
+        ? result.items.length
+        : 0;
+      wordsCount.textContent = `(${count})`;
+    } catch (error) {
+      wordsCount.textContent = "(0)";
+    }
+  }
+
+  if (libraryCount) {
+    try {
+      const all = await chrome.storage.local.get(null);
+      const count = Object.keys(all).filter((key) =>
+        key.startsWith("digest_"),
+      ).length;
+      libraryCount.textContent = `(${count})`;
+    } catch (error) {
+      libraryCount.textContent = "(0)";
+    }
+  }
+}
+
+/**
+ * Shows the empty state of every tab that needs a video.
+ *
+ * The three video-bound tabs are useless without one, so they say so
+ * instead of showing a blank page. The vocabulary and the library do not
+ * need a video, so they never get an empty state.
+ */
+function updateEmptyStates() {
+  const hasVideo = Boolean(currentVideoId);
+  const resultsVisible =
+    document.getElementById("resultsState")?.style.display !== "none";
+
+  const transcriptEmpty = document.getElementById("emptyTranscript");
+  const transcriptContent = document.getElementById("transcriptContent");
+  if (transcriptEmpty) transcriptEmpty.hidden = hasVideo || !resultsVisible;
+  if (transcriptContent)
+    transcriptContent.hidden = !hasVideo && Boolean(resultsVisible);
+
+  const overviewEmpty = document.getElementById("emptyOverview");
+  const overviewContent = document.getElementById("overviewContent");
+  if (overviewEmpty) overviewEmpty.hidden = hasVideo || !resultsVisible;
+  if (overviewContent)
+    overviewContent.hidden = !hasVideo && Boolean(resultsVisible);
+
+  const notesEmpty = document.getElementById("emptyNotes");
+  const notesContent = document.getElementById("notesContent");
+  if (notesEmpty) notesEmpty.hidden = hasVideo || !resultsVisible;
+  if (notesContent)
+    notesContent.hidden = !hasVideo && Boolean(resultsVisible);
 }
 
 function updateLoading(title, subtitle) {
@@ -2304,6 +2667,18 @@ function showError(title, message, options = {}) {
   document.getElementById("errorBtn").textContent =
     options.buttonLabel ||
     (options.action ? panelCopy("openSettings") : panelCopy("tryAgain"));
+
+  // A failure with no way out is a dead end. The secondary action is only
+  // shown when the user has somewhere else to go.
+  const secondary = document.getElementById("errorSecondaryBtn");
+  if (secondary) {
+    secondary.hidden = !options.secondaryAction;
+    secondary.textContent = options.secondaryLabel || panelCopy("chooseAnotherVideo");
+    secondary.onclick = options.secondaryAction
+      ? () => options.secondaryAction()
+      : null;
+  }
+
   announceAlert(`${errorTitle}. ${errorMessage}`);
 }
 
@@ -2351,6 +2726,27 @@ function showConfigError(configStatus) {
 }
 
 /**
+ * Asks for the transcript again.
+ *
+ * A failed lookup leaves the ledger, so the retry really buys a second
+ * lookup. The user asked for it, so the credit is theirs.
+ */
+async function retryTranscript() {
+  if (!currentVideoId) return;
+  transcriptLedger.delete(currentVideoId);
+  await startDigest(currentVideoId, currentVideoUrl);
+}
+
+/**
+ * Goes back to the welcome page, so the user can pick another video.
+ */
+function goToWelcome() {
+  errorAction = null;
+  showState("welcome");
+  void updateWelcomeCounts();
+}
+
+/**
  * Turns a transcript failure into a message the user can act on. Every
  * Supadata failure mode has its own title: "No transcript found" for an
  * invalid key or an exhausted balance sent people hunting for subtitles
@@ -2387,6 +2783,15 @@ function showTranscriptError(result) {
       showError(
         panelCopy("noTranscriptTitle"),
         result?.message || panelCopy("noTranscriptMessage"),
+        {
+          // A video without subtitles is not a dead end: the user can ask
+          // again, or go and pick a different video.
+          buttonLabel: panelCopy("retry"),
+          action: () => {
+            void retryTranscript();
+          },
+          secondaryAction: goToWelcome,
+        },
       );
       return;
     case "EMPTY_TRANSCRIPT":
@@ -2508,23 +2913,78 @@ function switchTab(tabName) {
   // tokens or competing with the batch queue the user is waiting for.
   if (tabName === "overview") {
     if (!currentAnalysis && !isAnalysisInFlight()) {
-      triggerAnalysis();
-    } else if (currentAnalysis && currentTranscriptMode !== "original") {
-      void translateOverviewContent();
+      // The summary costs the user money, so it is not bought by opening the
+      // tab. The gate states the price and waits for the click.
+      renderSummaryGate();
+    } else if (currentAnalysis) {
+      // The summary is already here, so the invitation to pay for it stays
+      // hidden. The gate is only for a summary that does not exist yet.
+      hideSummaryGate();
+      if (currentTranscriptMode !== "original") {
+        void translateOverviewContent();
+      }
     }
   } else if (
-    tabName === "notes" &&
-    currentTranscriptMode !== "original"
+    tabName === "notes"
   ) {
-    void translateNotesContent();
+    // The composer saves at the moment the video is at, so the panel shows
+    // that moment next to the button.
+    void refreshNotesCurrentTime();
+    if (currentTranscriptMode !== "original") {
+      void translateNotesContent();
+    }
   } else if (
     tabName === "transcript" &&
     currentTranscriptMode !== "original" &&
     !transcriptScrollObserver
   ) {
     void translateTranscript();
+  } else if (tabName === "words") {
+    void loadVocabulary();
+    void loadDueReviews();
+  } else if (tabName === "library") {
+    void loadLibrary();
+  }
+}
+
+/**
+ * Shows the summary card with its price.
+ *
+ * The summary costs the user money, so the panel never buys it on its own.
+ * The card states what the call costs, and the button is the only thing that
+ * starts it. The user knows the price at the moment they agree to pay it.
+ */
+function renderSummaryGate() {
+  const gate = document.getElementById("summaryGate");
+  if (!gate) return;
+
+  const hasVideo = Boolean(currentVideoId);
+  gate.hidden = false;
+
+  const button = document.getElementById("summaryGenerateBtn");
+  if (button) {
+    button.disabled = !hasVideo || isAnalysisInFlight();
+    button.textContent = panelCopy("generateSummary");
   }
 
+  // The cost line sits right above the button, so the price is read at the
+  // moment the user is about to spend it.
+  let cost = gate.querySelector(".summary-gate-cost");
+  if (!cost) {
+    cost = document.createElement("p");
+    cost.className = "summary-gate-cost";
+    gate.appendChild(cost);
+  }
+  cost.textContent = panelCopy("summaryCostNote");
+}
+
+/**
+ * Hides the summary card. A video that already has a summary does not need
+ * the invitation to pay for it again.
+ */
+function hideSummaryGate() {
+  const gate = document.getElementById("summaryGate");
+  if (gate) gate.hidden = true;
 }
 
 /**
@@ -2534,6 +2994,9 @@ function switchTab(tabName) {
 function renderAnalysisPending() {
   const chapterList = document.getElementById("chapterList");
   const quotesList = document.getElementById("quotesList");
+
+  // The work is paid for, so the card is gone while it runs.
+  hideSummaryGate();
 
   if (chapterList)
     chapterList.innerHTML = `<li class="chapter-item" style="color: var(--text-muted); border: none;">${escapeHtml(panelCopy("generatingOverview"))}</li>`;
@@ -2641,6 +3104,9 @@ function renderAnalysisFailure(result) {
     result?.message || result?.error || panelCopy("errorMessage"),
   );
 
+  // The card comes back, so a failed summary can be tried again.
+  renderSummaryGate();
+
   if (chapterList) {
     chapterList.innerHTML = "";
     const item = document.createElement("li");
@@ -2663,6 +3129,18 @@ function renderAnalysisFailure(result) {
       button.addEventListener("click", openOptions);
       item.appendChild(button);
     }
+
+    // A failure the user cannot act on is a dead end. The retry is a real
+    // button that asks for the analysis again.
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "enhance-btn";
+    retry.id = "summaryRetryBtn";
+    retry.textContent = panelCopy("retry");
+    retry.addEventListener("click", () => {
+      void triggerAnalysis();
+    });
+    item.appendChild(retry);
 
     chapterList.appendChild(item);
   }
@@ -2845,12 +3323,17 @@ function setupExplainFeature() {
   tooltip.innerHTML = `
     <button class="explain-btn" type="button">Explain</button>
     <button class="selection-note-btn" type="button">Note</button>
+    <button class="selection-word-btn" type="button">Word</button>
   `;
-  // The two actions follow the interface language.
+  // The three actions follow the interface language.
   const explainBtn = tooltip.querySelector(".explain-btn");
   explainBtn.textContent = panelCopy("explainTitle");
   const selectionNoteBtn = tooltip.querySelector(".selection-note-btn");
   selectionNoteBtn.textContent = panelCopy("note");
+  const selectionWordBtn = tooltip.querySelector(".selection-word-btn");
+  selectionWordBtn.textContent = panelCopy("extractWord");
+  selectionWordBtn.title = panelCopy("extractWordTitle");
+  selectionWordBtn.setAttribute("aria-label", panelCopy("extractWordTitle"));
 
   tooltip.style.display = "none";
   document.body.appendChild(tooltip);
@@ -3000,6 +3483,171 @@ function setupExplainFeature() {
       }, 1500);
     }
   });
+
+  // Find the words worth learning in the selected sentence. This asks the
+  // AI provider, so the price is stated before the request goes out and the
+  // user confirms the words before they are stored.
+  selectionWordBtn.addEventListener("click", async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!selectedText) return;
+
+    const button = event.currentTarget;
+    const originalText = button.textContent;
+    button.textContent = panelCopy("saving");
+    button.disabled = true;
+
+    try {
+      const result = await chrome.runtime.sendMessage({
+        action: "extractVocabulary",
+        sentence: selectedText,
+      });
+
+      if (!result?.success) {
+        throw new Error(result?.error || panelCopy("extractWordFailed"));
+      }
+
+      const words = Array.isArray(result.words) ? result.words : [];
+      if (!words.length) throw new Error(panelCopy("extractWordFailed"));
+
+      showWordConfirmation(words, selectedText, selectedTimestamp);
+    } catch (error) {
+      console.error("[YouTube Digest] Extract vocabulary error:", error);
+      announceAlert(panelCopy("extractWordFailed"));
+    } finally {
+      button.textContent = originalText;
+      button.disabled = false;
+      tooltip.style.display = "none";
+    }
+  });
+}
+
+/**
+ * Asks the user to confirm the words the AI picked out.
+ *
+ * The AI is a suggestion, not an authority: the learner sees the words,
+ * the sentence they came from and the price, and decides.
+ */
+function showWordConfirmation(words, sentence, timestamp) {
+  const modal = document.createElement("div");
+  modal.id = "wordModal";
+  modal.className = "explain-modal-overlay";
+
+  const dialog = document.createElement("div");
+  dialog.className = "explain-modal";
+  dialog.setAttribute("role", "dialog");
+  dialog.setAttribute("aria-modal", "true");
+  dialog.setAttribute("aria-labelledby", "word-modal-title");
+  dialog.setAttribute("tabindex", "-1");
+
+  const header = document.createElement("div");
+  header.className = "explain-modal-header";
+
+  const title = document.createElement("div");
+  title.className = "explain-modal-title";
+  title.id = "word-modal-title";
+  title.textContent = panelCopy("extractWordResults");
+
+  const closeButton = document.createElement("button");
+  closeButton.className = "explain-modal-close";
+  closeButton.type = "button";
+  closeButton.textContent = panelCopy("close");
+
+  header.append(title, closeButton);
+
+  const selected = document.createElement("div");
+  selected.className = "explain-selected-text";
+  selected.textContent = `"${String(sentence).slice(0, 200)}"`;
+
+  const content = document.createElement("div");
+  content.className = "explain-modal-content";
+
+  const cost = document.createElement("p");
+  cost.className = "word-cost";
+  cost.textContent = panelCopy("extractWordCost");
+  content.appendChild(cost);
+
+  const list = document.createElement("div");
+  list.className = "word-confirm-list";
+  words.forEach((word) => {
+    const row = document.createElement("div");
+    row.className = "word-confirm-item";
+    row.innerHTML = `
+      <div class="word-confirm-term">${escapeHtml(word.term || "")}</div>
+      <div class="word-confirm-translation">${escapeHtml(word.translation || "")}</div>
+      ${word.explanation ? `<div class="word-confirm-explanation">${escapeHtml(word.explanation)}</div>` : ""}
+    `;
+    list.appendChild(row);
+  });
+  content.appendChild(list);
+
+  const actions = document.createElement("div");
+  actions.className = "word-confirm-actions";
+  const cancelButton = document.createElement("button");
+  cancelButton.type = "button";
+  cancelButton.className = "enhance-btn";
+  cancelButton.textContent = panelCopy("extractWordCancel");
+  const saveButton = document.createElement("button");
+  saveButton.type = "button";
+  saveButton.className = "primary-btn";
+  saveButton.textContent = panelCopy("extractWordSave");
+  actions.append(cancelButton, saveButton);
+  content.appendChild(actions);
+
+  dialog.append(header, selected, content);
+  modal.appendChild(dialog);
+  document.body.appendChild(modal);
+
+  const close = () => {
+    document.removeEventListener("keydown", onKeydown, true);
+    modal.remove();
+  };
+
+  const onKeydown = (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      close();
+    }
+  };
+  document.addEventListener("keydown", onKeydown, true);
+
+  closeButton.addEventListener("click", close);
+  cancelButton.addEventListener("click", close);
+  modal.addEventListener("click", (event) => {
+    if (event.target === modal) close();
+  });
+
+  saveButton.addEventListener("click", async () => {
+    saveButton.disabled = true;
+    const original = saveButton.textContent;
+    saveButton.textContent = panelCopy("saving");
+    try {
+      for (const word of words) {
+        await chrome.runtime.sendMessage({
+          action: "saveVocabulary",
+          entry: {
+            term: word.term,
+            translation: word.translation,
+            explanation: word.explanation,
+            sentence,
+            videoId: currentVideoId || "",
+            videoTitle: currentVideoTitle || "",
+            timestampSeconds: timestamp,
+          },
+        });
+      }
+      close();
+      announceStatus(panelCopy("extractWordSaved"));
+      await loadVocabulary();
+    } catch (error) {
+      console.error("[YouTube Digest] Save vocabulary error:", error);
+      saveButton.disabled = false;
+      saveButton.textContent = original;
+      announceAlert(panelCopy("couldNotSave"));
+    }
+  });
+
+  dialog.focus();
 }
 
 /**
@@ -3236,6 +3884,9 @@ async function saveToCache(videoId) {
  * Keeps the cache from growing unbounded.
  * Removes the oldest entries when we exceed maxEntries videos.
  *
+ * The cleanup is recorded, because dropping the user's cached videos
+ * without telling them is the one thing the library must never do.
+ *
  * @param {number} maxEntries - Maximum number of cached videos to keep
  */
 async function evictOldCacheEntries(maxEntries) {
@@ -3244,31 +3895,36 @@ async function evictOldCacheEntries(maxEntries) {
     let digestKeys = Object.keys(allData).filter((k) =>
       k.startsWith("digest_"),
     );
-    const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
+    const THIRTY_DAYS = LIBRARY_MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
     const expired = digestKeys.filter((key) => {
       const timestamp = Number(allData[key]?.timestamp) || 0;
       return Date.now() - timestamp > THIRTY_DAYS;
     });
+    let removed = 0;
     if (expired.length) {
       await chrome.storage.local.remove(expired);
       const expiredSet = new Set(expired);
       digestKeys = digestKeys.filter((key) => !expiredSet.has(key));
+      removed += expired.length;
     }
 
-    if (digestKeys.length <= maxEntries) return;
+    if (digestKeys.length > maxEntries) {
+      // Sort by timestamp (oldest first) and remove excess
+      const sorted = digestKeys
+        .map((k) => ({ key: k, ts: allData[k]?.timestamp || 0 }))
+        .sort((a, b) => a.ts - b.ts);
 
-    // Sort by timestamp (oldest first) and remove excess
-    const sorted = digestKeys
-      .map((k) => ({ key: k, ts: allData[k]?.timestamp || 0 }))
-      .sort((a, b) => a.ts - b.ts);
-
-    const toRemove = sorted
-      .slice(0, sorted.length - maxEntries)
-      .map((e) => e.key);
-    if (toRemove.length > 0) {
-      await chrome.storage.local.remove(toRemove);
-      debugLog(`[YouTube Digest] Evicted ${toRemove.length} old cache entries`);
+      const toRemove = sorted
+        .slice(0, sorted.length - maxEntries)
+        .map((e) => e.key);
+      if (toRemove.length > 0) {
+        await chrome.storage.local.remove(toRemove);
+        removed += toRemove.length;
+        debugLog(`[YouTube Digest] Evicted ${toRemove.length} old cache entries`);
+      }
     }
+
+    if (removed > 0) await recordLibraryCleanup(removed);
   } catch (error) {
     console.error("Cache eviction error:", error);
   }
@@ -3351,6 +4007,8 @@ function renderNotes(notes, filteredVideoId) {
     notesIntro.textContent = filteredVideoId
       ? panelCopy("noNotesForVideo")
       : panelCopy("noNotesYet");
+    renderNotesCount();
+    void loadNotesDroppedNotice();
     return;
   }
 
@@ -3358,12 +4016,24 @@ function renderNotes(notes, filteredVideoId) {
 
   notes.forEach((note, index) => {
     const translationId = getNoteTranslationId(note, index);
+    const starred = note.starred === true;
     const noteEl = document.createElement("div");
     noteEl.className = "note-item";
     noteEl.innerHTML = `
       <div class="note-header">
         <button class="note-timestamp" type="button" style="border: none;" data-url="${escapeHtml(note.timestampedUrl)}" data-seconds="${Number(note.timestampSeconds) || 0}" aria-label="${escapeHtml(panelCopyFormat("playFrom", { time: note.timestamp }))}">${escapeHtml(note.timestamp)}</button>
         ${!filteredVideoId ? `<span class="note-video-title">${escapeHtml(note.videoTitle)}</span>` : ""}
+        <button
+          class="note-star${starred ? " note-star--on" : ""}"
+          type="button"
+          aria-pressed="${starred ? "true" : "false"}"
+          aria-label="${escapeHtml(starred ? panelCopy("unstarNote") : panelCopy("starNote"))}"
+          title="${escapeHtml(starred ? panelCopy("unstarNote") : panelCopy("starNote"))}"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1-5.4-2.9-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"></path>
+          </svg>
+        </button>
       </div>
       <div class="note-text" role="button" tabindex="0" title="${escapeHtml(panelCopy("editNoteTitle"))}">${renderLocalizedContent(note.text, "notes", translationId)}</div>
       <div class="note-actions">
@@ -3407,6 +4077,13 @@ function renderNotes(notes, filteredVideoId) {
       loadNotes(filteredVideoId);
     });
 
+    // Star button — the favorite the dashboard's Favorites tab promises.
+    const starBtn = noteEl.querySelector(".note-star");
+    starBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      await toggleNoteStar(note, starBtn);
+    });
+
     // Copy text button - copies just the note's text
     const copyTextBtn = noteEl.querySelector(".note-copy-text");
     copyTextBtn.addEventListener("click", async () => {
@@ -3445,6 +4122,9 @@ function renderNotes(notes, filteredVideoId) {
 
     notesList.appendChild(noteEl);
   });
+
+  renderNotesCount();
+  void loadNotesDroppedNotice();
 
   if (currentTranscriptMode !== "original" && resultTabIsActive("notes")) {
     void translateNotesContent();
@@ -3538,6 +4218,854 @@ async function deleteNote(noteId) {
     });
   } catch (error) {
     console.error("[YouTube Digest Panel] Delete note error:", error);
+  }
+}
+
+// ============================================================
+// NOTES — composing, starring, counting and exporting
+// ============================================================
+
+/**
+ * Reads the current playback time of the video on screen.
+ *
+ * The panel asks the content script for the time it is at right now, so a
+ * note written in the panel lands on the moment the user is watching.
+ *
+ * The answer is null when the panel cannot know: no video in the tab, the
+ * tab is not the one on screen, or the content script did not answer. A
+ * panel that guesses says "0:00" as if the video were at its first second,
+ * and the note lands in the wrong place. So the panel says "unknown"
+ * instead of inventing a moment.
+ */
+async function getCurrentPlaybackSeconds() {
+  try {
+    const result = await chrome.runtime.sendMessage({
+      action: "relayToContent",
+      payload: { action: "getCurrentTime" },
+    });
+    if (!result?.success || !result?.response) return null;
+    const seconds = Number(result.response.currentTime);
+    if (!Number.isFinite(seconds) || seconds < 0) return null;
+    return seconds;
+  } catch (error) {
+    return null;
+  }
+}
+
+/**
+ * Turns seconds into the M:SS stamp the rest of the panel uses.
+ */
+function formatTimestamp(seconds) {
+  const total = Math.max(0, Math.floor(Number(seconds) || 0));
+  const minutes = Math.floor(total / 60);
+  return `${minutes}:${String(total % 60).padStart(2, "0")}`;
+}
+
+/**
+ * Shows the moment the video is at, so the note the user writes lands where
+ * they expect it.
+ *
+ * When the panel cannot know the moment, it says so instead of printing a
+ * fake "0:00". A wrong time is worse than no time: the user trusts it.
+ */
+async function refreshNotesCurrentTime() {
+  const element = document.getElementById("notesCurrentTime");
+  if (!element) return;
+  if (!currentVideoId) {
+    element.textContent = "";
+    return;
+  }
+  // A saved copy is not the video in the tab, so the tab's playback
+  // position belongs to another video. Reading it would put the note on
+  // the wrong moment of the wrong video.
+  if (showingCachedVideo) {
+    element.textContent = panelCopy("noteAtCurrentMoment");
+    return;
+  }
+  const seconds = await getCurrentPlaybackSeconds();
+  if (seconds === null) {
+    element.textContent = panelCopy("noteAtCurrentMoment");
+    return;
+  }
+  element.textContent = panelCopyFormat("playFrom", {
+    time: formatTimestamp(seconds),
+  });
+}
+
+/**
+ * Saves a note the learner typed in the panel, at the current moment.
+ */
+async function saveQuickNote() {
+  const input = document.getElementById("quickNoteInput");
+  const button = document.getElementById("quickNoteSaveBtn");
+  if (!input || !button) return;
+
+  const text = String(input.value || "").trim();
+  if (!text) {
+    announceAlert(panelCopy("quickNoteEmpty"));
+    input.focus();
+    return;
+  }
+  if (!currentVideoId) {
+    announceAlert(panelCopy("emptyNoVideoNotes"));
+    return;
+  }
+
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = panelCopy("saving");
+
+  const seconds = await getCurrentPlaybackSeconds();
+
+  try {
+    const result = await chrome.runtime.sendMessage({
+      action: "saveNote",
+      videoId: currentVideoId,
+      // The moment the panel could not read is saved as the start of the
+      // video, which is the truth: the note is at the beginning rather than
+      // at a moment the panel made up.
+      timestamp: seconds === null ? 0 : seconds,
+      videoTitle: currentVideoTitle,
+      channelName: currentChannelName,
+      // The panel already holds the exact words, so the background stores
+      // them as they are. Without this the background would fetch the
+      // transcript again (a credit) and pay an AI call to rewrite them.
+      selectedText: text,
+    });
+
+    if (!result?.success) {
+      throw new Error(result?.error || "Could not save note");
+    }
+
+    input.value = "";
+    announceStatus(panelCopy("quickNoteSaved"));
+    await loadNotes(currentNotesFilterVideoId);
+  } catch (error) {
+    console.error("[YouTube Digest] Quick note error:", error);
+    announceAlert(panelCopy("couldNotSave"));
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+  }
+}
+
+/**
+ * Shows the note count against the limit that really applies, and warns
+ * before the oldest notes start disappearing.
+ */
+function renderNotesCount() {
+  const countEl = document.getElementById("notesCount");
+  const warningEl = document.getElementById("notesLimitWarning");
+  const count = currentNotes.length;
+
+  if (countEl) {
+    countEl.textContent = panelCopyFormat("notesCount", {
+      count: String(count),
+      limit: String(LOCAL_NOTE_LIMIT),
+    });
+  }
+  if (warningEl) {
+    const nearLimit = count >= LOCAL_NOTE_LIMIT - 10;
+    warningEl.hidden = !nearLimit;
+    if (nearLimit) warningEl.textContent = panelCopy("notesNearLimit");
+  }
+}
+
+/**
+ * Says out loud that the store dropped old notes.
+ *
+ * The local store keeps a capped number of notes. When the cap is hit, the
+ * oldest note goes away - that is fine, but doing it silently is not: the
+ * user wrote something, it was on screen yesterday, and today it is gone
+ * with no explanation. The store records the drop; this reads that record
+ * and puts it in front of the user.
+ *
+ * The record is namespaced per account, the same way the notes are, so a
+ * drop that happened under one account is never shown under another.
+ */
+async function loadNotesDroppedNotice() {
+  const notice = document.getElementById("notesDroppedNotice");
+  if (!notice) return;
+
+  try {
+    let githubId = "";
+    const sessionKey =
+      typeof YTD_SETTINGS !== "undefined" && YTD_SETTINGS.GITHUB_SESSION_KEY
+        ? YTD_SETTINGS.GITHUB_SESSION_KEY
+        : "ytd_github_session";
+    const stored = await chrome.storage.local.get(sessionKey);
+    const session = stored?.[sessionKey];
+    if (session && session.githubId) githubId = session.githubId;
+
+    const droppedKey =
+      typeof YTD_SETTINGS !== "undefined" && YTD_SETTINGS.notesDroppedKey
+        ? YTD_SETTINGS.notesDroppedKey(githubId)
+        : githubId
+          ? `ytd_notes_dropped_${githubId}`
+          : "ytd_notes_dropped";
+
+    const dropped = await chrome.storage.local.get(droppedKey);
+    const record = dropped?.[droppedKey];
+    const count = Number(record?.lastCount) || 0;
+
+    if (!count) {
+      notice.hidden = true;
+      notice.textContent = "";
+      return;
+    }
+    notice.hidden = false;
+    notice.textContent = panelCopyFormat("notesDropped", {
+      count: String(count),
+      limit: String(LOCAL_NOTE_LIMIT),
+    });
+  } catch (error) {
+    notice.hidden = true;
+  }
+}
+
+/**
+ * Stars or unstars a note. The star is the promise the dashboard's Favorites
+ * tab makes, so the panel has to be able to set it.
+ */
+async function toggleNoteStar(note, button) {
+  const next = !(note.starred === true);
+  const original = button.getAttribute("aria-pressed");
+  button.setAttribute("aria-pressed", String(next));
+
+  try {
+    const result = await chrome.runtime.sendMessage({
+      action: "setNoteStarred",
+      noteId: note.id,
+      starred: next,
+    });
+    if (!result?.success) {
+      throw new Error(result?.error || "Could not star the note");
+    }
+    note.starred = result.note?.starred === true;
+    button.setAttribute("aria-pressed", String(note.starred));
+    button.setAttribute(
+      "aria-label",
+      note.starred ? panelCopy("unstarNote") : panelCopy("starNote"),
+    );
+    button.title = note.starred ? panelCopy("unstarNote") : panelCopy("starNote");
+    announceStatus(note.starred ? panelCopy("saved") : panelCopy("copied"));
+  } catch (error) {
+    console.error("[YouTube Digest] Star note error:", error);
+    button.setAttribute("aria-pressed", original || "false");
+    announceAlert(panelCopy("couldNotSave"));
+  }
+}
+
+/**
+ * Builds the Markdown the user pastes into Obsidian or Notion.
+ *
+ * Every note carries the video, the channel, a timestamp and the time it
+ * was written, so the notes still make sense a month later.
+ */
+function buildNotesMarkdown(notes) {
+  const lines = ["# YouTube Digest notes", ""];
+
+  notes.forEach((note) => {
+    const title = note.videoTitle || "Untitled video";
+    const channel = note.channelName || "";
+    const stamp = note.timestamp || formatTimestamp(note.timestampSeconds);
+    const written = note.createdAt
+      ? new Date(note.createdAt).toISOString().slice(0, 16).replace("T", " ")
+      : "";
+
+    lines.push(`## ${title}`);
+    if (channel) lines.push(`Channel: ${channel}`);
+    lines.push(`- [${stamp}](${note.timestampedUrl})`);
+    if (written) lines.push(`- Saved: ${written}`);
+    lines.push("");
+    lines.push(String(note.text || "").trim());
+    lines.push("");
+  });
+
+  return lines.join("\n");
+}
+
+/**
+ * Exports the notes the user is looking at as Markdown and copies them to
+ * the clipboard.
+ */
+async function exportNotesAsMarkdown() {
+  const button = document.getElementById("exportNotesBtn");
+  const notes = currentNotes;
+  if (!notes.length) {
+    announceAlert(panelCopy("noNotesYet"));
+    return;
+  }
+
+  const original = button?.textContent;
+  const markdown = buildNotesMarkdown(notes);
+  const copied = await copyToClipboard(markdown);
+
+  if (button) {
+    button.textContent = copied
+      ? panelCopy("exportNotesCopied")
+      : panelCopy("exportNotesFailed");
+    setTimeout(() => {
+      button.textContent = original;
+    }, 2000);
+  }
+  if (copied) announceStatus(panelCopy("exportNotesCopied"));
+  else announceAlert(panelCopy("exportNotesFailed"));
+}
+
+// ============================================================
+// WORDS — the vocabulary the learner built
+// ============================================================
+
+/**
+ * The three states a saved word can be in, in the words the user reads.
+ * The database values never reach the screen.
+ */
+const WORD_STATUS_LABELS = Object.freeze({
+  learning: "wordStatusLearning",
+  reviewing: "wordStatusReviewing",
+  mastered: "wordStatusMastered",
+});
+
+/**
+ * Loads the vocabulary. It is local-first, so it works without a sign-in.
+ */
+async function loadVocabulary() {
+  const list = document.getElementById("wordsList");
+  if (!list) return;
+
+  try {
+    const result = await chrome.runtime.sendMessage({
+      action: "getVocabulary",
+    });
+    if (!result?.success) {
+      vocabularyItems = [];
+      renderVocabulary();
+      return;
+    }
+    vocabularyItems = Array.isArray(result.items) ? result.items : [];
+    renderVocabulary();
+    updateWelcomeCounts();
+  } catch (error) {
+    console.error("[YouTube Digest Panel] Load vocabulary error:", error);
+    vocabularyItems = [];
+    renderVocabulary();
+  }
+}
+
+/**
+ * Draws the vocabulary list.
+ */
+function renderVocabulary() {
+  const list = document.getElementById("wordsList");
+  if (!list) return;
+
+  list.innerHTML = "";
+
+  if (!vocabularyItems.length) {
+    const empty = document.createElement("p");
+    empty.className = "panel-hint";
+    empty.textContent = panelCopy("wordsEmpty");
+    list.appendChild(empty);
+    return;
+  }
+
+  vocabularyItems.forEach((item) => {
+    const card = document.createElement("div");
+    card.className = "word-item";
+
+    const statusKey = WORD_STATUS_LABELS[item.status] || "wordStatusLearning";
+    const source = item.videoId
+      ? `<button class="word-source" type="button" data-video-id="${escapeHtml(item.videoId)}" data-seconds="${Number(item.timestampSeconds) || 0}">${escapeHtml(item.videoTitle || "Video")} · ${escapeHtml(formatTimestamp(item.timestampSeconds))}</button>`
+      : "";
+
+    card.innerHTML = `
+      <div class="word-header">
+        <span class="word-term">${escapeHtml(item.term)}</span>
+        <span class="word-status word-status--${escapeHtml(item.status || "learning")}">${escapeHtml(panelCopy(statusKey))}</span>
+        <button class="word-delete" type="button" data-id="${escapeHtml(item.id)}" aria-label="${escapeHtml(panelCopy("deleteWord"))}" title="${escapeHtml(panelCopy("deleteWord"))}">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M3 6h18"></path>
+            <path d="M8 6V4h8v2"></path>
+            <path d="m19 6-1 14H6L5 6"></path>
+            <path d="M10 11v5"></path>
+            <path d="M14 11v5"></path>
+          </svg>
+        </button>
+      </div>
+      <div class="word-definition">${escapeHtml(item.translation || "")}</div>
+      ${item.explanation ? `<div class="word-explanation">${escapeHtml(item.explanation)}</div>` : ""}
+      ${item.sentence ? `<div class="word-sentence">${escapeHtml(item.sentence)}</div>` : ""}
+      ${source ? `<div class="word-footer">${source}</div>` : ""}
+    `;
+
+    const sourceButton = card.querySelector(".word-source");
+    sourceButton?.addEventListener("click", () => {
+      const videoId = sourceButton.dataset.videoId;
+      const seconds = Number(sourceButton.dataset.seconds) || 0;
+      openVideoAt(videoId, seconds);
+    });
+
+    const deleteButton = card.querySelector(".word-delete");
+    deleteButton?.addEventListener("click", async () => {
+      deleteButton.disabled = true;
+      const result = await chrome.runtime
+        .sendMessage({
+          action: "deleteVocabulary",
+          vocabId: item.id,
+        })
+        .catch(() => null);
+      if (result?.success) {
+        vocabularyItems = vocabularyItems.filter(
+          (candidate) => candidate.id !== item.id,
+        );
+        renderVocabulary();
+        updateWelcomeCounts();
+        announceStatus(panelCopy("copied"));
+      } else {
+        deleteButton.disabled = false;
+        announceAlert(panelCopy("couldNotSave"));
+      }
+    });
+
+    list.appendChild(card);
+  });
+}
+
+/**
+ * Opens a video at a moment. A video that is already on screen is seeked
+ * in place; any other video is opened in a new tab.
+ */
+function openVideoAt(videoId, seconds) {
+  if (!videoId) return;
+  if (videoId === currentVideoId) {
+    seekTo(seconds);
+    switchTab("transcript");
+    return;
+  }
+  chrome.tabs.create({
+    url: `https://www.youtube.com/watch?v=${videoId}&t=${Math.max(0, Math.floor(Number(seconds) || 0))}s`,
+  });
+}
+
+// ============================================================
+// REVIEW — the spaced repetition queue
+// ============================================================
+
+/**
+ * Reads the review queue. Reviews are scheduled on the server, so this
+ * needs a sign-in; without one the panel says so instead of showing an
+ * error.
+ */
+async function loadDueReviews() {
+  const area = document.getElementById("reviewArea");
+  if (!area) return;
+
+  const signedOut = document.getElementById("reviewSignedOut");
+  const empty = document.getElementById("reviewEmpty");
+  const card = document.getElementById("reviewCard");
+  const actions = document.getElementById("reviewActions");
+
+  try {
+    const result = await chrome.runtime.sendMessage({
+      action: "getDueReviews",
+    });
+
+    if (!result?.success) {
+      reviewQueue = [];
+      reviewIndex = 0;
+      if (signedOut) signedOut.hidden = result?.error !== "NO_SESSION";
+      if (empty) empty.hidden = true;
+      if (card) card.hidden = true;
+      if (actions) actions.hidden = true;
+      const progress = document.getElementById("reviewProgress");
+      if (progress) progress.textContent = "";
+      return;
+    }
+
+    if (signedOut) signedOut.hidden = true;
+    reviewQueue = Array.isArray(result.reviews) ? result.reviews : [];
+    reviewIndex = 0;
+    reviewRevealed = false;
+
+    if (empty) empty.hidden = reviewQueue.length > 0;
+    if (card) card.hidden = reviewQueue.length === 0;
+    if (actions) actions.hidden = reviewQueue.length === 0;
+    if (reviewQueue.length) renderReviewCard();
+    else {
+      const progress = document.getElementById("reviewProgress");
+      if (progress) progress.textContent = "";
+    }
+  } catch (error) {
+    console.error("[YouTube Digest Panel] Load reviews error:", error);
+  }
+}
+
+/**
+ * Draws the review card. The card is the only way to see the answer, so it
+ * is a real button that a keyboard can reach.
+ */
+function renderReviewCard() {
+  const review = reviewQueue[reviewIndex];
+  const card = document.getElementById("reviewCard");
+  if (!card) return;
+
+  if (!review) {
+    void loadDueReviews();
+    return;
+  }
+
+  const vocabulary = review.vocabulary || {};
+  reviewRevealed = false;
+
+  const term = document.getElementById("reviewTerm");
+  const sentence = document.getElementById("reviewSentence");
+  const translation = document.getElementById("reviewTranslation");
+  const explanation = document.getElementById("reviewExplanation");
+  const hint = document.getElementById("reviewHint");
+
+  if (term) term.textContent = vocabulary.term || "";
+  if (sentence) sentence.textContent = vocabulary.sentence || "";
+  if (translation) {
+    translation.textContent = vocabulary.translation || "";
+    translation.hidden = true;
+  }
+  if (explanation) {
+    explanation.textContent = vocabulary.sentenceTranslation || "";
+    explanation.hidden = true;
+  }
+  if (hint) {
+    hint.hidden = false;
+    hint.textContent = panelCopy("reviewShowAnswer");
+  }
+  card.setAttribute("aria-expanded", "false");
+
+  const progress = document.getElementById("reviewProgress");
+  if (progress) {
+    progress.textContent = panelCopyFormat("reviewProgress", {
+      index: String(reviewIndex + 1),
+      total: String(reviewQueue.length),
+    });
+  }
+}
+
+/**
+ * Shows the answer on the review card.
+ */
+function revealReviewAnswer() {
+  if (reviewRevealed) return;
+  reviewRevealed = true;
+  const translation = document.getElementById("reviewTranslation");
+  const explanation = document.getElementById("reviewExplanation");
+  const hint = document.getElementById("reviewHint");
+  const card = document.getElementById("reviewCard");
+  if (translation) translation.hidden = false;
+  if (explanation) explanation.hidden = false;
+  if (hint) {
+    hint.hidden = true;
+    hint.textContent = panelCopy("reviewHideAnswer");
+  }
+  card?.setAttribute("aria-expanded", "true");
+}
+
+/**
+ * Grades a card. The grades are the ones the dashboard uses, so a learner
+ * who reviews in both places gets the same schedule.
+ */
+async function submitReviewGrade(grade) {
+  const review = reviewQueue[reviewIndex];
+  if (!review?.vocabulary?.id) return;
+
+  const result = await chrome.runtime
+    .sendMessage({
+      action: "submitReview",
+      vocabId: review.vocabulary.id,
+      grade: Number(grade),
+    })
+    .catch(() => null);
+
+  if (!result?.success) {
+    announceAlert(result?.error || panelCopy("errorMessage"));
+    return;
+  }
+
+  reviewIndex += 1;
+  if (reviewIndex >= reviewQueue.length) {
+    reviewQueue = [];
+    const card = document.getElementById("reviewCard");
+    const actions = document.getElementById("reviewActions");
+    const empty = document.getElementById("reviewEmpty");
+    if (card) card.hidden = true;
+    if (actions) actions.hidden = true;
+    if (empty) empty.hidden = false;
+    const progress = document.getElementById("reviewProgress");
+    if (progress) progress.textContent = "";
+    announceStatus(panelCopy("reviewEmptyState"));
+    void loadVocabulary();
+    return;
+  }
+  renderReviewCard();
+}
+
+// ============================================================
+// LIBRARY — the videos that were read already
+// ============================================================
+
+/**
+ * Reads the cached digests and puts them in the library.
+ *
+ * Opening one of them must never cost anything, so the panel reads the
+ * cached transcript and summary instead of asking for them again.
+ */
+async function loadLibrary() {
+  const list = document.getElementById("libraryList");
+  if (!list) return;
+
+  await loadLibraryCleanupNotice();
+
+  try {
+    const all = await chrome.storage.local.get(null);
+    libraryEntries = Object.keys(all)
+      .filter((key) => key.startsWith("digest_"))
+      .map((key) => {
+        const entry = all[key] || {};
+        return {
+          videoId: key.slice("digest_".length),
+          title: entry.videoTitle || "",
+          channelName: entry.channelName || "",
+          timestamp: Number(entry.timestamp) || 0,
+          hasSummary: Boolean(entry.analysis),
+          transcript: entry.transcript || null,
+          transcriptText: entry.transcriptText || null,
+          transcriptTimestamped: entry.transcriptTimestamped || null,
+          transcriptLanguage: entry.transcriptLanguage || null,
+          analysis: entry.analysis || null,
+          paragraphCache: entry.paragraphCache || null,
+          interfaceCache: entry.interfaceCache || null,
+        };
+      })
+      // The video the user is looking at right now is not a library entry.
+      // It is "you are here", not "you read this before", and opening it
+      // would change nothing.
+      .filter((entry) => entry.videoId !== currentVideoId)
+      .sort((a, b) => b.timestamp - a.timestamp);
+  } catch (error) {
+    console.error("[YouTube Digest Panel] Load library error:", error);
+    libraryEntries = [];
+  }
+
+  renderLibrary();
+  updateWelcomeCounts();
+}
+
+/**
+ * Renders the library, newest first, filtered by the search box.
+ */
+function renderLibrary() {
+  const list = document.getElementById("libraryList");
+  if (!list) return;
+
+  list.innerHTML = "";
+
+  const query = librarySearchQuery.trim().toLowerCase();
+  const visible = query
+    ? libraryEntries.filter(
+        (entry) =>
+          entry.title.toLowerCase().includes(query) ||
+          entry.channelName.toLowerCase().includes(query),
+      )
+    : libraryEntries;
+
+  if (!visible.length) {
+    const empty = document.createElement("p");
+    empty.className = "panel-hint";
+    empty.textContent = query ? panelCopy("libraryEmpty") : panelCopy("libraryEmpty");
+    list.appendChild(empty);
+    return;
+  }
+
+  visible.forEach((entry) => {
+    const card = document.createElement("div");
+    card.className = "library-item";
+    const relative = formatRelativeTime(entry.timestamp);
+    card.innerHTML = `
+      <div class="library-title">${escapeHtml(entry.title || "Untitled video")}</div>
+      <div class="library-meta">
+        <span class="library-channel">${escapeHtml(entry.channelName || "")}</span>
+        <span class="library-time">${escapeHtml(relative)}</span>
+        <span class="library-badge">${escapeHtml(entry.hasSummary ? panelCopy("libraryHasSummary") : panelCopy("libraryTranscriptOnly"))}</span>
+      </div>
+    `;
+
+    const openButton = document.createElement("button");
+    openButton.className = "library-open";
+    openButton.type = "button";
+    openButton.textContent = panelCopy("libraryOpenVideo");
+    openButton.setAttribute(
+      "aria-label",
+      `${panelCopy("libraryOpenVideo")}: ${entry.title || ""}`,
+    );
+    openButton.addEventListener("click", () => {
+      openVideoOnYouTube(entry.videoId);
+    });
+
+    // Two different intentions, two different words. "Read in the panel"
+    // shows the saved copy here; "Open on YouTube" goes to the video. A
+    // button that says one thing and does another is worse than no button.
+    const readButton = document.createElement("button");
+    readButton.className = "library-open library-read";
+    readButton.type = "button";
+    readButton.textContent = panelCopy("libraryOpenInPanel");
+    readButton.setAttribute(
+      "aria-label",
+      `${panelCopy("libraryOpenInPanel")}: ${entry.title || ""}`,
+    );
+    readButton.addEventListener("click", () => {
+      openLibraryEntry(entry);
+    });
+
+    const actions = document.createElement("div");
+    actions.className = "library-actions";
+    actions.append(readButton, openButton);
+    card.appendChild(actions);
+
+    list.appendChild(card);
+  });
+}
+
+/**
+ * Opens a video on YouTube in a new tab.
+ */
+function openVideoOnYouTube(videoId) {
+  if (!videoId) return;
+  chrome.tabs.create({
+    url: `https://www.youtube.com/watch?v=${videoId}`,
+  });
+}
+
+/**
+ * Opens a library entry in the panel, from the cache.
+ *
+ * The transcript and the summary are already on this device, so nothing is
+ * fetched and nothing is paid for.
+ */
+function openLibraryEntry(entry) {
+  if (!entry?.videoId) return;
+
+  currentVideoId = entry.videoId;
+  currentVideoUrl = `https://www.youtube.com/watch?v=${entry.videoId}`;
+  currentAnalysis = entry.analysis || null;
+  currentTranscript = entry.transcript || null;
+  currentTranscriptText = entry.transcriptText || null;
+  currentTranscriptTimestamped = entry.transcriptTimestamped || null;
+  currentTranscriptLanguage = entry.transcriptLanguage || null;
+  currentVideoTitle = entry.title || "";
+  currentChannelName = entry.channelName || "";
+  // The panel now shows a saved copy, not the video in the front tab. The
+  // header has to say so, because a note written here belongs to this
+  // saved video and not to what the tab is playing.
+  showingCachedVideo = true;
+  renderCachedViewNote();
+
+  if (entry.paragraphCache) {
+    for (const [key, value] of Object.entries(entry.paragraphCache)) {
+      transcriptParagraphCache.set(key, value);
+    }
+  }
+  if (entry.interfaceCache) {
+    for (const [key, value] of Object.entries(entry.interfaceCache)) {
+      interfaceTranslationCache.set(key, value);
+    }
+  }
+
+  const videoInfo = document.getElementById("videoInfo");
+  const titleEl = document.getElementById("videoTitle");
+  const channelEl = document.getElementById("videoChannel");
+  if (titleEl) titleEl.textContent = currentVideoTitle;
+  if (channelEl) channelEl.textContent = currentChannelName;
+  if (videoInfo) videoInfo.style.display = "block";
+
+  showState("results");
+  renderTranscript();
+
+  if (currentAnalysis) {
+    renderAnalysisResults(currentAnalysis);
+    hideSummaryGate();
+  } else {
+    renderSummaryGate();
+  }
+
+  setupExplainFeature();
+  loadNotes(currentNotesFilterVideoId);
+  switchTab(currentAnalysis ? "overview" : "transcript");
+}
+
+/**
+ * Says that the panel is showing a saved copy, not the video in the tab.
+ *
+ * Without this the user would write a note about the video they are watching
+ * and find it filed under a different video.
+ */
+function renderCachedViewNote() {
+  const note = document.getElementById("cachedViewNote");
+  if (!note) return;
+  note.hidden = !showingCachedVideo;
+  note.textContent = showingCachedVideo ? panelCopy("libraryCachedView") : "";
+}
+
+/**
+ * Says how long ago a cached video was read, in the words a person would
+ * use.
+ */function formatRelativeTime(timestamp) {
+  const elapsed = Date.now() - (Number(timestamp) || 0);
+  if (!Number.isFinite(elapsed) || elapsed < 0) return "";
+  const minutes = Math.floor(elapsed / 60_000);
+  if (minutes < 1) return panelCopy("libraryTranscriptOnly") ? "" : "";
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} h`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days} d`;
+  const months = Math.floor(days / 30);
+  return `${months} mo`;
+}
+
+/**
+ * Records that entries were removed, so the cleanup stops being invisible.
+ */
+async function recordLibraryCleanup(count) {
+  if (!count) return;
+  try {
+    await chrome.storage.local.set({
+      [LIBRARY_CLEANUP_KEY]: { count, at: Date.now() },
+    });
+  } catch (error) {
+    // The notice is a courtesy, so a failed write must not break anything.
+  }
+}
+
+/**
+ * Shows the last cleanup, once.
+ */
+async function loadLibraryCleanupNotice() {
+  const notice = document.getElementById("libraryCleanup");
+  if (!notice) return;
+  try {
+    const stored = await chrome.storage.local.get(LIBRARY_CLEANUP_KEY);
+    const record = stored?.[LIBRARY_CLEANUP_KEY];
+    if (!record?.count) {
+      notice.hidden = true;
+      libraryCleanup = null;
+      return;
+    }
+    libraryCleanup = record;
+    notice.hidden = false;
+    notice.textContent = panelCopyFormat("libraryCleaned", {
+      count: String(record.count),
+      days: String(LIBRARY_MAX_AGE_DAYS),
+    });
+  } catch (error) {
+    notice.hidden = true;
   }
 }
 
@@ -4299,6 +5827,30 @@ globalThis.__YTD_PANEL_TESTING__ = {
   clampToolbarCenter,
   announceStatus,
   announceAlert,
+  renderSummaryGate,
+  hideSummaryGate,
+  renderAnalysisResults,
+  renderNotes,
+  renderVocabulary,
+  loadVocabulary,
+  loadDueReviews,
+  loadLibrary,
+  renderLibrary,
+  saveQuickNote,
+  exportNotesAsMarkdown,
+  buildNotesMarkdown,
+  toggleNoteStar,
+  submitReviewGrade,
+  revealReviewAnswer,
+  updateWelcomeCounts,
+  updateEmptyStates,
+  openLibraryEntry,
+  showWordConfirmation,
+  formatTimestamp,
+  loadNotesDroppedNotice,
+  showState,
+  loadNotes,
+  refreshNotesCurrentTime,
   setTranscriptMode: (mode) => {
     currentTranscriptMode = DISPLAY_LANGUAGE_MODES.has(mode)
       ? mode

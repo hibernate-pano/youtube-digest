@@ -59,6 +59,37 @@ var YTD_SETTINGS = (() => {
    */
   const NOTES_STORAGE_KEY = "ytd_notes";
 
+  /**
+   * How many notes the local store keeps.
+   *
+   * The cap exists so the store cannot grow without bound, but a note that
+   * disappears without a word is a note the user lost. So the number lives
+   * here, in one place, and both the store that enforces it and the panel
+   * that shows it read it from here. When the cap changes, the count the
+   * user sees changes with it.
+   */
+  const MAX_LOCAL_NOTES = 100;
+
+  /**
+   * Where the store records that it had to drop notes.
+   *
+   * The panel reads this key and tells the user how many notes went, so
+   * the loss is a fact on the screen and not a silent truncation.
+   */
+  const NOTES_DROPPED_KEY = "ytd_notes_dropped";
+
+  /**
+   * The drop record for one account.
+   *
+   * Notes are namespaced per account, so the record of a loss has to be too:
+   * a drop that happened while signed in must not be shown to the same user
+   * after they signed out and are looking at a different, much smaller store.
+   */
+  function notesDroppedKey(githubId) {
+    const id = String(githubId || "").trim();
+    return id ? `${NOTES_DROPPED_KEY}_${id}` : NOTES_DROPPED_KEY;
+  }
+
   function notesStorageKey(githubId) {
     const id = String(githubId || "").trim();
     return id ? `${NOTES_STORAGE_KEY}_${id}` : NOTES_STORAGE_KEY;
@@ -227,7 +258,10 @@ var YTD_SETTINGS = (() => {
     SYNC_EXPIRED_KEY,
     UI_LANGUAGE_STORAGE_KEY,
     NOTES_STORAGE_KEY,
+    MAX_LOCAL_NOTES,
+    NOTES_DROPPED_KEY,
     notesStorageKey,
+    notesDroppedKey,
     isNotesStorageKey,
     SYNC_COPY,
     normalizeUiLanguage,

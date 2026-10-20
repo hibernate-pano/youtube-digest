@@ -178,10 +178,16 @@ body {
 
 /* One tab component for the whole product. The dashboard and this panel now
    share the same geometry: a 40px hit target, a pill radius, a transparent
-   track with a terracotta fill for the active tab. */
+   track with a terracotta fill for the active tab.
+
+   Five tabs share a 360px strip. With flex: 1 each tab got 117px and used
+   about half of it, so the labels were spread out with air between them and
+   nothing but the label was left to read. flex: 1 1 auto lets a tab take
+   the width its own label needs and shares the rest evenly, so the strip
+   reads as five words rather than five islands. */
 .tab {
-  flex: 1;
-  min-width: 0; /* let tabs shrink so all three fit narrow panels */
+  flex: 1 1 auto;
+  min-width: 0; /* let tabs shrink so all five fit narrow panels */
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -201,6 +207,33 @@ body {
   transition:
     color 0.18s ease,
     background 0.18s ease;
+}
+
+/* The label carries the overflow rules. A tab is a flex box, and text
+   overflow only applies to a block box, so the ellipsis has to hang off the
+   label itself. */
+.tab-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A panel dragged all the way in still has to show all five names.
+   The English labels need 248px of text and a 320px panel leaves 264px for
+   the whole strip, so without help every name loses two to four pixels and
+   the ellipsis takes over: "Transcr...", "Summ...", "Not...". The strip
+   gives up 18px of gap and padding instead, and the names fit on one line.
+   The Chinese names are much narrower and never needed this. */
+@media (max-width: 359px) {
+  .tabs {
+    gap: 2px;
+  }
+
+  .tab {
+    padding-right: 1px;
+    padding-left: 1px;
+  }
 }
 
 .tab:hover {
@@ -1243,14 +1276,15 @@ body {
 }
 
 .explain-btn,
-.selection-note-btn {
+.selection-note-btn,
+.selection-word-btn {
   font-family: var(--font-sans);
   font-weight: 600;
   font-size: var(--fs-sm);
   letter-spacing: 0;
-  flex: 1 1 50%;
-  min-width: 72px;
-  padding: 8px 14px;
+  flex: 1 1 33%;
+  min-width: 60px;
+  padding: 8px 12px;
   border: none;
   border-radius: 0;
   background: transparent;
@@ -1262,7 +1296,8 @@ body {
 }
 
 .explain-btn:hover:not(:disabled),
-.selection-note-btn:hover:not(:disabled) {
+.selection-note-btn:hover:not(:disabled),
+.selection-word-btn:hover:not(:disabled) {
   background: var(--surface-raised);
   color: var(--accent-hover);
 }
@@ -1270,17 +1305,20 @@ body {
 /* The toolbar clips its overflow, so this ring is drawn inside the button
    rather than outside it. */
 .explain-btn:focus-visible,
-.selection-note-btn:focus-visible {
+.selection-note-btn:focus-visible,
+.selection-word-btn:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
 }
 
-.selection-note-btn {
+.selection-note-btn,
+.selection-word-btn {
   border-left: 1px solid var(--border);
 }
 
 .explain-btn:disabled,
-.selection-note-btn:disabled {
+.selection-note-btn:disabled,
+.selection-word-btn:disabled {
   cursor: default;
   color: var(--text-muted);
 }
@@ -1603,4 +1641,697 @@ body {
   .notes-filter .enhance-btn.active:hover:not(:disabled) {
     color: var(--on-accent);
   }
+}
+
+/* ============================================================
+   THE FIVE-TAB PANEL — shared building blocks
+   ============================================================ */
+
+/* A tab that needs a video says so, instead of showing a blank page. */
+.panel-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 220px;
+  padding: var(--sp-6) var(--sp-4);
+  text-align: center;
+}
+
+.panel-empty-text {
+  font-family: var(--font-sans);
+  font-size: var(--fs-md);
+  line-height: 1.6;
+  color: var(--text-muted);
+  max-width: 260px;
+}
+
+/* The same quiet line used for the hints under a section title. */
+.panel-hint {
+  font-family: var(--font-sans);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  color: var(--text-muted);
+  margin-bottom: var(--sp-3);
+}
+
+/* The one filled button in the panel. It is used for the action the user
+   came for, and nothing else. */
+.primary-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: var(--sp-2) var(--sp-4);
+  border: 1px solid var(--accent-solid);
+  border-radius: var(--r-pill);
+  background: var(--accent-solid);
+  color: var(--on-accent);
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: var(--fs-md);
+  cursor: pointer;
+  transition:
+    background 0.18s ease,
+    border-color 0.18s ease;
+}
+
+.primary-btn:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.primary-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* ============================================================
+   WELCOME STATE — the way in without a video
+   ============================================================ */
+.welcome-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  justify-content: center;
+  width: 100%;
+}
+
+.welcome-action {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 40px;
+  padding: var(--sp-2) var(--sp-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: var(--fs-md);
+  cursor: pointer;
+  transition:
+    border-color 0.18s ease,
+    color 0.18s ease,
+    background 0.18s ease;
+}
+
+.welcome-action:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.welcome-action-count {
+  font-family: var(--font-sans);
+  font-weight: 500;
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
+/* ============================================================
+   SUMMARY TAB — the price, the gate and the text
+   ============================================================ */
+.summary-gate {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--r-lg);
+  padding: var(--sp-4);
+  margin-bottom: var(--sp-5);
+  box-shadow: var(--shadow-sm);
+}
+
+.summary-gate-title {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: var(--fs-lg);
+  color: var(--text);
+  margin-bottom: var(--sp-2);
+}
+
+.summary-gate-text {
+  font-family: var(--font-sans);
+  font-size: var(--fs-md);
+  line-height: 1.6;
+  color: var(--text-secondary);
+  margin-bottom: var(--sp-3);
+}
+
+/* The price sits right above the button: the user reads the cost in the
+   same breath as the click that spends it. */
+.summary-gate-cost {
+  font-family: var(--font-sans);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--text-muted);
+  margin-top: var(--sp-2);
+}
+
+/* The summary text itself. It is the first thing the reader sees, so it
+   reads like the panel's other prose. */
+.summary-block {
+  background: var(--surface);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--r-lg);
+  padding: var(--sp-4);
+  margin-bottom: var(--sp-5);
+  box-shadow: var(--shadow-sm);
+}
+
+.summary-block-title {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: var(--fs-md);
+  letter-spacing: 0.2px;
+  color: var(--accent);
+  margin-bottom: var(--sp-2);
+}
+
+.summary-text {
+  font-family: var(--font-sans);
+  font-size: var(--fs-lg);
+  line-height: 1.7;
+  color: var(--text);
+}
+
+/* ============================================================
+   NOTES TAB — composing, starring, counting, exporting
+   ============================================================ */
+.notes-composer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+}
+
+.quick-note-input {
+  width: 100%;
+  min-height: 56px;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--fs-md);
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.quick-note-input::placeholder {
+  color: var(--text-muted);
+}
+
+.notes-composer-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.notes-current-time {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+.notes-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding-bottom: var(--sp-2);
+  margin-bottom: var(--sp-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.notes-count {
+  font-family: var(--font-sans);
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+.notes-warning {
+  font-family: var(--font-sans);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--accent-hover);
+  background: var(--accent-dim);
+  border-radius: var(--r-sm);
+  padding: var(--sp-2) var(--sp-3);
+  margin-bottom: var(--sp-3);
+}
+
+/* The note that the store dropped old notes. A loss is a fact, not a
+   warning about the future, so it gets its own tone. */
+.notes-dropped {
+  color: var(--text);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+}
+
+/* The star. It is a real button, so it is reachable and it announces its
+   state. */
+.note-star {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  padding: 0;
+  border: none;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition:
+    color 0.18s ease,
+    background 0.18s ease;
+}
+
+.note-star svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.note-star:hover {
+  color: var(--star);
+  background: var(--accent-dim);
+}
+
+.note-star--on {
+  color: var(--star);
+}
+
+.note-star--on svg {
+  fill: var(--highlight-soft);
+  stroke: var(--star);
+}
+
+/* ============================================================
+   WORDS TAB — the vocabulary
+   ============================================================ */
+.word-item {
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: var(--sp-3) var(--sp-4);
+  margin-bottom: var(--sp-3);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.word-header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-1);
+}
+
+.word-term {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: var(--fs-lg);
+  color: var(--text);
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.word-status {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: var(--fs-xs);
+  letter-spacing: 0.2px;
+  padding: 3px 10px;
+  border-radius: var(--r-pill);
+  white-space: nowrap;
+  color: var(--text-secondary);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+}
+
+.word-status--reviewing {
+  color: var(--accent-hover);
+  background: var(--accent-dim);
+  border-color: var(--accent-dim);
+}
+
+.word-status--mastered {
+  color: var(--sage);
+  background: var(--sage-dim);
+  border-color: var(--sage-dim);
+}
+
+.word-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  padding: 0;
+  border: none;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.word-delete svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.word-delete:hover {
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.word-definition {
+  font-family: var(--font-sans);
+  font-size: var(--fs-md);
+  color: var(--text);
+  margin-bottom: var(--sp-1);
+  overflow-wrap: anywhere;
+}
+
+.word-explanation {
+  font-family: var(--font-sans);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  color: var(--text-secondary);
+  margin-bottom: var(--sp-1);
+  overflow-wrap: anywhere;
+}
+
+.word-sentence {
+  font-family: var(--font-sans);
+  font-size: var(--fs-sm);
+  font-style: italic;
+  line-height: 1.5;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.word-footer {
+  margin-top: var(--sp-2);
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--border);
+}
+
+.word-source {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-family: var(--font-sans);
+  font-size: var(--fs-xs);
+  text-align: left;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.word-source:hover {
+  color: var(--accent-hover);
+  text-decoration: underline;
+}
+
+/* The dialog that confirms the words the AI picked. */
+.word-cost {
+  font-family: var(--font-sans);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--text-muted);
+  margin-bottom: var(--sp-3);
+}
+
+.word-confirm-list {
+  margin-bottom: var(--sp-4);
+}
+
+.word-confirm-item {
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: var(--sp-2) var(--sp-3);
+  margin-bottom: var(--sp-2);
+  background: var(--surface-raised);
+}
+
+.word-confirm-term {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: var(--fs-md);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.word-confirm-translation {
+  font-family: var(--font-sans);
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.word-confirm-explanation {
+  font-family: var(--font-sans);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--text-muted);
+  margin-top: var(--sp-1);
+  overflow-wrap: anywhere;
+}
+
+.word-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+}
+
+/* ============================================================
+   REVIEW — the spaced repetition card
+   ============================================================ */
+.review-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-1);
+  width: 100%;
+  padding: var(--sp-4);
+  margin-bottom: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+.review-card:hover {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-md);
+}
+
+.review-term {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: var(--fs-xl);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.review-sentence {
+  font-family: var(--font-sans);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.review-translation {
+  font-family: var(--font-sans);
+  font-size: var(--fs-md);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.review-explanation {
+  font-family: var(--font-sans);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.review-hint {
+  font-family: var(--font-sans);
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  margin-top: var(--sp-1);
+}
+
+.review-actions {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
+}
+
+.grade-btn {
+  min-height: 40px;
+  padding: var(--sp-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  transition:
+    border-color 0.18s ease,
+    color 0.18s ease,
+    background 0.18s ease;
+}
+
+.grade-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.review-progress {
+  font-family: var(--font-sans);
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+/* ============================================================
+   LIBRARY — the videos that were read already
+   ============================================================ */
+.library-item {
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: var(--sp-3) var(--sp-4);
+  margin-bottom: var(--sp-3);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.library-title {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: var(--fs-md);
+  line-height: 1.45;
+  color: var(--text);
+  margin-bottom: var(--sp-1);
+  overflow-wrap: anywhere;
+}
+
+.library-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
+}
+
+.library-channel,
+.library-time {
+  font-family: var(--font-sans);
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+.library-badge {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: var(--fs-xs);
+  letter-spacing: 0.2px;
+  padding: 2px 9px;
+  border-radius: var(--r-pill);
+  color: var(--sage);
+  background: var(--sage-dim);
+}
+
+.library-open {
+  min-height: 32px;
+  padding: var(--sp-1) var(--sp-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+
+.library-open:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.library-open:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* Two different intentions, so two different words side by side. */
+.library-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.library-cleanup {
+  color: var(--accent-hover);
+  background: var(--accent-dim);
+  border-radius: var(--r-sm);
+  padding: var(--sp-2) var(--sp-3);
+}
+
+/* The panel shows a saved copy, not the video in the tab. The user has to
+   know before they write a note about it. */
+.cached-view-note {
+  font-family: var(--font-sans);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--text-secondary);
+  margin-top: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--r-sm);
+  background: var(--surface-raised);
+}
+
+/* ============================================================
+   ERROR STATE — a second way out
+   ============================================================ */
+.error-btn-secondary {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-strong);
+  box-shadow: none;
+}
+
+.error-btn-secondary:hover {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-color: var(--accent);
 }

@@ -105,9 +105,22 @@ test("the note store tells the user when it drops an old note", async () => {
       stored.some((item) => item.note === "note 0"),
       "the oldest note was not the one dropped",
     );
+    // The user cannot see the console, so a warning there is not a signal.
+    // The loss has to be written down where the panel can find it and say
+    // it out loud.
+    const record = storage.ytd_notes_dropped;
+    assert.ok(
+      record,
+      "the store dropped a note and left no record the user could ever see",
+    );
+    assert.equal(
+      Number(record.lastCount),
+      1,
+      `the record does not say how many notes were dropped: ${JSON.stringify(record)}`,
+    );
     assert.ok(
       warnings.some((line) => /note/i.test(line) && /dropped|discard|removed|100/i.test(line)),
-      `the user was not told that a note was dropped: ${JSON.stringify(warnings)}`,
+      `the console did not say what happened either: ${JSON.stringify(warnings)}`,
     );
   } finally {
     console.warn = originalWarn;
@@ -117,17 +130,25 @@ test("the note store tells the user when it drops an old note", async () => {
 test("the panel knows the note store's cap", () => {
   // The panel shows "n / 100" next to the notes. If the cap changes, that
   // number has to change with it, so it must not be a second copy of the
-  // number that lives in the store.
+  // number that lives in the store. Both sides have to read the one
+  // number that settings.js holds.
   const panel = read("sidepanel.js");
   const cloudSync = read("cloud-sync.js");
+  const settings = read("settings.js");
+
+  assert.match(
+    settings,
+    /MAX_LOCAL_NOTES\s*=\s*\d+/,
+    "settings.js does not hold the note cap",
+  );
   assert.match(
     panel,
-    /LOCAL_NOTE_LIMIT|NOTE_LIMIT/i,
-    "the panel does not know how many notes are kept",
+    /YTD_SETTINGS\.MAX_LOCAL_NOTES/,
+    "the panel keeps its own copy of the note limit instead of reading the shared one",
   );
   assert.match(
     cloudSync,
-    /notes\.length > 100|MAX_NOTES|NOTE_LIMIT/i,
-    "the store's cap is not a named constant",
+    /YTD_SETTINGS\.MAX_LOCAL_NOTES/,
+    "the store keeps its own copy of the note limit instead of reading the shared one",
   );
 });
