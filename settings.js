@@ -47,6 +47,17 @@ var YTD_SETTINGS = (() => {
   const AI_SESSION_STORAGE_KEY = "ytd_ai_session";
 
   /**
+   * The gaps between the attempts to read the captions out of the page.
+   *
+   * YouTube swaps its player response about a second after the user clicks
+   * another video, and the panel asks for the subtitles right away, so the
+   * first read is often too early. These are the waits between the tries.
+   * They add up to under three seconds, which is a spinner the user can
+   * wait through, and a credit they never have to pay.
+   */
+  const LOCAL_CAPTION_RETRY_DELAYS_MS = [400, 600, 800, 1000];
+
+  /**
    * Reason code for a sync request that ran out of time.
    *
    * The sync service is the extension's own backend, so a request that does
@@ -101,8 +112,25 @@ var YTD_SETTINGS = (() => {
    * YouTube. It is the fast path - a second or two - and it is tried before
    * the paid one. A short deadline keeps a page that never answers from
    * delaying the paid fallback behind it.
+   *
+   * The first fetch of a video is the slow one: YouTube makes the automatic
+   * captions when they are first asked for, and that takes the better part
+   * of a minute on a long video. The deadline has to be longer than that
+   * fetch, or the read loses a race it would have won a second later.
    */
-  const LOCAL_TRANSCRIPT_TIMEOUT_MS = 15_000;
+  const LOCAL_TRANSCRIPT_TIMEOUT_MS = 30_000;
+
+  /**
+   * How long the page may be given to make its own caption request.
+   *
+   * The caption URL the worker can use is the one the page requested, and
+   * the page only lists a request once it has finished. Asking the player
+   * to load the track starts that request; on a video whose captions YouTube
+   * has not made yet, it answers in seconds rather than milliseconds. A
+   * deadline shorter than that turns every fresh video into a failure the
+   * user has to ask about again.
+   */
+  const LOCAL_CAPTION_REQUEST_TIMEOUT_MS = 25_000;
 
   /**
    * Interface language preference. The settings page owns the preference, but
@@ -558,12 +586,14 @@ var YTD_SETTINGS = (() => {
     SYNC_SESSION_EXPIRED,
     SYNC_EXPIRED_KEY,
     AI_SESSION_STORAGE_KEY,
+    LOCAL_CAPTION_RETRY_DELAYS_MS,
     SYNC_REQUEST_TIMEOUT,
     TRANSCRIPT_REQUEST_TIMEOUT,
     STORAGE_QUOTA_EXCEEDED,
     CLOUD_REQUEST_TIMEOUT_MS,
     TRANSCRIPT_REQUEST_TIMEOUT_MS,
     LOCAL_TRANSCRIPT_TIMEOUT_MS,
+    LOCAL_CAPTION_REQUEST_TIMEOUT_MS,
     UI_LANGUAGE_STORAGE_KEY,
     PENDING_LOGIN_NONCE_KEY,
     NOTES_STORAGE_KEY,

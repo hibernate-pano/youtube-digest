@@ -943,6 +943,81 @@ test("an empty transcript can be tried again as well", async () => {
   );
 });
 
+test("a page that was not ready does not blame the video", async () => {
+  // The page had not swapped its player yet, so the subtitles could not be
+  // read. The video may well have subtitles, and the screen must not say it
+  // has none: the user would go looking for a problem that is not there.
+  const panel = createPanel({
+    sendMessageImpl: workerRouter({
+      fetchTranscript: { success: false, error: "PAGE_NOT_READY" },
+    }),
+  });
+  await panel.boot();
+  await panel.helpers.startDigest(
+    "videoA",
+    "https://www.youtube.com/watch?v=videoA",
+  );
+
+  const message = panel.el("errorMessage").textContent;
+  assert.doesNotMatch(
+    message,
+    /no subtitles/i,
+    "the video was blamed for a page that was not ready",
+  );
+  // The title carries the claim too: "No transcript found" is a sentence
+  // about the video, and the video is not what failed here.
+  assert.doesNotMatch(
+    panel.el("errorTitle").textContent,
+    /no transcript/i,
+    "the title blamed the video for a page that was not ready",
+  );
+  assert.match(
+    panel.el("errorTitle").textContent,
+    /page/i,
+    "the screen does not say what actually happened",
+  );
+  assert.equal(
+    panel.el("errorBtn").textContent,
+    "Try Again",
+    "the one action that helps is not on the screen",
+  );
+
+  await panel.click(panel.el("errorBtn"));
+  await flush();
+
+  const requests = panel.sentMessages.filter(
+    (message) => message.action === "fetchTranscript",
+  );
+  assert.equal(requests.length, 2, "the retry never reached the worker");
+  assert.equal(
+    requests[1].force,
+    true,
+    "the retry was answered from what the worker remembers, so it did nothing",
+  );
+});
+
+test("the page that was not ready is said in the language the user picked", async () => {
+  const chinese = createPanel({
+    sendMessageImpl: workerRouter({
+      fetchTranscript: { success: false, error: "PAGE_NOT_READY" },
+    }),
+    language: "zh-CN",
+  });
+  await chinese.boot();
+  await chinese.helpers.startDigest(
+    "videoA",
+    "https://www.youtube.com/watch?v=videoA",
+  );
+
+  assert.match(chinese.el("errorMessage").textContent, /字幕/);
+  assert.match(chinese.el("errorTitle").textContent, /页面/);
+  assert.doesNotMatch(
+    chinese.el("errorMessage").textContent,
+    /[A-Za-z]{6,}/,
+    "an English sentence slipped into the Chinese screen",
+  );
+});
+
 test("a failure the panel does not know still leaves a way out", async () => {
   const panel = createPanel({
     sendMessageImpl: workerRouter({

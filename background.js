@@ -925,6 +925,15 @@ async function getPlayerVideoDetails(tabId) {
  * The third one matters because a page that has not started playing yet has
  * no player object but does have the script tag.
  *
+ * The answer says which of three things is true, because the three need
+ * different words later on:
+ *
+ *   - "tracks": the page has caption tracks for a video.
+ *   - "no-tracks": the page knows which video it is showing, and that video
+ *     has no subtitles. This is a property of the video, not of the moment.
+ *   - "no-response": the page has no player response at all. It is still
+ *     loading, and the same read a second later can work.
+ *
  * The video id comes back with the tracks, from the same player response.
  * The tab can be showing a different video than the one the panel asked for
  * - the user navigated while the request was on the wire - and reading that
@@ -941,7 +950,7 @@ async function getPlayerVideoDetails(tabId) {
  * back with the tracks.
  *
  * @param {number} tabId the YouTube tab to read
- * @returns {Promise<{videoId: string, tracks: Array<{baseUrl: string, languageCode: string, kind: string}>, usedUrl: string|null}|null>}
+ * @returns {Promise<{state: string, videoId?: string, tracks?: Array<{baseUrl: string, languageCode: string, kind: string}>, usedUrl?: string|null}|null>}
  */
 async function readCaptionTracksFromTab(tabId) {
   try {
@@ -950,47 +959,70 @@ async function readCaptionTracksFromTab(tabId) {
       world: "MAIN",
       func: () => {
         try {
-          let playerResponse =
-            document.getElementById("movie_player")?.getPlayerResponse?.() ||
-            null;
+          // Every answer the page can give is collected, because the one
+          // that carries the caption tracks is the one the page is really
+          // using. A player object that throws is a page we cannot read.
+          const responses = [];
+          try {
+            const live =
+              document.getElementById("movie_player")?.getPlayerResponse?.() ||
+              null;
+            if (live) responses.push(live);
+          } catch (error) {
+            // A player that throws is not an answer.
+          }
+          try {
+            if (window.ytInitialPlayerResponse) {
+              responses.push(window.ytInitialPlayerResponse);
+            }
+          } catch (error) {
+            // No global response. The inline script is still worth reading.
+          }
 
-          if (!playerResponse?.captions?.playerCaptionsTracklistRenderer) {
-            const globalResponse = window.ytInitialPlayerResponse;
-            if (globalResponse?.captions?.playerCaptionsTracklistRenderer) {
-              playerResponse = globalResponse;
+          // The page has the player response inline before the player
+          // object exists. A page that has not started playing yet is
+          // exactly the case where the local path is most valuable.
+          const marker = "var ytInitialPlayerResponse = ";
+          for (const script of document.querySelectorAll("script")) {
+            const text = script.textContent || "";
+            const index = text.indexOf(marker);
+            if (index === -1) continue;
+            const start = index + marker.length;
+            const end = text.indexOf(";", start);
+            if (end === -1) continue;
+            try {
+              const parsed = JSON.parse(text.slice(start, end));
+              if (parsed) responses.push(parsed);
+            } catch (error) {
+              // A malformed inline script is not the one we want. Keep
+              // looking: a page carries several of them.
             }
           }
 
-          if (!playerResponse?.captions?.playerCaptionsTracklistRenderer) {
-            // The page has the player response inline before the player
-            // object exists. A page that has not started playing yet is
-            // exactly the case where the local path is most valuable.
-            const marker = "var ytInitialPlayerResponse = ";
-            for (const script of document.querySelectorAll("script")) {
-              const text = script.textContent || "";
-              const index = text.indexOf(marker);
-              if (index === -1) continue;
-              const start = index + marker.length;
-              const end = text.indexOf(";", start);
-              if (end === -1) continue;
-              try {
-                const parsed = JSON.parse(text.slice(start, end));
-                if (parsed?.captions?.playerCaptionsTracklistRenderer) {
-                  playerResponse = parsed;
-                  break;
-                }
-              } catch (error) {
-                // A malformed inline script is not the one we want. Keep
-                // looking: a page carries several of them.
-              }
-            }
+          const hasTracks = (response) => {
+            const tracks =
+              response?.captions?.playerCaptionsTracklistRenderer
+                ?.captionTracks;
+            return Array.isArray(tracks) && tracks.length > 0;
+          };
+
+          const playerResponse = responses.find(hasTracks) || null;
+
+          if (!playerResponse) {
+            // No answer carries caption tracks. A page with no player
+            // response at all is still loading; a page that knows which
+            // video it is showing is showing a video without subtitles.
+            const anyResponse = responses[0] || null;
+            if (!anyResponse) return { state: "no-response" };
+            return {
+              state: "no-tracks",
+              videoId: String(anyResponse?.videoDetails?.videoId || ""),
+            };
           }
 
           const tracks =
             playerResponse?.captions?.playerCaptionsTracklistRenderer
               ?.captionTracks;
-          if (!Array.isArray(tracks) || tracks.length === 0) return null;
-
           const videoId = String(playerResponse?.videoDetails?.videoId || "");
 
           // The caption request the page already made, if it made one. The
@@ -1014,6 +1046,7 @@ async function readCaptionTracksFromTab(tabId) {
           }
 
           return {
+            state: "tracks",
             videoId,
             usedUrl,
             tracks: tracks
@@ -1027,7 +1060,7 @@ async function readCaptionTracksFromTab(tabId) {
               })),
           };
         } catch (error) {
-          return null;
+          return { state: "no-response" };
         }
       },
     });
@@ -1041,12 +1074,18 @@ async function readCaptionTracksFromTab(tabId) {
   }
 }
 
+
 /**
  * Asks the page to load a caption track and waits for the request it makes.
  *
  * The player only asks YouTube for the captions when it needs them, and a
  * user who never turns captions on never gets a caption request. The player
  * can be asked to load one, and the request it makes is the URL that works.
+ *
+ * The request has to be given time to finish. YouTube makes the automatic
+ * captions when they are first asked for, and the page only lists a request
+ * once it has come back. A deadline shorter than that would turn every
+ * fresh video into a failure, when all it needed was a few more seconds.
  *
  * Runs in the page's MAIN world, where the player object lives.
  *
@@ -1104,8 +1143,19 @@ async function loadCaptionUrlInTab(tabId, request) {
         } catch (error) {
           // Not every player build has this option.
         }
+        // And ask it to reload the captions it already knows about. This is
+        // the one that makes the page go and fetch them: a player that has
+        // not started the video does not fetch them on its own, and a video
+        // whose subtitles YouTube has not made yet is exactly the one the
+        // user wants to read. The request this makes is the one that
+        // carries the token the signed URL needs.
+        try {
+          player.setOption("captions", "reload", true);
+        } catch (error) {
+          // Not every player build has this option.
+        }
 
-        const deadline = Date.now() + 4000;
+        const deadline = Date.now() + (Number(wanted?.timeoutMs) || 0);
         while (Date.now() < deadline) {
           await new Promise((resolve) => setTimeout(resolve, 200));
           used = findUsed();
@@ -1313,11 +1363,45 @@ async function fetchTimedtextTranscript(baseUrl, language) {
 }
 
 /**
+ * The reasons a local read can fail.
+ *
+ * Two of them describe the moment and two describe the video. The panel
+ * cannot tell them apart from a single "it failed", and the difference
+ * matters: a video without subtitles is a fact, while a page that has not
+ * caught up yet is a moment that passes. Telling the user that a video
+ * with subtitles has none is worse than saying nothing.
+ */
+const LOCAL_READ_REASONS = {
+  // The page has no player response yet. It is still loading.
+  PAGE_NOT_READY: "page-not-ready",
+  // The page is showing another video: the user clicked one and the page
+  // has not swapped its player response yet.
+  OTHER_VIDEO: "other-video",
+  // The page knows which video it is showing, and that video has no
+  // subtitles.
+  NO_CAPTIONS: "no-captions",
+  // The subtitles are there and could not be fetched.
+  READ_FAILED: "read-failed",
+};
+
+/**
+ * The reasons a local read can be worth another attempt.
+ *
+ * The page catches up on its own, so reading again a moment later is
+ * likely to work. A video without subtitles stays without subtitles, and
+ * waiting for it would only be waiting for nothing.
+ */
+const RETRYABLE_LOCAL_READ_REASONS = new Set([
+  LOCAL_READ_REASONS.PAGE_NOT_READY,
+  LOCAL_READ_REASONS.OTHER_VIDEO,
+]);
+
+/**
  * Reads the subtitles straight out of the YouTube tab.
  *
- * Returns null on any failure, so the caller falls back to Supadata. The
- * local path is a bonus, never the only path: YouTube can change its page
- * internals at any time, and a video can have no caption track at all.
+ * The local path is a bonus, never the only path: YouTube can change its
+ * page internals at any time, and a video can have no caption track at
+ * all. So a failure here falls back to Supadata.
  *
  * The tab must be showing the video that was asked for. The user can
  * navigate while the request is on the wire, and the captions of the video
@@ -1327,12 +1411,17 @@ async function fetchTimedtextTranscript(baseUrl, language) {
  *
  * @param {number} tabId the YouTube tab to read
  * @param {string} expectedVideoId the video the caller wants
- * @returns {Promise<Object|null>} the transcript, or null
+ * @returns {Promise<Object>} the transcript, or a failure with a reason
  */
 async function tryLocalTranscript(tabId, expectedVideoId) {
-  if (!tabId) return null;
+  if (!tabId) {
+    return { success: false, reason: LOCAL_READ_REASONS.PAGE_NOT_READY };
+  }
   const captionTracks = await readCaptionTracksFromTab(tabId);
-  if (!captionTracks) return null;
+  if (!captionTracks || captionTracks.state === "no-response") {
+    debugLog("[YouTube Digest BG] The page has no player response yet");
+    return { success: false, reason: LOCAL_READ_REASONS.PAGE_NOT_READY };
+  }
 
   // The page tells us which video it is showing. When it does not say, the
   // page is in a state we do not understand, and guessing is how the wrong
@@ -1342,17 +1431,26 @@ async function tryLocalTranscript(tabId, expectedVideoId) {
     debugLog(
       "[YouTube Digest BG] The page did not say which video it is showing",
     );
-    return null;
+    return { success: false, reason: LOCAL_READ_REASONS.PAGE_NOT_READY };
   }
   if (expectedVideoId && pageVideoId !== expectedVideoId) {
     debugLog(
       `[YouTube Digest BG] The tab is showing ${pageVideoId}, not ${expectedVideoId}`,
     );
-    return null;
+    return { success: false, reason: LOCAL_READ_REASONS.OTHER_VIDEO };
   }
 
-  const track = pickCaptionTrack(captionTracks.tracks);
-  if (!track) return null;
+  if (captionTracks.state === "no-tracks") {
+    debugLog(
+      `[YouTube Digest BG] The page has no subtitles for ${pageVideoId}`,
+    );
+    return { success: false, reason: LOCAL_READ_REASONS.NO_CAPTIONS };
+  }
+
+  const track = pickCaptionTrack(captionTracks.tracks || []);
+  if (!track) {
+    return { success: false, reason: LOCAL_READ_REASONS.NO_CAPTIONS };
+  }
 
   // The URL in the track list is a template, and YouTube answers a
   // template request with an empty body. The URL the page's own player
@@ -1364,6 +1462,10 @@ async function tryLocalTranscript(tabId, expectedVideoId) {
       videoId: pageVideoId,
       languageCode: track.languageCode || "",
       kind: track.kind || "",
+      // How long the page may take. The page answers in milliseconds when
+      // it already has the captions and in seconds when YouTube has to make
+      // them, and the difference decides whether this read works.
+      timeoutMs: YTD_SETTINGS.LOCAL_CAPTION_REQUEST_TIMEOUT_MS,
     });
   }
 
@@ -1383,6 +1485,37 @@ async function tryLocalTranscript(tabId, expectedVideoId) {
       track.languageCode || null,
     );
     if (transcript) return transcript;
+  }
+  return { success: false, reason: LOCAL_READ_REASONS.READ_FAILED };
+}
+
+/**
+ * Reads the subtitles again, after waiting for the page to catch up.
+ *
+ * YouTube swaps its player response about a second after the user clicks
+ * another video. The panel asks right away, so the first read is often
+ * too early, and the answer would be a lie about the video. Waiting for
+ * the page is free, and it saves a credit when the paid fallback would
+ * have been used.
+ *
+ * @param {number} tabId the YouTube tab to read
+ * @param {string} expectedVideoId the video the caller wants
+ * @returns {Promise<Object|null>} the transcript, or null
+ */
+async function waitForLocalTranscript(tabId, expectedVideoId) {
+  const delays = YTD_SETTINGS.LOCAL_CAPTION_RETRY_DELAYS_MS || [];
+  for (const delay of delays) {
+    await new Promise((resolve) => setTimeout(resolve, delay));
+    const attempt = await tryLocalTranscript(tabId, expectedVideoId);
+    if (attempt?.success) return attempt;
+    // A video without subtitles stays without subtitles. Waiting longer
+    // would only be waiting for nothing.
+    if (
+      attempt?.reason &&
+      !RETRYABLE_LOCAL_READ_REASONS.has(attempt.reason)
+    ) {
+      return null;
+    }
   }
   return null;
 }
@@ -1407,12 +1540,38 @@ async function tryLocalTranscript(tabId, expectedVideoId) {
  * @returns {Promise<Object>} the transcript or a failure
  */
 async function handleFetchTranscriptLocalFirst(videoId, tabId, options = {}) {
+  // Why the local read failed, when it did. The panel needs this to tell
+  // "this video has no subtitles" apart from "the page was not ready yet":
+  // the first is a fact about the video, the second is a moment that
+  // passes, and they need different words and different actions.
+  let localReason = null;
+
   if (tabId) {
     const local = await tryLocalTranscript(tabId, videoId);
     if (local?.success) {
       debugLog("[YouTube Digest BG] Transcript read locally:", videoId);
       return { ...local, source: "local" };
     }
+    localReason = local?.reason || LOCAL_READ_REASONS.PAGE_NOT_READY;
+
+    if (RETRYABLE_LOCAL_READ_REASONS.has(localReason)) {
+      // The page is on its way to showing this video. Waiting for it is
+      // free, and it is the difference between a transcript and a claim
+      // that the video has no subtitles.
+      debugLog(
+        "[YouTube Digest BG] The page has not caught up yet, waiting:",
+        localReason,
+      );
+      const again = await waitForLocalTranscript(tabId, videoId);
+      if (again?.success) {
+        debugLog(
+          "[YouTube Digest BG] Transcript read locally after waiting:",
+          videoId,
+        );
+        return { ...again, source: "local" };
+      }
+    }
+
     debugLog(
       "[YouTube Digest BG] Local captions unavailable, using the fallback",
     );
@@ -1429,6 +1588,17 @@ async function handleFetchTranscriptLocalFirst(videoId, tabId, options = {}) {
   //
   // The panel says both halves of the story on its own: that the subtitles
   // could not be read, and that the fallback needs a key.
+  //
+  // "No key" is only the whole story when the page said the video has no
+  // subtitles. When the page was simply not ready, the missing key is not
+  // the reason the user is looking at an error, and the panel has to be
+  // told the difference.
+  if (
+    remote.error === "NO_SUPADATA_KEY" &&
+    localReason !== LOCAL_READ_REASONS.NO_CAPTIONS
+  ) {
+    return { success: false, error: "PAGE_NOT_READY" };
+  }
   return remote;
 }
 

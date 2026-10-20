@@ -219,12 +219,24 @@ MUTATIONS = [
         "hunks": [
             (
                 """async function handleFetchTranscriptLocalFirst(videoId, tabId, options = {}) {
+  // Why the local read failed, when it did. The panel needs this to tell
+  // "this video has no subtitles" apart from "the page was not ready yet":
+  // the first is a fact about the video, the second is a moment that
+  // passes, and they need different words and different actions.
+  let localReason = null;
+
   if (tabId) {""",
                 """async function handleFetchTranscriptLocalFirst(videoId, tabId, options = {}) {
   if (!options?.force) {
     const remembered = await readFailedTranscript(videoId);
     if (remembered) return remembered;
   }
+  // Why the local read failed, when it did. The panel needs this to tell
+  // "this video has no subtitles" apart from "the page was not ready yet":
+  // the first is a fact about the video, the second is a moment that
+  // passes, and they need different words and different actions.
+  let localReason = null;
+
   if (tabId) {""",
             )
         ],

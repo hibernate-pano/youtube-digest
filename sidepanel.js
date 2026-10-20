@@ -269,6 +269,13 @@ const PANEL_COPY = {
     noCaptionsNoKeyTitle: "No subtitles to read",
     noCaptionsNoKey:
       "This video has no subtitles that could be read, and no Supadata key is set as a fallback. Add the key in YouTube Digest Settings to try the paid service.",
+    // The page was not ready. The video may well have subtitles: YouTube
+    // swaps its player a moment after the user clicks another video, and
+    // the panel asked before the swap. The screen says what happened and
+    // offers the one action that helps.
+    pageNotReadyTitle: "The page was not ready",
+    pageNotReadyMessage:
+      "The subtitles could not be read from the page yet. Try again in a moment.",
     // The boot notice is shown before a single subtitle has been read, so it
     // cannot claim the video has none. It says what the key is for and stops.
     noFallbackKey:
@@ -507,6 +514,11 @@ const PANEL_COPY = {
     noCaptionsNoKeyTitle: "没有字幕可读",
     noCaptionsNoKey:
       "这个视频没有能读到的字幕，也没有设置 Supadata 密钥作为兜底。请在 YouTube Digest 设置里填入密钥，改用付费服务再试。",
+    // 页面还没准备好。这个视频很可能是有字幕的：用户在 YouTube 里点了
+    // 另一个视频之后，YouTube 要过一会儿才换掉播放器，面板在这之前就
+    // 开口了。所以这一屏说的是发生了什么，给出的也是唯一有用的动作。
+    pageNotReadyTitle: "页面还没准备好",
+    pageNotReadyMessage: "暂时没能从页面里读到字幕，请稍后再试一次。",
     // 开机提示出现在读到第一条字幕之前，所以不能说"没有字幕"。
     // 它只说这个密钥是干什么用的，说完就消失。
     noFallbackKey:
@@ -3416,6 +3428,20 @@ function showTranscriptError(result) {
   };
 
   switch (code) {
+    case "PAGE_NOT_READY":
+      // The page was not ready: it is still loading, or the user clicked
+      // another video and YouTube has not swapped its player yet. The video
+      // may well have subtitles, so the screen must not say it has none.
+      //
+      // The one thing that helps is another attempt, and it is free: the
+      // subtitles are read out of the page. There is no key to add, so
+      // there is nothing to wait for either.
+      showError(
+        panelCopy("pageNotReadyTitle"),
+        panelCopy("pageNotReadyMessage"),
+        retry,
+      );
+      return;
     case "NO_SUPADATA_KEY":
       // The subtitles are read out of the page itself when they can be. The
       // key is the fallback, so the panel says which half of the story

@@ -466,6 +466,73 @@ MUTATIONS = [
             ),
         ],
     },
+    {
+        "name": "M24 the worker does not wait for the page to catch up",
+        "file": "background.js",
+        "hunks": [
+            (
+                """    if (RETRYABLE_LOCAL_READ_REASONS.has(localReason)) {""",
+                """    if (false && RETRYABLE_LOCAL_READ_REASONS.has(localReason)) {""",
+            )
+        ],
+        "expect": [
+            (
+                "local-transcript.test.js",
+                "the page is asked again when it has not caught up with the video yet",
+            ),
+        ],
+    },
+    {
+        "name": "M25 a page that is not ready is reported as a video without subtitles",
+        "file": "background.js",
+        "hunks": [
+            (
+                """  if (
+    remote.error === "NO_SUPADATA_KEY" &&
+    localReason !== LOCAL_READ_REASONS.NO_CAPTIONS
+  ) {""",
+                """  if (false) {""",
+            )
+        ],
+        "expect": [
+            (
+                "local-transcript.test.js",
+                "a page that never catches up does not blame the video",
+            ),
+        ],
+    },
+    {
+        "name": "M26 the panel tells the user the video has no subtitles",
+        "file": "sidepanel.js",
+        "hunks": [
+            (
+                """    case "PAGE_NOT_READY":""",
+                """    case "PAGE_NOT_READY_UNUSED":""",
+            )
+        ],
+        "expect": [
+            (
+                "panel-feedback.test.js",
+                "a page that was not ready does not blame the video",
+            ),
+        ],
+    },
+    {
+        "name": "M27 the page is given no time to finish its caption request",
+        "file": "background.js",
+        "hunks": [
+            (
+                """      timeoutMs: YTD_SETTINGS.LOCAL_CAPTION_REQUEST_TIMEOUT_MS,""",
+                """      timeoutMs: 0,""",
+            )
+        ],
+        "expect": [
+            (
+                "local-transcript.test.js",
+                "the page is given the time to finish its own caption request",
+            ),
+        ],
+    },
 ]
 
 

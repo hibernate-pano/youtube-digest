@@ -43,6 +43,8 @@ function loadWorker({
   timedtextResponder = null,
   supadata = null,
   hasSupadataKey = true,
+  localRetryDelays = null,
+  captionRequestTimeout = null,
 } = {}) {
   const listeners = { addListener() {} };
   const requests = [];
@@ -146,6 +148,13 @@ function loadWorker({
     YTD_SETTINGS: {
       ...require("../settings.js"),
       SERVER_BASE_URL: "https://sync.test",
+      // The wait between the attempts to read the captions. A test that
+      // only needs the page to be asked twice can make it quick.
+      ...(localRetryDelays ? { LOCAL_CAPTION_RETRY_DELAYS_MS: localRetryDelays } : {}),
+      // How long the page may take to finish its own caption request.
+      ...(captionRequestTimeout !== null
+        ? { LOCAL_CAPTION_REQUEST_TIMEOUT_MS: captionRequestTimeout }
+        : {}),
     },
   };
   sandbox.globalThis = sandbox;
@@ -181,6 +190,13 @@ function loadWorker({
  * @param {string[]} options.usedCaptionUrls the caption URLs the page used
  * @param {string|null} options.playerLoadsTrack the URL the player requests
  *   when it is asked to load a track
+ * @param {string[]} options.videoIds the videos the page shows, one per
+ *   read. A page that swaps its video while the worker is reading it is
+ *   what happens when the user clicks another video in YouTube.
+ * @param {number} options.playerLoadsTrackAfterMs how long the page takes
+ *   to finish the caption request it was asked for. YouTube makes the
+ *   automatic captions when they are first asked for, and the page only
+ *   lists the request once it has come back.
  * @returns {{setOptionCalls: Array<Object>}} what the player was asked
  */
 function installFakePage(
@@ -191,10 +207,23 @@ function installFakePage(
 ) {
   const used = [...(options.usedCaptionUrls || [])];
   const setOptionCalls = [];
+  const sequence = options.videoIds || null;
+  let reads = 0;
+  let asked = false;
+
+  // The page can be showing a different video than it was a moment ago.
+  // The first read sees the first video in the list, the next read the
+  // second, and the last one stays.
+  const shownVideoId = () => {
+    if (!sequence) return videoId;
+    const index = Math.min(reads, sequence.length - 1);
+    reads += 1;
+    return sequence[index];
+  };
 
   const page = {
     getPlayerResponse: () => ({
-      videoDetails: { videoId },
+      videoDetails: { videoId: shownVideoId() },
       captions: captionTracks
         ? {
             playerCaptionsTracklistRenderer: {
@@ -214,10 +243,20 @@ function installFakePage(
       setOptionCalls.push({ group, name, value });
       if (
         group === "captions" &&
-        (name === "track" || name === "load") &&
-        options.playerLoadsTrack
+        (name === "track" || name === "load" || name === "reload") &&
+        options.playerLoadsTrack &&
+        !asked
       ) {
-        used.push(options.playerLoadsTrack);
+        asked = true;
+        // The page finishes the request after a while: YouTube makes the
+        // captions when they are first asked for, and the page only lists
+        // the request once it has come back.
+        const delay = Number(options.playerLoadsTrackAfterMs || 0);
+        if (delay > 0) {
+          setTimeout(() => used.push(options.playerLoadsTrack), delay);
+        } else {
+          used.push(options.playerLoadsTrack);
+        }
       }
     };
   }
@@ -474,6 +513,111 @@ test("without a key and without captions, the worker names the failure and stops
     undefined,
     "the worker wrote a sentence the panel cannot translate",
   );
+});
+
+/* ============================================================
+   B: the page has to catch up with the panel
+
+   YouTube swaps its player response about a second after the user clicks
+   another video. The panel asks right away, so the first read is often
+   too early. A read that is too early must not become a claim that the
+   video has no subtitles.
+   ============================================================ */
+
+test("the page is asked again when it has not caught up with the video yet", async () => {
+  const worker = loadWorker({ localRetryDelays: [10] });
+  // The page shows the old video for the first read and the new one for
+  // the second, the way YouTube swaps its player after a click.
+  installFakePage(
+    worker.sandbox,
+    [{ baseUrl: "https://www.youtube.com/api/timedtext?v=abc", languageCode: "en" }],
+    "dQw4w9WgXcQ",
+    { videoIds: ["oldVideo", "newVideo"] },
+  );
+
+  const result = await worker.helpers.handleFetchTranscriptLocalFirst("newVideo", 7);
+
+  assert.equal(result.success, true, "the worker gave up on the page too early");
+  assert.equal(result.source, "local", "the subtitles were not read out of the page");
+  assert.equal(
+    worker.requests.filter((request) => request.url.includes("supadata")).length,
+    0,
+    "a credit was spent on subtitles the page was about to hand over",
+  );
+});
+
+test("a page that never catches up does not blame the video", async () => {
+  const worker = loadWorker({
+    hasSupadataKey: false,
+    localRetryDelays: [10, 20],
+  });
+  // The page stays on another video for good.
+  installFakePage(
+    worker.sandbox,
+    [{ baseUrl: "https://www.youtube.com/api/timedtext?v=abc", languageCode: "en" }],
+    "otherVideo",
+  );
+
+  const result = await worker.helpers.handleFetchTranscriptLocalFirst("dQw4w9WgXcQ", 7);
+
+  assert.equal(result.success, false);
+  assert.equal(
+    result.error,
+    "PAGE_NOT_READY",
+    "the video was blamed for a page that was not ready",
+  );
+  assert.notEqual(
+    result.error,
+    "NO_SUPADATA_KEY",
+    "the missing key was blamed for a page that was not ready",
+  );
+});
+
+test("a video the page says has no subtitles is still the video's own fault", async () => {
+  const worker = loadWorker({ hasSupadataKey: false });
+  // The page knows the video and the video has no caption tracks.
+  installFakePage(worker.sandbox, null, "dQw4w9WgXcQ");
+
+  const result = await worker.helpers.handleFetchTranscriptLocalFirst("dQw4w9WgXcQ", 7);
+
+  assert.equal(result.success, false);
+  assert.equal(
+    result.error,
+    "NO_SUPADATA_KEY",
+    "a video without subtitles is reported as a page that was not ready",
+  );
+});
+
+test("the page is given the time to finish its own caption request", async () => {
+  // The page has no caption URL yet, so the worker asks the player to load
+  // the track. YouTube answers that request in seconds when it has to make
+  // the captions, and the page only lists the request once it has come back.
+  const worker = loadWorker({ captionRequestTimeout: 3000 });
+  installFakePage(
+    worker.sandbox,
+    [
+      {
+        baseUrl: "https://www.youtube.com/api/timedtext?v=dQw4w9WgXcQ&lang=en",
+        languageCode: "en",
+      },
+    ],
+    "dQw4w9WgXcQ",
+    {
+      withPlayer: true,
+      playerLoadsTrack:
+        "https://www.youtube.com/api/timedtext?v=dQw4w9WgXcQ&lang=en&pot=TOKEN",
+      playerLoadsTrackAfterMs: 400,
+    },
+  );
+
+  const result = await worker.helpers.handleFetchTranscriptLocalFirst("dQw4w9WgXcQ", 7);
+
+  assert.equal(result.success, true, "the page was not waited for");
+  assert.equal(result.source, "local", "the subtitles were not read out of the page");
+  const timedtext = worker.requests.find((request) =>
+    request.url.includes("timedtext"),
+  );
+  assert.match(timedtext.url, /pot=TOKEN/, "the page's own caption URL was not used");
 });
 
 test("a lookup that fails outright is reported with a code, not a sentence", async () => {
