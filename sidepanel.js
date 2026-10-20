@@ -1298,6 +1298,7 @@ async function startDigest(videoId, videoUrl) {
   // A digest run started. This counts runs, not video changes: a re-run for
   // the same video is a new run, but the work it does is still valid.
   digestRunCount += 1;
+  debugLog("[YouTube Digest Panel] Digest run", digestRunCount, videoId);
 
   // The video on screen changed. Everything the panel shows belongs to the
   // video the user just left, so it has to go before the new one is fetched.
