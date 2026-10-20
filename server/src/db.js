@@ -57,27 +57,64 @@ function rowToVocabulary(row) {
 }
 
 /**
+ * The only tables a user's row count may be taken from.
+ *
+ * A table name is a schema identifier, not a value: it cannot be a bound
+ * parameter, so it has to come from a fixed list instead of from a caller.
+ */
+const COUNTABLE_TABLES = new Set(["notes", "vocabulary"]);
+
+/**
+ * The columns a note update reads back.
+ *
+ * `createNote` and `setNoteStarred` spell the same list out inside their
+ * tagged templates, because a tagged template cannot inline a constant
+ * without turning it into a bound parameter.
+ */
+const NOTE_RETURNING_COLUMNS =
+  'returning id, client_id as "clientId", starred, video_id as "videoId",' +
+  ' video_title as "videoTitle", channel_name as "channelName",' +
+  ' timestamp_seconds as "timestampSeconds", quote, note,' +
+  ' created_at as "createdAt", updated_at as "updatedAt"';
+
+/**
  * Builds a parameterized UPDATE statement from a fixed column whitelist.
  *
  * The column names come from the code, never from the request, so the
  * statement text can never be influenced by the client. The result is a
  * tagged-template argument list, which both the Neon driver and the test
  * fake accept.
+ *
+ * The builder owns the commas between the SET items. A caller describes
+ * each item on its own - `{ before, value, after }` for a bound value,
+ * `{ raw }` for a constant fragment such as `updated_at = now()` - and
+ * never has to remember a trailing separator. Leaving the separator to the
+ * caller is how a statement ends up with a dangling comma in front of
+ * `where`, which Postgres rejects.
  */
-function buildUpdateStatement(prefix, assignments, whereClauses) {
+function buildUpdateStatement(prefix, assignments, whereClauses, returning) {
   const strings = [];
   const values = [];
   let lead = prefix;
-  for (const assignment of assignments) {
+  assignments.forEach((assignment, index) => {
+    if (index > 0) lead += ", ";
+    if (assignment.raw) {
+      // A constant fragment carries no placeholder of its own: it rides
+      // along in the text that precedes the next parameter.
+      lead += assignment.raw;
+      return;
+    }
     strings.push(lead + assignment.before);
     values.push(assignment.value);
-    lead = assignment.after;
-  }
+    lead = assignment.after || "";
+  });
   for (const clause of whereClauses) {
     strings.push(lead + clause.before);
     values.push(clause.value);
-    lead = clause.after;
+    lead = clause.after || "";
   }
+  // The RETURNING clause follows the WHERE clause, separated by one space.
+  if (returning) lead += " " + returning;
   strings.push(lead);
   return { strings, values };
 }
@@ -329,6 +366,9 @@ class MemoryStore {
 
   /** Counts a user's rows in one of the two content tables. */
   async countRows(table, userId) {
+    if (!COUNTABLE_TABLES.has(table)) {
+      throw new Error(`countRows: unsupported table ${table}`);
+    }
     const rows = table === "vocabulary" ? this.vocabulary : this.notes;
     return [...rows.values()].filter((row) => row.userId === userId).length;
   }
@@ -543,23 +583,24 @@ class NeonStore {
     // Only the fields the client actually sent are written, so a partial
     // update never zeroes the fields it left out. The column list is a
     // hardcoded whitelist: no column name ever comes from the request.
-    // `starred` keeps the tri-state rule: coalesce($, starred) leaves the
-    // stored flag alone when the client did not mention it.
-    const assignments = [{ before: "note = ", after: ", ", value: patch.note }];
+    // `starred` keeps the tri-state rule: the column is only written when
+    // the client actually sent a boolean, so an absent flag leaves the
+    // stored one alone.
+    const assignments = [{ before: "note = ", after: "", value: patch.note }];
     if (patch.videoId !== undefined) {
-      assignments.push({ before: "video_id = ", after: ", ", value: patch.videoId });
+      assignments.push({ before: "video_id = ", after: "", value: patch.videoId });
     }
     if (patch.videoTitle !== undefined) {
-      assignments.push({ before: "video_title = ", after: ", ", value: patch.videoTitle });
+      assignments.push({ before: "video_title = ", after: "", value: patch.videoTitle });
     }
     if (patch.channelName !== undefined) {
-      assignments.push({ before: "channel_name = ", after: ", ", value: patch.channelName });
+      assignments.push({ before: "channel_name = ", after: "", value: patch.channelName });
     }
     if (patch.timestampSeconds !== undefined) {
-      assignments.push({ before: "timestamp_seconds = ", after: ", ", value: patch.timestampSeconds });
+      assignments.push({ before: "timestamp_seconds = ", after: "", value: patch.timestampSeconds });
     }
     if (patch.quote !== undefined) {
-      assignments.push({ before: "quote = ", after: ", ", value: patch.quote });
+      assignments.push({ before: "quote = ", after: "", value: patch.quote });
     }
     if (typeof patch.starred === "boolean") {
       assignments.push({
@@ -568,6 +609,10 @@ class NeonStore {
         value: patch.starred,
       });
     }
+    // The edit has to move the row's own timestamp. The delta sync and the
+    // last-write-wins comparison both read `updated_at`; a note that was
+    // edited but kept its old timestamp is invisible to the other devices.
+    assignments.push({ raw: "updated_at = now()" });
     const statement = buildUpdateStatement(
       "update notes set ",
       assignments,
@@ -575,6 +620,9 @@ class NeonStore {
         { before: " where id = ", after: " and user_id = ", value: noteId },
         { before: "", after: "", value: userId },
       ],
+      // Without `returning` the driver reports no rows, and the route would
+      // answer "Note not found." for the note it had just updated.
+      NOTE_RETURNING_COLUMNS,
     );
     const rows = await this.sql(statement.strings, ...statement.values);
     return rows.length ? rowToNote(rows[0]) : null;
@@ -748,11 +796,23 @@ class NeonStore {
     };
   }
 
-  /** Counts a user's rows in one of the two content tables. */
+  /**
+   * Counts a user's rows in one of the two content tables.
+   *
+   * The table name is a schema identifier, not a value: a tagged template
+   * turns every interpolation into a bound parameter, and `from $1` is not
+   * valid SQL. The name is therefore taken from a fixed whitelist and
+   * written into the statement text, while the user id stays a bound
+   * parameter.
+   */
   async countRows(table, userId) {
-    const rows = await this.sql`
-      select count(*) as count from ${table} where user_id = ${userId}
-    `;
+    if (!COUNTABLE_TABLES.has(table)) {
+      throw new Error(`countRows: unsupported table ${table}`);
+    }
+    const rows = await this.sql(
+      [`select count(*) as count from ${table} where user_id = `, ""],
+      userId,
+    );
     return rows.length ? Number(rows[0].count) || 0 : 0;
   }
 

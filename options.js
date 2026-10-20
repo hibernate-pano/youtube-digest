@@ -43,7 +43,10 @@ const YTD_OPTIONS = (() => {
       setupGuideStep1: "Open any YouTube video with captions.",
       setupGuideStep2: "Click the YouTube Digest icon to open the side panel.",
       setupGuideStep3:
-        'Read the bilingual transcript, open Overview for the AI digest, and press "n" on the video to save a note.',
+        'Read the bilingual transcript, open {tabOverview} for the AI digest, and press "n" on the video to save a note.',
+      tabTranscript: "Transcript",
+      tabOverview: "Overview",
+      tabNotes: "Notes",
       githubSync: "GitHub sync",
       githubSyncIntro:
         "Sign in with GitHub to back up your saved notes to this project's sync service at ytd.panbo.space. Every GitHub account has its own isolated data. Sign in with a different account to switch learner profiles.",
@@ -133,17 +136,20 @@ const YTD_OPTIONS = (() => {
       opencodeGoPrivacyNote:
         "使用 AI 功能时，OpenCode Go 服务会收到视频字幕及相关视频上下文。保存前请查看其服务条款和价格。",
       saveSettings: "保存设置",
-      setupGuideTitle: "配置完成!接下来:",
+      setupGuideTitle: "配置完成！接下来：",
       setupGuideStep1: "打开任意一个有字幕的 YouTube 视频。",
-      setupGuideStep2: "点击 YouTube Digest 扩展图标,打开侧边栏。",
-      setupGuideStep3: "阅读双语字幕;点 Overview 查看 AI 摘要;在视频上按 n 键保存笔记。",
+      setupGuideStep2: "点击 YouTube Digest 扩展图标，打开侧边栏。",
+      setupGuideStep3: "阅读双语字幕；点 {tabOverview} 查看 AI 摘要；在视频上按 n 键保存笔记。",
+      tabTranscript: "字幕",
+      tabOverview: "概览",
+      tabNotes: "笔记",
       githubSync: "GitHub 同步",
       githubSyncIntro:
-        "使用 GitHub 登录,把你的笔记备份到本项目自建的同步服务 ytd.panbo.space。每个 GitHub 账户的数据相互隔离,换一个账户登录即可切换学习者档案。",
+        "使用 GitHub 登录，把你的笔记备份到本项目自建的同步服务 ytd.panbo.space。每个 GitHub 账户的数据相互隔离，换一个账户登录即可切换学习者档案。",
       githubLogin: "使用 GitHub 登录",
       githubLogout: "退出登录",
-      githubLoginFailed: "GitHub 登录失败,请重试。",
-      githubSessionExpired: "登录已过期,请重新登录。",
+      githubLoginFailed: "GitHub 登录失败，请重试。",
+      githubSessionExpired: "登录已过期，请重新登录。",
       githubSignedOut: "已退出登录。本地数据仍保留在这台设备上。",
       localRemix: "本地改造",
       customizationTitle: "想使用其他 AI 模型？",
@@ -165,7 +171,7 @@ const YTD_OPTIONS = (() => {
       copyCustomizationPrompt: "复制编辑后的提示词",
       localData: "本地数据",
       localDataHelp:
-        "摘要和翻译仅保存在当前 Chrome 个人资料中。笔记也保存在这里,登录状态下会同时镜像到同步服务。你可以随时删除。",
+        "摘要和翻译仅保存在当前 Chrome 个人资料中。笔记也保存在这里，登录状态下会同时镜像到同步服务。你可以随时删除。",
       clearCache: "清除缓存的摘要",
       deleteNotes: "删除全部笔记",
       resetData: "重置扩展数据",
@@ -197,7 +203,30 @@ const YTD_OPTIONS = (() => {
   function translate(language, key, params = {}) {
     const normalizedLanguage = normalizeLanguage(language);
     const value = COPY[normalizedLanguage][key] ?? COPY.en[key] ?? "";
-    return typeof value === "function" ? value(params) : value;
+    if (typeof value === "function") return value(params);
+    // Copy that names another part of the interface writes it as {tabOverview}
+    // and gets the name the user actually sees. A Chinese instruction that
+    // says "click Overview" while the panel calls the tab 概览 points at
+    // nothing.
+    return String(value).replace(/\{(\w+)\}/g, (match, name) =>
+      Object.prototype.hasOwnProperty.call(params, name)
+        ? String(params[name])
+        : match,
+    );
+  }
+
+  /**
+   * The names the side panel gives its tabs. Copy in this page refers to
+   * those tabs, so it has to use the same words the panel shows. The values
+   * are duplicated from the panel on purpose — the two pages are separate
+   * bundles with no shared module — so a test keeps them in step.
+   */
+  function i18nParams(language) {
+    return {
+      tabTranscript: translate(language, "tabTranscript"),
+      tabOverview: translate(language, "tabOverview"),
+      tabNotes: translate(language, "tabNotes"),
+    };
   }
 
   function createStorageAdapter(chromeApi, fallbackStorage) {
@@ -564,6 +593,7 @@ const YTD_OPTIONS = (() => {
         element.textContent = translate(
           currentLanguage,
           element.dataset.i18n,
+          i18nParams(currentLanguage),
         );
       }
       for (const element of doc.querySelectorAll("[data-i18n-html]")) {
@@ -742,6 +772,7 @@ const YTD_OPTIONS = (() => {
     copyPromptValue,
     createPromptDrafts,
     createStorageAdapter,
+    i18nParams,
     normalizeLanguage,
     persistPreferredLanguage,
     readPreferredLanguage,
