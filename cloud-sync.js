@@ -6,15 +6,55 @@
  * background.js.
  */
 
+/**
+ * Records that notes were dropped by the local store's cap.
+ *
+ * The record is what the panel reads, so the user is told about the loss
+ * instead of finding a note missing. Only a real drop is recorded: a store
+ * that is under the cap leaves no trace.
+ */
+async function recordDroppedNotes(count) {
+  if (!count) return;
+  try {
+    const session = await getGithubSession();
+    const key = YTD_SETTINGS.notesDroppedKey(session && session.githubId);
+    const stored = await chrome.storage.local.get(key);
+    const previous = stored && stored[key];
+    const total = Number(previous && previous.total) || 0;
+    await chrome.storage.local.set({
+      [key]: {
+        total: total + count,
+        lastCount: count,
+        lastAt: Date.now(),
+      },
+    });
+  } catch (error) {
+    // The record is a courtesy. A failed write must never stop the save.
+    console.warn("[YouTube Digest] Could not record the dropped notes:", error.message);
+  }
+}
+
 async function saveNoteToStorage(note) {
   const namespace = await notesNamespace();
   const result = await chrome.storage.local.get(namespace);
   const notes = result[namespace] || [];
   notes.unshift(note); // Add to beginning (newest first)
 
-  // Keep only last 100 notes to prevent storage bloat
-  if (notes.length > 100) {
-    notes.splice(100);
+  // Keep only the most recent notes to prevent storage bloat. The cap lives
+  // in settings.js as MAX_LOCAL_NOTES, so the panel can show the same number
+  // the store enforces instead of a second copy that drifts.
+  const MAX_NOTES = YTD_SETTINGS.MAX_LOCAL_NOTES;
+  let dropped = 0;
+  if (notes.length > MAX_NOTES) {
+    dropped = notes.length - MAX_NOTES;
+    notes.splice(MAX_NOTES);
+    // A note that vanishes without a word is a note the user lost. The drop
+    // is recorded so the panel can say so out loud, and it is logged so it
+    // is never a silent truncation.
+    await recordDroppedNotes(dropped);
+    console.warn(
+      `[YouTube Digest] ${dropped} note(s) were dropped: the local store keeps the newest ${MAX_NOTES}.`,
+    );
   }
 
   await chrome.storage.local.set({ [namespace]: notes });

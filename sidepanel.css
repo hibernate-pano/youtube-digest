@@ -1866,6 +1866,14 @@ body {
   margin-bottom: var(--sp-3);
 }
 
+/* The note that the store dropped old notes. A loss is a fact, not a
+   warning about the future, so it gets its own tone. */
+.notes-dropped {
+  color: var(--text);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+}
+
 /* The star. It is a real button, so it is reachable and it announces its
    state. */
 .note-star {

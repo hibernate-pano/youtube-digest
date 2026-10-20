@@ -72,10 +72,13 @@ let librarySearchQuery = "";
 // were dropped are remembered here so the panel can say how many.
 const LIBRARY_CLEANUP_KEY = "ytd_library_cleanup";
 let libraryCleanup = null;
-// The local note store keeps the most recent notes. The panel shows the
-// count against that number, so the user can see how much room is left
-// before the oldest note disappears.
-const LOCAL_NOTE_LIMIT = 100;
+// The local note store keeps the most recent notes. The number that really
+// limits the user is the one the store enforces, so the panel reads it from
+// the shared settings instead of keeping a second copy that drifts.
+const LOCAL_NOTE_LIMIT =
+  typeof YTD_SETTINGS !== "undefined" && YTD_SETTINGS.MAX_LOCAL_NOTES
+    ? YTD_SETTINGS.MAX_LOCAL_NOTES
+    : 100;
 // The cached digests keep 20 videos for 30 days.
 const LIBRARY_MAX_ENTRIES = 20;
 const LIBRARY_MAX_AGE_DAYS = 30;
@@ -309,6 +312,8 @@ const PANEL_COPY = {
     notesCount: "{count} / {limit}",
     notesNearLimit:
       "You are close to the note limit. When it is reached, the oldest note is dropped first.",
+    notesDropped:
+      "Last time you saved a note, {count} older note(s) were removed to stay under the {limit}-note limit on this device.",
     exportNotes: "Export Markdown",
     exportNotesCopied: "Markdown copied",
     exportNotesFailed: "The notes could not be copied.",
@@ -472,6 +477,8 @@ const PANEL_COPY = {
     notesCount: "{count} / {limit}",
     notesNearLimit:
       "笔记快到上限了。达到上限后，最旧的笔记会先被清掉。",
+    notesDropped:
+      "上次保存笔记时，有 {count} 条更早的笔记被清理掉了（这台设备最多保留 {limit} 条）。",
     exportNotes: "导出 Markdown",
     exportNotesCopied: "Markdown 已复制",
     exportNotesFailed: "笔记没能复制成功。",
@@ -4001,6 +4008,7 @@ function renderNotes(notes, filteredVideoId) {
       ? panelCopy("noNotesForVideo")
       : panelCopy("noNotesYet");
     renderNotesCount();
+    void loadNotesDroppedNotice();
     return;
   }
 
@@ -4116,6 +4124,7 @@ function renderNotes(notes, filteredVideoId) {
   });
 
   renderNotesCount();
+  void loadNotesDroppedNotice();
 
   if (currentTranscriptMode !== "original" && resultTabIsActive("notes")) {
     void translateNotesContent();
@@ -4374,6 +4383,45 @@ function renderNotesCount() {
  * The record is namespaced per account, the same way the notes are, so a
  * drop that happened under one account is never shown under another.
  */
+async function loadNotesDroppedNotice() {
+  const notice = document.getElementById("notesDroppedNotice");
+  if (!notice) return;
+
+  try {
+    let githubId = "";
+    const sessionKey =
+      typeof YTD_SETTINGS !== "undefined" && YTD_SETTINGS.GITHUB_SESSION_KEY
+        ? YTD_SETTINGS.GITHUB_SESSION_KEY
+        : "ytd_github_session";
+    const stored = await chrome.storage.local.get(sessionKey);
+    const session = stored?.[sessionKey];
+    if (session && session.githubId) githubId = session.githubId;
+
+    const droppedKey =
+      typeof YTD_SETTINGS !== "undefined" && YTD_SETTINGS.notesDroppedKey
+        ? YTD_SETTINGS.notesDroppedKey(githubId)
+        : githubId
+          ? `ytd_notes_dropped_${githubId}`
+          : "ytd_notes_dropped";
+
+    const dropped = await chrome.storage.local.get(droppedKey);
+    const record = dropped?.[droppedKey];
+    const count = Number(record?.lastCount) || 0;
+
+    if (!count) {
+      notice.hidden = true;
+      notice.textContent = "";
+      return;
+    }
+    notice.hidden = false;
+    notice.textContent = panelCopyFormat("notesDropped", {
+      count: String(count),
+      limit: String(LOCAL_NOTE_LIMIT),
+    });
+  } catch (error) {
+    notice.hidden = true;
+  }
+}
 
 /**
  * Stars or unstars a note. The star is the promise the dashboard's Favorites
@@ -5799,6 +5847,7 @@ globalThis.__YTD_PANEL_TESTING__ = {
   openLibraryEntry,
   showWordConfirmation,
   formatTimestamp,
+  loadNotesDroppedNotice,
   showState,
   loadNotes,
   refreshNotesCurrentTime,
