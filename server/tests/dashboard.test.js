@@ -83,17 +83,22 @@ async function bootDashboard(options = {}) {
   });
   const { window } = dom;
 
+  const data = options.data || {
+    notes: NOTES,
+    vocabulary: VOCABULARY,
+    reviews: REVIEWS,
+  };
   const calls = [];
   window.fetch = async (path, init) => {
     calls.push({ path, init });
     const body = path.includes("/api/me")
       ? { user: { login: "jasper-test", id: 1 } }
       : path.includes("/api/notes")
-        ? { notes: NOTES, serverTime: "2026-10-20T00:00:00.000Z" }
+        ? { notes: data.notes, serverTime: "2026-10-20T00:00:00.000Z" }
         : path.includes("/api/vocabulary")
-          ? { vocabulary: VOCABULARY, serverTime: "2026-10-20T00:00:00.000Z" }
+          ? { vocabulary: data.vocabulary, serverTime: "2026-10-20T00:00:00.000Z" }
           : path.includes("/api/reviews/due")
-            ? { reviews: REVIEWS }
+            ? { reviews: data.reviews }
             : {};
     return {
       ok: true,
@@ -106,14 +111,26 @@ async function bootDashboard(options = {}) {
   window.URL.createObjectURL = () => "blob:stub";
   window.URL.revokeObjectURL = () => {};
 
+  if (options.language) {
+    Object.defineProperty(window.navigator, "language", {
+      value: options.language,
+      configurable: true,
+    });
+  }
   if (options.signedIn !== false) {
     window.localStorage.setItem("ytd_dashboard_token", "test.token");
+  }
+  if (options.storedLang) {
+    window.localStorage.setItem("ytd_dashboard_lang", options.storedLang);
   }
   if (options.hash) {
     window.history.replaceState(null, "", options.hash);
   }
 
   window.eval(appJs);
+  // A test can change the page before it starts, e.g. to take a copy key
+  // away and prove that English takes over.
+  if (options.beforeStart) options.beforeStart(window);
   window.document.dispatchEvent(new window.Event("DOMContentLoaded"));
   await settle(window);
   return { dom, window, calls };
@@ -131,6 +148,12 @@ const visiblePanels = (window) =>
   ["notesPanel", "favoritesPanel", "vocabularyPanel", "reviewPanel"].filter(
     (id) => !$(window, id).hidden,
   );
+const tabLabels = (window) =>
+  [...window.document.querySelectorAll(".tab")].map((tab) =>
+    tab.textContent.trim(),
+  );
+const langButton = (window, language) =>
+  window.document.querySelector(`#langSwitch .lang-btn[data-lang="${language}"]`);
 
 test("signing in shows one tab panel, not all four", async () => {
   const { window } = await bootDashboard();
@@ -262,4 +285,162 @@ test("signing out returns the page to the signed-out state", async () => {
   assert.equal($(window, "signedOut").hidden, false);
   assert.equal($(window, "tabsNav").hidden, true);
   assert.equal(window.localStorage.getItem("ytd_dashboard_token"), null);
+});
+
+// ============================================================
+// LANGUAGE
+// ============================================================
+// A Chinese user who signs in to sync their notes lands on a web page. It
+// has to speak their language, the way the side panel and the options page
+// already do.
+
+test("a Chinese browser gets a Chinese dashboard", async () => {
+  const { window } = await bootDashboard({
+    language: "zh-CN",
+    data: { notes: [], vocabulary: [], reviews: [] },
+  });
+  assert.deepEqual(tabLabels(window), ["笔记", "收藏", "词汇", "复习"]);
+  // The empty state is the copy a user reads first, so it is Chinese too.
+  assert.equal($(window, "notesEmpty").hidden, false);
+  assert.equal(
+    $(window, "notesEmpty").textContent,
+    "还没有笔记。看视频时在扩展里保存一条吧。",
+  );
+  // A screen reader has to know which language to pronounce.
+  assert.equal(window.document.documentElement.lang, "zh-CN");
+});
+
+test("the loaded data is drawn in Chinese", async () => {
+  const { window } = await bootDashboard({ language: "zh-CN" });
+  const card = $(window, "notesList").querySelector(".card");
+  assert.deepEqual(
+    [...card.querySelectorAll(".del-btn")].map((button) => button.textContent),
+    ["复制", "删除"],
+  );
+  // The star button says what it does, in the page's language.
+  const star = card.querySelector(".star-btn");
+  assert.equal(star.title, "取消收藏");
+  assert.equal(star.getAttribute("aria-label"), "取消收藏");
+  assert.match(card.querySelector(".card-meta").textContent, /保存于/);
+  assert.equal($(window, "notesCount").textContent, "2 条笔记");
+  assert.equal($(window, "vocabularyCount").textContent, "1 个词");
+  assert.deepEqual(
+    [...$(window, "vocabularyList").querySelectorAll("option")].map(
+      (option) => option.textContent,
+    ),
+    ["学习中", "复习中", "已掌握"],
+  );
+  // The review card counts in Chinese too.
+  $(window, "tab-review").click();
+  await settle(window);
+  assert.equal($(window, "reviewCount").textContent, "1 个待复习");
+  assert.equal($(window, "dashReviewProgress").textContent, "第 1 / 1 张");
+  assert.equal($(window, "dashReviewHint").textContent, "显示答案");
+});
+
+test("a link can ask for a language the browser does not use", async () => {
+  const { window } = await bootDashboard({
+    url: "https://ytd.example/?lang=zh-CN",
+    language: "en",
+    // Even a stored English choice loses to the link.
+    storedLang: "en",
+  });
+  assert.deepEqual(tabLabels(window), ["笔记", "收藏", "词汇", "复习"]);
+  assert.equal(window.document.documentElement.lang, "zh-CN");
+  // The link's language is remembered for the next visit.
+  assert.equal(window.localStorage.getItem("ytd_dashboard_lang"), "zh-CN");
+});
+
+test("a link can ask for English on a Chinese browser", async () => {
+  const { window } = await bootDashboard({
+    url: "https://ytd.example/?lang=en",
+    language: "zh-CN",
+  });
+  assert.deepEqual(tabLabels(window), ["Notes", "Favorites", "Vocabulary", "Review"]);
+  assert.equal(window.document.documentElement.lang, "en");
+});
+
+test("the language switcher redraws the page in place", async () => {
+  const { window, calls } = await bootDashboard({ language: "en" });
+  const list = $(window, "notesList");
+  assert.equal($(window, "tab-notes").textContent.trim(), "Notes");
+  const callsBefore = calls.length;
+
+  langButton(window, "zh-CN").click();
+  await settle(window);
+
+  // The same page, redrawn: a reload would have replaced the document.
+  assert.equal($(window, "notesList"), list);
+  // The data was already here, so the switch did not ask the server again.
+  assert.equal(calls.length, callsBefore);
+  // The signed-in state survived the switch.
+  assert.equal($(window, "userChip").hidden, false);
+  assert.equal($(window, "signedOut").hidden, true);
+  assert.equal($(window, "tabsNav").hidden, false);
+
+  assert.equal($(window, "tab-notes").textContent.trim(), "笔记");
+  assert.equal(window.document.documentElement.lang, "zh-CN");
+  // The notes that were already on screen are drawn in the new language.
+  const card = $(window, "notesList").querySelector(".card");
+  assert.deepEqual(
+    [...card.querySelectorAll(".del-btn")].map((button) => button.textContent),
+    ["复制", "删除"],
+  );
+  assert.equal($(window, "notesCount").textContent, "2 条笔记");
+  // The switcher says which language is on.
+  assert.deepEqual(
+    [...window.document.querySelectorAll("#langSwitch .lang-btn")].map((button) =>
+      button.getAttribute("aria-pressed"),
+    ),
+    ["false", "true"],
+  );
+  assert.equal(window.localStorage.getItem("ytd_dashboard_lang"), "zh-CN");
+});
+
+test("a copy key that is missing falls back to English", async () => {
+  const { window } = await bootDashboard({
+    language: "zh-CN",
+    beforeStart: (w) => {
+      delete w.YTD_DASHBOARD.DASHBOARD_COPY["zh-CN"].tabNotes;
+      // The markup says something else, so only the English table can put
+      // the right word on screen.
+      w.document
+        .querySelector('#tab-notes [data-i18n="tabNotes"]')
+        .textContent = "STALE MARKUP";
+    },
+  });
+  // English takes over. The tab must never go blank.
+  assert.equal($(window, "tab-notes").textContent.trim(), "Notes");
+  assert.notEqual($(window, "tab-notes").textContent.trim(), "");
+});
+
+test("the language choice survives a reload", async () => {
+  const { window } = await bootDashboard({ language: "en" });
+  langButton(window, "zh-CN").click();
+  await settle(window);
+  const stored = window.localStorage.getItem("ytd_dashboard_lang");
+  assert.equal(stored, "zh-CN");
+
+  // A reload: a fresh document that keeps what the browser keeps. The
+  // stored choice beats the browser's own preference.
+  const reloaded = await bootDashboard({ storedLang: stored, language: "en" });
+  assert.equal(reloaded.window.document.documentElement.lang, "zh-CN");
+  assert.deepEqual(tabLabels(reloaded.window), ["笔记", "收藏", "词汇", "复习"]);
+});
+
+test("every string the dashboard shows exists in both languages", async () => {
+  const { window } = await bootDashboard();
+  const table = window.YTD_DASHBOARD.DASHBOARD_COPY;
+  assert.deepEqual(
+    Object.keys(table["zh-CN"]).sort(),
+    Object.keys(table.en).sort(),
+  );
+  const keys = [
+    ...html.matchAll(/data-i18n(?:-aria-label|-title)?="([^"]+)"/g),
+  ].map((match) => match[1]);
+  assert.ok(keys.length > 0);
+  for (const key of keys) {
+    assert.ok(table.en[key], `Missing English copy for ${key}`);
+    assert.ok(table["zh-CN"][key], `Missing Chinese copy for ${key}`);
+  }
 });
