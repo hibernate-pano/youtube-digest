@@ -56,12 +56,21 @@ MUTATIONS = [
     chrome.runtime.sendMessage({
       action: "fetchTranscript",
       videoId: videoId,
+      // The worker reads the captions out of the page itself when it can,
+      // and only spends a credit when it cannot.
+      tabId: youtubeTabId,
+      // The worker remembers a video that has no captions, so that a second
+      // look does not cost another credit. When the user asked for the video
+      // to be looked at again, that memory has to be ignored.
+      force: options?.force === true,
     }),
   );
   const transcriptResult = await transcriptRequest.promise;""",
                 """  const transcriptResult = await chrome.runtime.sendMessage({
     action: "fetchTranscript",
     videoId: videoId,
+    tabId: youtubeTabId,
+    force: options?.force === true,
   });""",
             )
         ],
@@ -128,10 +137,10 @@ MUTATIONS = [
         "file": "sidepanel.js",
         "hunks": [
             (
-                """  currentAnalysis = null;
+                """  renderCachedViewNote();
   clearOverviewLists();
 }""",
-                """  currentAnalysis = null;
+                """  renderCachedViewNote();
 }""",
             )
         ],

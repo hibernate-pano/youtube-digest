@@ -92,15 +92,15 @@ MUTATIONS = [
         "file": "cloud-sync.js",
         "hunks": [
             (
-                """  const unclaimed = legacy.filter((word) => {
-    if (!word || !word.id) return false;
-    const owner = owners[String(word.id)];
-    // A word this account already owns is importable again; a word that
+                """  const importable = legacy.filter((item) => {
+    if (!item || !item.id) return false;
+    const owner = owners[String(item.id)];
+    // An item this account already owns is importable again; an item that
     // belongs to another account is not.
     return !owner || owner === accountId;
   });""",
-                """  const unclaimed = legacy.filter((word) => {
-    if (!word || !word.id) return false;
+                """  const importable = legacy.filter((item) => {
+    if (!item || !item.id) return false;
     return true;
   });""",
             )
@@ -207,11 +207,11 @@ MUTATIONS = [
         "file": "cloud-sync.js",
         "hunks": [
             (
-                """      dropped = items.length - MAX_WORDS;
-      items.splice(MAX_WORDS);
-      await recordDroppedVocabulary(dropped);""",
-                """      dropped = items.length - MAX_WORDS;
-      items.splice(MAX_WORDS);""",
+                """        dropped = items.length - MAX_WORDS;
+        items.splice(MAX_WORDS);
+        await recordDroppedVocabulary(dropped);""",
+                """        dropped = items.length - MAX_WORDS;
+        items.splice(MAX_WORDS);""",
             )
         ],
         "expect": [
@@ -226,10 +226,10 @@ MUTATIONS = [
         "file": "cloud-sync.js",
         "hunks": [
             (
-                """    if (items.length > MAX_WORDS) {
-      dropped = items.length - MAX_WORDS;""",
-                """    if (false && items.length > MAX_WORDS) {
-      dropped = items.length - MAX_WORDS;""",
+                """      if (items.length > MAX_WORDS) {
+        dropped = items.length - MAX_WORDS;""",
+                """      if (false && items.length > MAX_WORDS) {
+        dropped = items.length - MAX_WORDS;""",
             )
         ],
         "expect": [
