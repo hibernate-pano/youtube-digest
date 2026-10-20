@@ -150,6 +150,34 @@ describe("the store's SQL is executable by a real PostgreSQL", async (t) => {
     assert.equal(unstarred.starred, false);
   });
 
+  await t.test("a note update that leaves the note text alone keeps it", async () => {
+    await resetTables(pool);
+    const store = realStore();
+    const user = await store.upsertUser({ githubId: 1007, login: "sparse-note" });
+    const created = await store.createNote(user.id, {
+      clientId: "c1",
+      videoId: "vid1",
+      videoTitle: "Title",
+      channelName: "Channel",
+      timestampSeconds: 10,
+      quote: "a quote",
+      note: "the original note",
+    });
+
+    // A patch that does not carry the note body must not write the
+    // column: a bound `undefined` would be written as NULL, and the
+    // column is NOT NULL - the update would fail.
+    const updated = await store.updateNote(user.id, created.id, {
+      quote: "a new quote",
+    });
+    assert.ok(updated, "the store must return the updated row");
+    assert.equal(updated.note, "the original note");
+    assert.equal(updated.quote, "a new quote");
+
+    const listed = await store.listNotes(user.id);
+    assert.equal(listed[0].note, "the original note");
+  });
+
   await t.test("counting a user's rows works", async () => {
     await resetTables(pool);
     const store = realStore();

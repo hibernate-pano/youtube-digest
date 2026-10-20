@@ -67,6 +67,48 @@ test("JWT round-trips, rejects tampering, and rejects expiry", async () => {
   assert.equal(await jwt.verifyToken(expired, SECRET), null);
 });
 
+test("a token's signature is checked without a timing side channel", async () => {
+  // A signature that is compared byte by byte, stopping at the first
+  // difference, tells an attacker how many bytes of a forgery were right.
+  // The platform's verify does the comparison in constant time, so the
+  // test watches for it being the one that checks the signature.
+  const original = crypto.subtle.verify;
+  const calls = [];
+  crypto.subtle.verify = function (...args) {
+    calls.push(args);
+    return original.apply(this, args);
+  };
+  try {
+    const token = await jwt.signToken(
+      { sub: "1", githubId: 42, login: "alice" },
+      SECRET,
+      3600,
+    );
+
+    // A valid token still verifies, and the token format is unchanged.
+    assert.equal(token.split(".").length, 3);
+    const payload = await jwt.verifyToken(token, SECRET);
+    assert.equal(payload.sub, "1");
+    assert.equal(payload.githubId, 42);
+    assert.equal(calls.length, 1, "the signature must be checked by crypto.subtle.verify");
+
+    // A forged signature of the right length still fails.
+    const parts = token.split(".");
+    const forged =
+      parts[0] + "." + parts[1] + "." + (parts[2][0] === "A" ? "B" : "A") + parts[2].slice(1);
+    assert.equal(await jwt.verifyToken(forged, SECRET), null);
+
+    // A token signed with another key fails too.
+    assert.equal(await jwt.verifyToken(token, SECRET + "other"), null);
+    assert.equal(calls.length, 3);
+
+    // And a malformed signature is an expired session, never a crash.
+    assert.equal(await jwt.verifyToken(token + "x", SECRET), null);
+  } finally {
+    crypto.subtle.verify = original;
+  }
+});
+
 test("authorize URL carries client id, redirect, and state", () => {
   const url = auth.buildAuthorizeUrl({
     clientId: "abc",
@@ -847,6 +889,118 @@ test("a partial note update leaves the fields it did not mention alone", async (
   assert.equal(patched.data.note.timestampSeconds, 42);
   assert.equal(patched.data.note.quote, "a quote");
   assert.equal(patched.data.note.clientId, "sparse_1", "the client id is the sync key");
+});
+
+test("a null in a note patch means 'not sent', not 'set to zero'", async () => {
+  const env = makeEnv();
+  const token = await signIn(env, 1001, "alice");
+  const created = await api(env, "POST", "/api/notes", {
+    token,
+    body: {
+      note: "original",
+      clientId: "null_patch_1",
+      videoId: "abc123xyz",
+      videoTitle: "A title",
+      channelName: "A channel",
+      timestampSeconds: 42,
+      quote: "a quote",
+    },
+  });
+  assert.equal(created.status, 201);
+  const id = created.data.note.id;
+
+  // A client that sends null for a field means "leave it alone". It used
+  // to be read as a value: `Number(null)` is 0, so the timestamp became 0
+  // and the note lost its link to its video.
+  const patched = await api(env, "PATCH", "/api/notes/" + id, {
+    token,
+    body: { note: "edited", timestampSeconds: null, videoId: null },
+  });
+  assert.equal(patched.status, 200);
+  assert.equal(patched.data.note.note, "edited");
+  assert.equal(patched.data.note.timestampSeconds, 42, "a null timestamp must not become 0");
+  assert.equal(patched.data.note.videoId, "abc123xyz", "a null video id must not erase the link");
+  assert.equal(patched.data.note.videoTitle, "A title");
+  assert.equal(patched.data.note.channelName, "A channel");
+  assert.equal(patched.data.note.quote, "a quote");
+
+  // And the row on disk kept them too.
+  const listed = await api(env, "GET", "/api/notes", { token });
+  assert.equal(listed.data.notes[0].timestampSeconds, 42);
+  assert.equal(listed.data.notes[0].videoId, "abc123xyz");
+
+  // A patch that leaves the note text alone does not write the note
+  // column at all.
+  const quoteOnly = await api(env, "PATCH", "/api/notes/" + id, {
+    token,
+    body: { note: null, quote: "a new quote" },
+  });
+  assert.equal(quoteOnly.status, 200);
+  assert.equal(quoteOnly.data.note.note, "edited", "the note text must survive a patch without it");
+  assert.equal(quoteOnly.data.note.quote, "a new quote");
+});
+
+test("every field of a note patch treats null as 'not sent'", async () => {
+  const env = makeEnv();
+  const token = await signIn(env, 1001, "alice");
+  const created = await api(env, "POST", "/api/notes", {
+    token,
+    body: {
+      note: "original",
+      clientId: "null_patch_all",
+      videoId: "abc123xyz",
+      videoTitle: "A title",
+      channelName: "A channel",
+      timestampSeconds: 42,
+      quote: "a quote",
+      starred: true,
+    },
+  });
+  assert.equal(created.status, 201);
+  const id = created.data.note.id;
+
+  const patched = await api(env, "PATCH", "/api/notes/" + id, {
+    token,
+    body: {
+      note: "edited",
+      videoId: null,
+      videoTitle: null,
+      channelName: null,
+      timestampSeconds: null,
+      quote: null,
+      starred: null,
+    },
+  });
+  assert.equal(patched.status, 200);
+  assert.equal(patched.data.note.videoId, "abc123xyz");
+  assert.equal(patched.data.note.videoTitle, "A title");
+  assert.equal(patched.data.note.channelName, "A channel");
+  assert.equal(patched.data.note.timestampSeconds, 42);
+  assert.equal(patched.data.note.quote, "a quote");
+  assert.equal(patched.data.note.starred, true, "a null flag must not clear the favorite");
+});
+
+test("a note patch that changes nothing is refused", async () => {
+  const env = makeEnv();
+  const token = await signIn(env, 1001, "alice");
+  const created = await api(env, "POST", "/api/notes", {
+    token,
+    body: { note: "original", clientId: "null_patch_empty", videoId: "abc123xyz" },
+  });
+  const id = created.data.note.id;
+
+  // Every field is "not sent": there is nothing to write, so the request
+  // is refused instead of bumping the timestamp for no reason.
+  const refused = await api(env, "PATCH", "/api/notes/" + id, {
+    token,
+    body: { note: null, timestampSeconds: null },
+  });
+  assert.equal(refused.status, 400);
+
+  // The note is untouched.
+  const listed = await api(env, "GET", "/api/notes", { token });
+  assert.equal(listed.data.notes[0].note, "original");
+  assert.equal(listed.data.notes[0].timestampSeconds, 0);
 });
 
 test("a note update cannot rewrite the client id", async () => {

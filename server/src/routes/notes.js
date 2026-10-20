@@ -50,9 +50,10 @@ async function deleteNoteByClientId(ctx) {
 async function updateNote(ctx) {
   const input = await readObjectBody(ctx);
   // A PATCH is sparse: only the fields the client actually sent are
-  // written. The strict parser would zero every omitted field.
+  // written. The strict parser would zero every omitted field, and a field
+  // sent as null counts as omitted.
   const note = parseNotePatch(input);
-  if (!note) throw new HttpError(400, "A non-empty note is required.");
+  if (!note) throw new HttpError(400, "A note patch must contain something to change.");
   const row = await ctx.store.updateNote(ctx.user.id, ctx.params.id, note);
   if (!row) throw new HttpError(404, "Note not found.");
   return json({ note: row, serverTime: serverTime() });

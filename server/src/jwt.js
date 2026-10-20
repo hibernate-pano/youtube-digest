@@ -20,15 +20,26 @@ function base64UrlDecode(value) {
 }
 
 async function hmacSha256(secret, data) {
-  const key = await crypto.subtle.importKey(
+  const key = await importHmacKey(secret, ["sign"]);
+  const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(data));
+  return new Uint8Array(signature);
+}
+
+/**
+ * The length of an HMAC-SHA256 signature, in bytes. The length is not a
+ * secret - it is the length of every signature this module produces - so it
+ * may be compared before the signature itself.
+ */
+const SIGNATURE_LENGTH = 32;
+
+async function importHmacKey(secret, usages) {
+  return crypto.subtle.importKey(
     "raw",
     encoder.encode(secret),
     { name: "HMAC", hash: "SHA-256" },
     false,
-    ["sign"],
+    usages,
   );
-  const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(data));
-  return new Uint8Array(signature);
 }
 
 /**
@@ -74,16 +85,23 @@ async function verifyToken(token, secret) {
   } catch {
     return null;
   }
-  const expected = await hmacSha256(secret, encodedHeader + "." + encodedBody);
-  if (expected.length !== supplied.length) return null;
-  let equal = true;
-  for (let i = 0; i < expected.length; i++) {
-    if (expected[i] !== supplied[i]) {
-      equal = false;
-      break;
-    }
-  }
-  if (!equal) return null;
+  // The signature is checked by the platform, which compares it without
+  // leaking how many bytes were right. A byte-by-byte comparison that
+  // stops at the first difference is a timing side channel: it tells an
+  // attacker how far a forged signature got.
+  //
+  // The length is checked first because it is no secret at all - every
+  // signature of this algorithm has the same length - and a signature of
+  // the wrong length can never be the right one.
+  if (supplied.length !== SIGNATURE_LENGTH) return null;
+  const key = await importHmacKey(secret, ["verify"]);
+  const valid = await crypto.subtle.verify(
+    "HMAC",
+    key,
+    supplied,
+    encoder.encode(encodedHeader + "." + encodedBody),
+  );
+  if (!valid) return null;
   const now = Math.floor(Date.now() / 1000);
   if (typeof payload.exp !== "number" || payload.exp <= now) return null;
   return payload;

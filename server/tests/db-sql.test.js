@@ -182,6 +182,27 @@ test("a note update writes only the fields the client sent", async () => {
   assert.deepEqual(columns, ["note", "video_id", "updated_at"]);
 });
 
+test("a note update without a note body does not write the note column", async () => {
+  // A patch that leaves the note text alone must not write the column at
+  // all: a bound `undefined` would be written as NULL, and the column is
+  // NOT NULL. The two stores have to agree on this, and only the SQL can
+  // show it.
+  const driver = createDriver(() => [NOTE_ROW]);
+  const store = new NeonStore("postgresql://example", driver);
+
+  await store.updateNote(ALICE, "note-1", { quote: "a new quote" });
+
+  const setClause = driver.calls[0].text.slice(
+    driver.calls[0].text.indexOf("set ") + 4,
+    driver.calls[0].text.search(/\bwhere\b/i),
+  );
+  const columns = splitTopLevel(setClause)
+    .map((item) => /^\s*([a-z_]+)\s*=/.exec(item.trim()))
+    .filter(Boolean)
+    .map((match) => match[1]);
+  assert.deepEqual(columns, ["quote", "updated_at"]);
+});
+
 test("a note update that does not mention starred leaves the stored favorite alone", async () => {
   const driver = createDriver(() => [NOTE_ROW]);
   const store = new NeonStore("postgres://example", driver);
