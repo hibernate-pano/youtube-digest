@@ -16,9 +16,9 @@
 
 - [ ] 注册 Chrome Web Store 开发者账号（$5 一次性）：https://chrome.google.com/webstore/devconsole
 - [ ] 隐私政策 URL：见下面「隐私政策 URL」一节。**线上只有一页**，它自带中英文切换。
-- [ ] 打包好的 ZIP：仓库根目录 npm run package 生成 dist/youtube-digest-v1.7.0.zip
+- [ ] 打包好的 ZIP：仓库根目录 npm run package 生成 dist/youtube-digest-v1.7.1.zip
   - 注意：商店不接受根目录直接打包，需要 zip 内包含 manifest.json（我们的脚本已满足）
-  - v1.7.0 的包现在有 27 个文件，SHA-256 以 `npm run package`
+  - v1.7.1 的包现在有 27 个文件，SHA-256 以 `npm run package`
     当次输出为准，不要抄旧记录
 - [ ] 数据使用披露表单（Data use disclosure）：勾选项必须和「商品信息」里的说法一致，
   尤其是 Supadata 和三个 AI 服务商。这张表和隐私政策对不上是常见的打回原因。
@@ -156,60 +156,58 @@ is optional and only used as a fallback when the page cannot be read.
 稳定可用的下载地址（README 里用的是相对路径，复制到别处贴不出来）。文件名里有
 空格，URL 里必须写成 `%20`。
 
-所有图片都在仓库根目录或 `.review/` 目录，raw 地址是：
+**5 张已经齐了**，都在 `store/` 目录，全部是 1280x800（商店要的 16:10）：
+
+| 文件 | 拍的是什么 | 怎么来的 |
+| --- | --- | --- |
+| `store/01-summary.png` | YouTube 播放页 + 侧边栏 Summary 标签页：AI 摘要和章节 | 仓库根目录的 `YouTube Digest demo.jpg`（2660x1560，比例不对）。顶部补了 103px 的白边（那一行本来就是纯白，接缝看不出来），再缩到 1280x800 |
+| `store/02-bilingual.png` | 同一支视频，侧边栏 Transcript 标签页的双语字幕 | 同上，来源是 `YouTube Digest demo bilingual.jpg` |
+| `store/03-transcript.png` | 侧边栏 Transcript 标签页：搜索框、导出、从 0:02 开始的全字幕 | 真实浏览器里拍的（640x400 的视口，2 倍像素密度） |
+| `store/04-notes.png` | 侧边栏 Notes 标签页：一条带时间戳的笔记和它的操作按钮 | 同上 |
+| `store/05-library.png` | 侧边栏 Library 标签页：读过的视频 | 同上 |
+
+raw 地址（合并并推送之后才有效）：
 
 ```text
-https://raw.githubusercontent.com/hibernate-pano/youtube-digest/main/YouTube%20Digest%20demo.jpg
-https://raw.githubusercontent.com/hibernate-pano/youtube-digest/main/YouTube%20Digest%20demo%20bilingual.jpg
-https://raw.githubusercontent.com/hibernate-pano/youtube-digest/main/.review/transcript.png
-https://raw.githubusercontent.com/hibernate-pano/youtube-digest/main/.review/summary.png
-https://raw.githubusercontent.com/hibernate-pano/youtube-digest/main/.review/overview.png
-https://raw.githubusercontent.com/hibernate-pano/youtube-digest/main/.review/notes.png
-https://raw.githubusercontent.com/hibernate-pano/youtube-digest/main/.review/words.png
-https://raw.githubusercontent.com/hibernate-pano/youtube-digest/main/.review/library.png
+https://raw.githubusercontent.com/hibernate-pano/youtube-digest/main/store/01-summary.png
+https://raw.githubusercontent.com/hibernate-pano/youtube-digest/main/store/02-bilingual.png
+https://raw.githubusercontent.com/hibernate-pano/youtube-digest/main/store/03-transcript.png
+https://raw.githubusercontent.com/hibernate-pano/youtube-digest/main/store/04-notes.png
+https://raw.githubusercontent.com/hibernate-pano/youtube-digest/main/store/05-library.png
 ```
 
-> 这些链接指向 `main` 分支。演示图和 `PRIVACY.zh-CN.md` 目前只在工作分支上，
-> 还没进 `main`，所以现在打开是 404；合并并推送之后才有效。
+> 这些链接指向 `main` 分支。`store/` 目录目前只在工作分支上，还没进 `main`，
+> 所以现在打开是 404；合并并推送之后才有效。
 
-实测尺寸（`sips -g pixelWidth -g pixelHeight`）：
+### 截图是怎么拍的（换机器重拍时照着做）
 
-| 文件 | 实测尺寸 | 比例 | 商店能不能直接用 | 说明 |
-| --- | --- | ---: | --- | --- |
-| `YouTube Digest demo.jpg` | 2660x1560 | 1.71 | **要裁** | 真实截图：YouTube 播放页 + 侧边栏 Summary 标签页（AI 摘要 + 章节）。比例不是商店要的 16:10，裁成 1280x800 再传 |
-| `YouTube Digest demo bilingual.jpg` | 2660x1560 | 1.71 | **要裁** | 真实截图：同一支视频，侧边栏 Transcript 标签页的双语字幕。同样裁成 1280x800 |
-| `.review/transcript.png` | 420x900 | 0.47 | 不能 | 竖图，宽度不到 640 |
-| `.review/overview.png` | 420x900 | 0.47 | 不能 | 尺寸不够。**内容是对的**：拍的是 Summary 标签页（AI 摘要 + 章节 + 重点引用） |
-| `.review/summary.png` | 420x900 | 0.47 | 不能 | 尺寸不够，而且内容重复：它拍的是 Transcript 标签页，不是 Summary |
-| `.review/notes.png` | 420x900 | 0.47 | 不能 | 尺寸不够。内容是 Notes 标签页 |
-| `.review/words.png` | 420x900 | 0.47 | 不能 | 尺寸不够。内容是 Words 标签页 |
-| `.review/library.png` | 420x900 | 0.47 | 不能 | 尺寸不够。内容是 Library 标签页 |
+浏览器的侧边栏没法直接截图，所以侧边栏是**当成一个标签页**打开的：画面里没有
+浏览器地址栏，看起来就是一个 640x400 的面板。视口用 640x400、像素密度 2，
+截图就是 1280x800。面板会跟着播放器的位置滚动，所以拍之前把字幕列表滚回顶部，
+把要拍的那张卡片滚到画面中间。
 
-**今天能凑齐 5 张吗？不能。** 现在只有 2 张够尺寸（还要裁），另外 6 张全部是
-420x900 的竖图，商店的两种尺寸（1280x800、640x400）都不接受。要上架就得重拍。
+前两张（`01`、`02`）不是这么拍的：它们是从仓库根目录那两张演示图裁出来的。
+那两张图是真实浏览器的整屏截图，比例是 1.71 而不是商店要的 1.6，横向裁哪边都会
+切掉东西（左边是 YouTube 的 logo，右边是面板的 Library 标签），所以改成在顶部
+补一条白边——那一行本来就是纯白，接缝看不出来。
 
-打算用哪 5 张，以及各自要做什么：
+### 拍不到的那几张
 
-1. **双语字幕（Transcript 标签页）**：裁 `YouTube Digest demo bilingual.jpg`。
-   这张已经是真实界面，裁完就能用。
-2. **AI 摘要（Summary 标签页）**：裁 `YouTube Digest demo.jpg`。同上，真实界面。
-3. **笔记（Notes 标签页）**：重拍。`.review/notes.png` 内容对，但尺寸只有 420x900，
-   直接放大到 1280x800 会糊。要么把浏览器窗口拉宽到 1280 再截，要么把竖图放进
-   1280x800 的画布里留白。
-4. **生词本 + 复习（Words 标签页）**：重拍，理由同上。
-5. **资料库（Library 标签页）**：重拍，理由同上。
-
-还缺的（现在完全没有的）：
-
-- **设置页（Options）**：四个 Key 输入框（Supadata、DeepSeek、MiniMax、OpenCode Go），
-  不是旧材料里写的「两个」。
+- **生词本（Words 标签页）**：需要能用的 AI Key。当前存着的 Key 已经过期
+  （DeepSeek 报 401，OpenCode Go 报 `api_key_expired`），生词、摘要、翻译、
+  讲解这几条路现在都跑不起来。换一个能用的 Key 之后就能拍。
+- **设置页（Options）**：四个 Key 输入框（Supadata、DeepSeek、MiniMax、
+  OpenCode Go），不是旧材料里写的「两个」。
 - **网页控制台（Dashboard）**：登录后的 Notes / Favorites / Vocabulary / Review，
-  以及 Export 和 Delete my account 按钮。控制台不是扩展本身，但它是这个产品的一
-  部分，商店描述里提到了，给一张更完整。
+  以及 Export 和 Delete my account 按钮。控制台不是扩展本身，但商店描述里提到了
+  它，给一张更完整。
 - **视频页上的 Digest 按钮**：`.review/` 里没有这张。
 
-另外注意：`.review/` 那 6 张右上角显示的是 GitHub 登录名，是拿来看效果的内部图，
-不是最终要给用户看的图。重拍时注意这一点。
+商店最多 5 张，现在这 5 张已经把位置占满了。生词本那张换到 AI Key 之后，
+替换掉第 5 张（资料库）就行。
+
+`.review/` 那 6 张是内部图：420x900 的竖图，尺寸商店不收，右上角还显示着
+GitHub 登录名。它们不参与上架。
 
 ## 审核注意
 
@@ -239,7 +237,7 @@ https://raw.githubusercontent.com/hibernate-pano/youtube-digest/main/.review/lib
 
 诚实地列一遍，按重要性排：
 
-- [ ] **截图**。现在 0 张可以直接用（2 张要裁，6 张要重拍），商店至少要 1 张。
+- [x] **截图**。5 张 1280x800 已经在 `store/` 目录里，商店的 5 个位置正好。
 - [ ] **隐私政策 URL 的内容**。线上那页只覆盖同步服务，没覆盖 Supadata 和 AI
       服务商。要么把 `PRIVACY.md` 发布出去，要么把线上那页扩写。
 - [ ] **图标**。`icons/icon128.png` 是 128x128 的 PNG，尺寸对；但它带 alpha 通道，
@@ -247,5 +245,5 @@ https://raw.githubusercontent.com/hibernate-pano/youtube-digest/main/.review/lib
 - [ ] **支持邮箱**。商店要求一个有人看的联系方式，仓库现在没有。
 - [ ] **`manifest.json` 的 `name`**。如果因为商标问题换商店名称，这个文件要同步改
       （不在本文档组的改动范围内）。
-- [x] **版本号**。`manifest.json` 和 `package.json` 已经一起 bump 到 **1.7.0**，
-      `dist/youtube-digest-v1.7.0.zip` 已生成。上架时用这个包。
+- [x] **版本号**。`manifest.json` 和 `package.json` 已经一起 bump 到 **1.7.1**，
+      `dist/youtube-digest-v1.7.1.zip` 已生成。上架时用这个包。
