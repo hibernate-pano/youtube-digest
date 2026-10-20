@@ -33,16 +33,16 @@
     </header>
 
     <main class="shell">
-      <nav class="tabs" id="tabsNav" hidden>
-        <button class="tab active" data-tab="notes">Notes</button>
-        <button class="tab" data-tab="favorites">
+      <nav class="tabs" id="tabsNav" role="tablist" aria-label="Dashboard sections" hidden>
+        <button class="tab active" type="button" role="tab" id="tab-notes" data-tab="notes" aria-controls="notesPanel" aria-selected="true">Notes</button>
+        <button class="tab" type="button" role="tab" id="tab-favorites" data-tab="favorites" aria-controls="favoritesPanel" aria-selected="false" tabindex="-1">
           <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
             <path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.12 2.12 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.12 2.12 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.12 2.12 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.12 2.12 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.12 2.12 0 0 0 1.597-1.16z"></path>
           </svg>
           Favorites
         </button>
-        <button class="tab" data-tab="vocabulary">Vocabulary</button>
-        <button class="tab" data-tab="review">Review</button>
+        <button class="tab" type="button" role="tab" id="tab-vocabulary" data-tab="vocabulary" aria-controls="vocabularyPanel" aria-selected="false" tabindex="-1">Vocabulary</button>
+        <button class="tab" type="button" role="tab" id="tab-review" data-tab="review" aria-controls="reviewPanel" aria-selected="false" tabindex="-1">Review</button>
       </nav>
 
       <section id="signedOut" class="signed-out" hidden>
@@ -74,7 +74,7 @@
         </div>
       </section>
 
-      <section id="notesPanel" hidden>
+      <section id="notesPanel" role="tabpanel" aria-labelledby="tab-notes" hidden>
         <div class="list-head">
           <h2>Notes</h2>
           <span class="count" id="notesCount"></span>
@@ -83,7 +83,7 @@
         <div id="notesList" class="cards"></div>
       </section>
 
-      <section id="favoritesPanel" hidden>
+      <section id="favoritesPanel" role="tabpanel" aria-labelledby="tab-favorites" hidden>
         <div class="list-head">
           <h2>Favorites</h2>
           <span class="count" id="favoritesCount"></span>
@@ -97,7 +97,7 @@
         <div id="favoritesList" class="cards"></div>
       </section>
 
-      <section id="vocabularyPanel" hidden>
+      <section id="vocabularyPanel" role="tabpanel" aria-labelledby="tab-vocabulary" hidden>
         <div class="list-head">
           <h2>Vocabulary</h2>
           <span class="count" id="vocabularyCount"></span>
@@ -113,7 +113,7 @@
         <div id="vocabularyList" class="cards"></div>
       </section>
 
-      <section id="reviewPanel" hidden>
+      <section id="reviewPanel" role="tabpanel" aria-labelledby="tab-review" hidden>
         <div class="list-head">
           <h2>Review due words</h2>
           <span class="count" id="reviewCount"></span>
@@ -123,12 +123,17 @@
           their own schedule, and the grade you give sets the next one.
         </p>
         <div class="empty" id="reviewEmpty" hidden>Nothing due right now. Saved words come back here on their own schedule.</div>
-        <div id="reviewCard" class="review-card" hidden>
-          <div class="review-term" id="dashReviewTerm"></div>
-          <div class="review-sentence" id="dashReviewSentence"></div>
-          <div class="review-translation" id="dashReviewTranslation" hidden></div>
-          <div class="review-explanation" id="dashReviewExplanation" hidden></div>
-        </div>
+        <!-- The card is the only way to see the answer, so it is a real
+             button: a keyboard user and a screen reader can reach it. The
+             hint says what clicking does, because a mouse user cannot
+             otherwise tell that the card is interactive. -->
+        <button id="reviewCard" class="review-card" type="button" aria-expanded="false" hidden>
+          <span class="review-term" id="dashReviewTerm"></span>
+          <span class="review-sentence" id="dashReviewSentence"></span>
+          <span class="review-translation" id="dashReviewTranslation" hidden></span>
+          <span class="review-explanation" id="dashReviewExplanation" hidden></span>
+          <span class="review-hint" id="dashReviewHint">Show answer</span>
+        </button>
         <div class="review-actions" id="dashReviewActions" hidden>
           <button class="grade-btn" data-grade="1" type="button">Again</button>
           <button class="grade-btn" data-grade="2" type="button">Hard</button>

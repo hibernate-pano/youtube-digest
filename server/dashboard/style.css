@@ -247,22 +247,36 @@ select.status-select {
 .status-line.error { color: var(--danger); }
 
 /* dashboard review */
+/* The review card is a real button: it is the only way to see the answer,
+   so it has to be reachable by keyboard and announced as a control. The
+   button's own chrome is reset so it still reads as a card. */
 .review-card {
+  display: grid;
+  gap: var(--sp-3);
+  width: 100%;
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
   background: var(--surface);
   padding: 26px 20px;
   min-height: 170px;
-  display: grid;
-  gap: var(--sp-3);
   text-align: center;
   cursor: pointer;
   align-content: center;
+  color: var(--text);
+  font: inherit;
 }
+.review-card:hover { border-color: var(--accent); }
 .review-term { font-size: var(--fs-3xl); font-weight: 800; }
 .review-sentence { color: var(--text-muted); font-style: italic; font-size: var(--fs-lg); }
 .review-translation { color: var(--accent); font-weight: 700; font-size: var(--fs-2xl); }
 .review-explanation { color: var(--text-muted); font-size: var(--fs-md); }
+/* Without a hint, a mouse user cannot tell that the card does anything. */
+.review-hint {
+  margin-top: var(--sp-2);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
 .review-actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 14px; }
 .review-progress { text-align: center; color: var(--text-muted); font-size: var(--fs-md); margin-top: 12px; }
 .grade-btn {

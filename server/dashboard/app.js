@@ -8,6 +8,15 @@
   const LOGIN_PATH = "/api/auth/login?redirect=/";
   const STATE = { token: "", user: null, notes: [], vocabulary: [] };
 
+  // The three learning states a saved word can be in. The label is what the
+  // user reads; the value is what the server stores. Showing the raw value
+  // ("learning") in a sentence-case UI was the odd one out.
+  const VOCAB_STATUSES = [
+    { value: "learning", label: "Learning" },
+    { value: "reviewing", label: "Reviewing" },
+    { value: "mastered", label: "Mastered" },
+  ];
+
   const $ = (id) => document.getElementById(id);
 
   const STAR_PATH =
@@ -137,11 +146,17 @@
       body.textContent = note.note || "";
       const meta = document.createElement("div");
       meta.className = "card-meta";
-      const videoId = document.createElement("span");
-      videoId.textContent = note.videoId || "";
+      // The channel tells the user which series a note came from. The video
+      // id used to be shown here instead; it is a database key and told the
+      // user nothing.
+      if (note.channelName) {
+        const channel = document.createElement("span");
+        channel.textContent = note.channelName;
+        meta.appendChild(channel);
+      }
       const saved = document.createElement("span");
       saved.textContent = "Saved " + new Date(note.createdAt).toLocaleString();
-      meta.append(videoId, saved);
+      meta.appendChild(saved);
       card.append(head, body, meta);
       list.appendChild(card);
     }
@@ -163,11 +178,11 @@
       term.textContent = row.term;
       const status = document.createElement("select");
       status.className = "status-select";
-      for (const option of ["learning", "reviewing", "mastered"]) {
+      for (const option of VOCAB_STATUSES) {
         const el = document.createElement("option");
-        el.value = option;
-        el.textContent = option;
-        el.selected = row.status === option;
+        el.value = option.value;
+        el.textContent = option.label;
+        el.selected = row.status === option.value;
         status.appendChild(el);
       }
       status.addEventListener("change", () => setVocabStatus(row, status.value));
@@ -181,7 +196,9 @@
       video.href = watchUrl(row.videoId, row.timestampSeconds);
       video.target = "_blank";
       video.rel = "noreferrer";
-      video.textContent = row.videoTitle || row.videoId || "";
+      // A video id is a database key, not a title. When the title is missing
+      // the link still needs a name, so it says what it does.
+      video.textContent = row.videoTitle || "Watch the video";
       head.append(term, status, video, del);
       const translation = document.createElement("div");
       translation.className = "vocab-translation";
@@ -283,6 +300,8 @@
     $("dashReviewExplanation").textContent = review.vocabulary.sentenceTranslation || "";
     $("dashReviewTranslation").hidden = true;
     $("dashReviewExplanation").hidden = true;
+    $("reviewCard").setAttribute("aria-expanded", "false");
+    $("dashReviewHint").hidden = false;
     $("dashReviewProgress").textContent =
       "Card " + (dashReviewState.index + 1) + " of " + dashReviewState.queue.length;
   }
@@ -331,12 +350,12 @@
     $("userName").textContent = user.login;
     $("signedOut").hidden = true;
     $("tabsNav").hidden = false;
-    $("notesPanel").hidden = false;
-    $("favoritesPanel").hidden = false;
-    $("vocabularyPanel").hidden = false;
-    $("reviewPanel").hidden = false;
     $("footer").hidden = false;
-    void loadDueReviews();
+    // Only the selected tab's panel is shown. Unhiding all four made the tab
+    // bar a lie: the page showed Notes, Favorites, Vocabulary and Review
+    // stacked under a "Notes" tab that looked selected, and clicking a tab
+    // then hid three sections the user had just been reading.
+    switchTab("notes", { reload: false });
   }
 
   function showSignedOut() {
@@ -358,14 +377,67 @@
     showSignedOut();
   }
 
-  function switchTab(tab) {
+  /**
+   * Keeps the tab bar honest: the selected tab says so, and only the
+   * selected tab stays in the tab order.
+   */
+  function syncTabState(tab) {
+    document.querySelectorAll(".tab").forEach((button) => {
+      const selected = button.dataset.tab === tab;
+      button.setAttribute("aria-selected", selected ? "true" : "false");
+      button.setAttribute("tabindex", selected ? "0" : "-1");
+    });
+  }
+
+  /**
+   * Moves the roving tab stop to a tab the user arrowed onto. The stop
+   * follows the focus, so Tab leaves the tab bar from where the user is
+   * looking.
+   */
+  function moveTabFocus(nextTab) {
+    document.querySelectorAll(".tab").forEach((button) => {
+      button.setAttribute("tabindex", button === nextTab ? "0" : "-1");
+    });
+    nextTab.focus();
+  }
+
+  /**
+   * Arrow keys move between the tabs, the way the ARIA tabs pattern asks
+   * for. They move the focus only: the user activates a tab with Enter or
+   * Space, like any button.
+   */
+  function handleTabKeydown(event) {
+    const tabs = [...document.querySelectorAll(".tab")];
+    const index = tabs.indexOf(event.currentTarget);
+    if (index === -1) return;
+
+    let nextIndex = null;
+    if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+      nextIndex = (index + 1) % tabs.length;
+    } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+      nextIndex = (index - 1 + tabs.length) % tabs.length;
+    } else if (event.key === "Home") {
+      nextIndex = 0;
+    } else if (event.key === "End") {
+      nextIndex = tabs.length - 1;
+    }
+    if (nextIndex === null) return;
+
+    event.preventDefault();
+    moveTabFocus(tabs[nextIndex]);
+  }
+
+  function switchTab(tab, options) {
+    const reload = !options || options.reload !== false;
     document.querySelectorAll(".tab").forEach((button) => {
       button.classList.toggle("active", button.dataset.tab === tab);
     });
+    syncTabState(tab);
     $("notesPanel").hidden = tab !== "notes";
     $("favoritesPanel").hidden = tab !== "favorites";
     $("vocabularyPanel").hidden = tab !== "vocabulary";
     $("reviewPanel").hidden = tab !== "review";
+    if (!reload) return;
     // Refresh the visible data when switching tabs so edits made elsewhere
     // (e.g. in the extension) show up without a manual reload.
     if (tab === "review") {
@@ -446,12 +518,15 @@
     });
     document.querySelectorAll(".tab").forEach((button) => {
       button.addEventListener("click", () => switchTab(button.dataset.tab));
+      button.addEventListener("keydown", handleTabKeydown);
     });
     $("reviewCard").addEventListener("click", () => {
       if (dashReviewState.revealed) return;
       dashReviewState.revealed = true;
       $("dashReviewTranslation").hidden = false;
       $("dashReviewExplanation").hidden = false;
+      $("reviewCard").setAttribute("aria-expanded", "true");
+      $("dashReviewHint").hidden = true;
     });
     document.querySelectorAll("#dashReviewActions .grade-btn").forEach((btn) => {
       btn.addEventListener("click", () => {
