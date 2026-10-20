@@ -1,25 +1,33 @@
-:root {
-  color-scheme: light;
-  --bg: #f7f3ec;
-  --surface: #ffffff;
-  --border: #e7dfd2;
-  --text: #2e2a24;
-  --muted: #6b6258;
-  --accent: #c8674f;
-  --accent-hover: #ad523e;
-  --danger: #9f2d2d;
+/* Colour, type and spacing tokens live in tokens.css, which the settings
+   page, the side panel and the web dashboard all load. This file only styles
+   the settings page itself. */
+html {
+  color-scheme: light dark;
 }
 
 * {
   box-sizing: border-box;
 }
 
+/* ============================================================
+   KEYBOARD FOCUS — page-level safety net
+   ============================================================ */
+/* Every control on this page is reachable by keyboard, and the four rules
+   below were the only ones that drew a ring — all of them in a 14% accent
+   wash, which measures 1.10:1 to 1.40:1 against the page and is invisible.
+   This is the single rule that gives every control a visible ring:
+   :focus-visible keeps it away from pointer users and :where() keeps the
+   specificity at zero so a component can still opt into a different ring. */
+:where(a, button, input, textarea, select, [tabindex]):focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+
 body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font: 15px/1.55 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-    sans-serif;
 }
 
 .settings-shell {
@@ -36,7 +44,7 @@ header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: var(--sp-4);
 }
 
 .language-switch {
@@ -44,18 +52,18 @@ header {
   flex: 0 0 auto;
   padding: 2px;
   border: 1px solid var(--border);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.72);
+  border-radius: var(--r-pill);
+  background: var(--surface-glass);
 }
 
 .language-switch .language-option {
   min-width: 62px;
   padding: 5px 10px;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: transparent;
-  color: var(--muted);
-  font-size: 12px;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
   line-height: 1.35;
 }
 
@@ -67,17 +75,17 @@ header {
 .language-switch .language-option[aria-pressed="true"] {
   background: var(--surface);
   color: var(--text);
-  box-shadow: 0 1px 4px rgba(46, 42, 36, 0.14);
+  box-shadow: var(--shadow-sm);
 }
 
 .language-switch .language-option:focus-visible {
-  outline: 3px solid rgba(200, 103, 79, 0.28);
-  outline-offset: 1px;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .eyebrow {
   color: var(--accent);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-weight: 800;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -92,26 +100,26 @@ h1 {
 
 .lede,
 .help {
-  color: var(--muted);
+  color: var(--text-secondary);
 }
 
 .lede {
   max-width: 650px;
-  font-size: 17px;
+  font-size: var(--fs-2xl);
 }
 
 .card {
   margin: 18px 0;
-  padding: 24px;
+  padding: var(--sp-6);
   border: 1px solid var(--border);
-  border-radius: 18px;
+  border-radius: var(--r-xl);
   background: var(--surface);
-  box-shadow: 0 10px 30px rgba(46, 42, 36, 0.05);
+  box-shadow: var(--shadow-md);
 }
 
 h2 {
   margin: 0 0 18px;
-  font-size: 19px;
+  font-size: var(--fs-2xl);
 }
 
 label {
@@ -131,28 +139,29 @@ textarea {
   width: 100%;
   padding: 11px 12px;
   border: 1px solid var(--border);
-  border-radius: 10px;
-  background: #fff;
+  border-radius: var(--r-md);
+  background: var(--surface);
   color: var(--text);
 }
 
 input:focus,
 textarea:focus {
   border-color: var(--accent);
-  outline: 3px solid rgba(200, 103, 79, 0.14);
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 textarea {
   min-height: 190px;
   resize: vertical;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
   line-height: 1.55;
 }
 
 .help {
-  margin: 8px 0 0;
-  font-size: 13px;
+  margin: var(--sp-2) 0 0;
+  font-size: var(--fs-md);
 }
 
 a {
@@ -162,10 +171,10 @@ a {
 .privacy-note {
   margin-top: 18px;
   padding: 12px 14px;
-  border-radius: 10px;
-  background: #f8eee9;
-  color: #60483f;
-  font-size: 13px;
+  border-radius: var(--r-md);
+  background: var(--surface-tint);
+  color: var(--text-secondary);
+  font-size: var(--fs-md);
 }
 
 .sr-only {
@@ -182,7 +191,7 @@ a {
 
 .provider-options {
   display: grid;
-  gap: 8px;
+  gap: var(--sp-2);
   margin: 0 0 18px;
   padding: 0;
   border: 0;
@@ -193,9 +202,9 @@ a {
   align-items: center;
   gap: 10px;
   padding: 12px 14px;
-  border: 1px solid #ecd8ce;
-  border-radius: 12px;
-  background: #fdf6f2;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--accent-tint-soft);
   cursor: pointer;
   transition:
     border-color 0.18s ease,
@@ -203,16 +212,17 @@ a {
 }
 
 .provider-option:has(.provider-radio:checked) {
-  border-color: #c8684f;
-  background: #fbead9;
+  border-color: var(--accent);
+  background: var(--accent-tint);
 }
 
 .provider-option:has(.provider-radio:focus-visible) {
-  outline: 3px solid rgba(200, 103, 79, 0.14);
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .provider-radio {
-  accent-color: #c8684f;
+  accent-color: var(--accent);
   width: 17px;
   height: 17px;
   flex: none;
@@ -226,13 +236,13 @@ a {
 
 .provider-option-name {
   font-weight: 800;
-  font-size: 14px;
+  font-size: var(--fs-lg);
 }
 
 .provider-option-detail {
-  color: #8d6a5c;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
 }
 
 .provider-field[hidden] {
@@ -244,21 +254,22 @@ a {
   align-items: center;
   flex-wrap: wrap;
   gap: 10px;
+  margin-top: var(--sp-3);
 }
 
 .agent-badge {
   padding: 4px 9px;
-  border-radius: 999px;
-  background: #f2e3dc;
-  color: #714b3f;
-  font-size: 11px;
+  border-radius: var(--r-pill);
+  background: var(--accent-tint-soft);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
   font-weight: 800;
 }
 
 .customization-card {
   padding: 0;
-  border-color: #ddc2b7;
-  background: linear-gradient(145deg, #fff 0%, #fff9f6 100%);
+  border-color: var(--border);
+  background: linear-gradient(145deg, var(--surface) 0%, var(--accent-tint-soft) 100%);
   overflow: hidden;
 }
 
@@ -266,9 +277,9 @@ a {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
-  gap: 12px;
+  gap: var(--sp-3);
   padding: 17px 22px;
-  border-radius: 17px;
+  border-radius: var(--r-lg);
   cursor: pointer;
   list-style: none;
   transition: background 0.18s ease;
@@ -293,11 +304,13 @@ a {
 }
 
 .customization-summary:hover {
-  background: #fdf3ee;
+  background: var(--accent-tint-soft);
 }
 
+/* The summary sits flush inside a rounded card, so its ring is drawn
+   inside the control instead of outside it. */
 .customization-summary:focus-visible {
-  outline: 3px solid rgba(200, 103, 79, 0.28);
+  outline: 2px solid var(--focus-ring);
   outline-offset: -3px;
 }
 
@@ -308,53 +321,49 @@ a {
 
 .customization-title {
   color: var(--text);
-  font-size: 18px;
+  font-size: var(--fs-2xl);
   font-weight: 800;
   line-height: 1.25;
 }
 
 .customization-purpose {
-  color: var(--muted);
-  font-size: 12px;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
 }
 
 .customization-content {
   padding: 19px 22px 22px;
-  border-top: 1px solid #ead8d0;
+  border-top: 1px solid var(--border);
 }
 
 .customization-intro {
   max-width: 650px;
   margin: 0;
-  font-size: 14px;
+  font-size: var(--fs-lg);
 }
 
 .customization-steps {
   display: grid;
-  gap: 8px;
+  gap: var(--sp-2);
   margin: 12px 0 18px;
   padding-left: 22px;
-  color: var(--muted);
-  font-size: 13px;
+  color: var(--text-secondary);
+  font-size: var(--fs-md);
 }
 
 .customization-steps li {
-  padding-left: 4px;
+  padding-left: var(--sp-1);
 }
 
 .prompt-reminder {
   margin: 8px 0 10px;
   padding: 10px 12px;
-  border: 1px solid #e7b9a8;
-  border-radius: 10px;
-  background: #fff2ec;
-  color: #60483f;
-  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--accent-tint);
+  color: var(--text);
+  font-size: var(--fs-md);
   font-weight: 750;
-}
-
-.copy-actions {
-  margin-top: 12px;
 }
 
 .form-actions,
@@ -372,8 +381,8 @@ a {
 button {
   padding: 10px 15px;
   border: 1px solid var(--border);
-  border-radius: 999px;
-  background: #fff;
+  border-radius: var(--r-pill);
+  background: var(--surface);
   color: var(--text);
   cursor: pointer;
   font-weight: 700;
@@ -384,13 +393,27 @@ button:hover {
 }
 
 button.primary {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: #fff;
+  border-color: var(--accent-solid);
+  background: var(--accent-solid);
+  color: var(--on-accent);
 }
 
 button.primary:hover {
   background: var(--accent-hover);
+}
+
+/* The sign-out button carries class="secondary" in the markup, but no rule
+   matched it, so it fell through to the generic button style and read as a
+   second primary action. */
+button.secondary {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text-secondary);
+}
+
+button.secondary:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 button.danger {
@@ -401,7 +424,7 @@ button.danger {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 12px;
+  margin-bottom: var(--sp-3);
 }
 
 #githubAccount[hidden] {
@@ -422,15 +445,15 @@ button.danger {
 }
 
 #githubStatus {
-  color: var(--muted);
+  color: var(--text-secondary);
   margin-left: 10px;
 }
 
 #saveStatus,
 #dataStatus,
 #copyStatus {
-  color: var(--muted);
-  font-size: 13px;
+  color: var(--text-secondary);
+  font-size: var(--fs-md);
 }
 
 .data-card {
@@ -439,8 +462,8 @@ button.danger {
 
 footer {
   margin-top: 28px;
-  color: var(--muted);
-  font-size: 13px;
+  color: var(--text-secondary);
+  font-size: var(--fs-md);
 }
 
 @media (max-width: 620px) {
@@ -487,14 +510,14 @@ footer {
 }
 
 .setup-guide {
-  margin-top: 16px;
+  margin-top: var(--sp-4);
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: var(--r-lg);
   background: var(--surface);
   padding: 14px 18px;
 }
 .setup-guide[hidden] { display: none; }
-.setup-guide-title { font-weight: 800; margin-bottom: 8px; }
-.setup-guide-steps { margin: 0; padding-left: 20px; color: var(--text); font-size: 13px; }
-.setup-guide-steps li { margin-bottom: 4px; }
+.setup-guide-title { font-weight: 800; margin-bottom: var(--sp-2); }
+.setup-guide-steps { margin: 0; padding-left: var(--sp-5); color: var(--text); font-size: var(--fs-md); }
+.setup-guide-steps li { margin-bottom: var(--sp-1); }
 

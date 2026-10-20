@@ -1,15 +1,7 @@
+/* Colour, type and spacing tokens live in tokens.css, which the dashboard
+   serves from its own origin as a byte-identical copy of the extension's
+   file. Only the values that are specific to this surface stay here. */
 :root {
-  --bg: #faf7f4;
-  --surface: #ffffff;
-  --border: #e5ddd6;
-  --text: #2b211c;
-  --muted: #8a7a70;
-  --accent: #c8684f;
-  --accent-hover: #b2573f;
-  --accent-dim: #fbead9;
-  --star: #e0a33c;
-  --danger: #c0392b;
-  --focus-ring: 0 0 0 3px var(--accent-dim);
   --hit: 44px;
 }
 
@@ -17,17 +9,15 @@
 
 body {
   margin: 0;
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   background: var(--bg);
   color: var(--text);
-  line-height: 1.5;
 }
 
 .topbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--sp-3);
   padding: 14px 20px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
@@ -35,45 +25,45 @@ body {
   top: 0;
 }
 
-.brand { font-weight: 800; font-size: 16px; }
-.brand-sub { font-weight: 500; color: var(--muted); font-size: 13px; margin-left: 8px; }
+.brand { font-weight: 800; font-size: var(--fs-xl); }
+.brand-sub { font-weight: 500; color: var(--text-muted); font-size: var(--fs-md); margin-left: var(--sp-2); }
 
 .user-area { display: flex; align-items: center; gap: 10px; }
 
 .login-btn {
   display: inline-block;
-  padding: 8px 16px;
-  border-radius: 999px;
-  background: var(--accent);
-  color: #fff;
+  padding: var(--sp-2) var(--sp-4);
+  border-radius: var(--r-pill);
+  background: var(--accent-solid);
+  color: var(--on-accent);
   font-weight: 700;
-  font-size: 14px;
+  font-size: var(--fs-lg);
   text-decoration: none;
-  border: 1px solid var(--accent);
+  border: 1px solid var(--accent-solid);
 }
 .login-btn:hover { background: var(--accent-hover); }
-.login-btn.big { padding: 12px 24px; font-size: 15px; }
+.login-btn.big { padding: var(--sp-3) var(--sp-6); font-size: var(--fs-xl); }
 
 .user-chip {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-2);
   font-weight: 700;
-  font-size: 14px;
+  font-size: var(--fs-lg);
 }
 .ghost-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: var(--sp-2);
   min-height: var(--hit);
   border: 1px solid var(--border);
   background: transparent;
-  color: var(--muted);
-  border-radius: 999px;
-  padding: 4px 12px;
+  color: var(--text-muted);
+  border-radius: var(--r-pill);
+  padding: var(--sp-1) var(--sp-3);
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   text-decoration: none;
 }
 .ghost-btn:hover { color: var(--accent); border-color: var(--accent); }
@@ -81,36 +71,44 @@ body {
 .shell { max-width: 760px; margin: 0 auto; padding: 24px 20px 60px; }
 
 .tabs { display: flex; gap: 6px; margin-bottom: 20px; }
+/* One tab component for the whole product. The dashboard and the side panel
+   now share the same geometry: a 40px hit target, a pill radius, a
+   transparent track with a terracotta fill for the active tab. */
 .tab {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  min-height: var(--hit);
-  padding: 8px 16px;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  border-radius: 999px;
+  gap: var(--sp-2);
+  min-height: 40px;
+  padding: var(--sp-2) var(--sp-4);
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: var(--r-pill);
   cursor: pointer;
   font-weight: 600;
-  font-size: 13px;
-  color: var(--muted);
+  font-size: var(--fs-md);
+  color: var(--text-secondary);
 }
-.tab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.tab:hover { color: var(--text); background: var(--accent-dim); }
+.tab.active {
+  background: var(--accent-solid);
+  border-color: var(--accent-solid);
+  color: var(--on-accent);
+}
 
 .signed-out { max-width: 520px; margin: 60px auto 0; text-align: center; }
-.signed-out h1 { font-size: 24px; }
-.signed-out p { color: var(--muted); }
+.signed-out h1 { font-size: var(--fs-3xl); }
+.signed-out p { color: var(--text-muted); }
 
-.list-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 14px; }
-.list-head h2 { margin: 0; font-size: 18px; }
-.count { color: var(--muted); font-size: 13px; }
+.list-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: var(--sp-3); }
+.list-head h2 { margin: 0; font-size: var(--fs-2xl); }
+.count { color: var(--text-muted); font-size: var(--fs-md); }
 
 .empty {
   padding: 28px;
   border: 1px dashed var(--border);
-  border-radius: 14px;
-  color: var(--muted);
+  border-radius: var(--r-lg);
+  color: var(--text-muted);
   text-align: center;
 }
 
@@ -119,7 +117,7 @@ body {
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: var(--r-lg);
   padding: 14px 16px;
 }
 
@@ -127,15 +125,15 @@ body {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 8px;
+  margin-bottom: var(--sp-2);
 }
 
-.card-title { font-weight: 700; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.card-title { font-weight: 700; font-size: var(--fs-lg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 
 .ts-link {
   color: var(--accent);
   font-weight: 700;
-  font-size: 13px;
+  font-size: var(--fs-md);
   text-decoration: none;
   white-space: nowrap;
 }
@@ -151,9 +149,9 @@ body {
   border: none;
   background: transparent;
   cursor: pointer;
-  color: var(--muted);
+  color: var(--text-muted);
   padding: 0;
-  border-radius: 6px;
+  border-radius: var(--r-sm);
 }
 /* Keeps the dense card-head layout intact while lifting the pointer/touch
    target to 44x44 without reflowing the row. */
@@ -180,11 +178,11 @@ body {
   min-height: 36px;
   border: 1px solid var(--border);
   background: transparent;
-  color: var(--muted);
-  border-radius: 999px;
+  color: var(--text-muted);
+  border-radius: var(--r-pill);
   padding: 3px 10px;
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 /* +4px of bleed per side. The 10px card-head gap absorbs it, so adjacent
    Copy/Delete targets never overlap. */
@@ -198,69 +196,70 @@ body {
 }
 .del-btn:hover { color: var(--danger); border-color: var(--danger); }
 
-.card-body { color: var(--text); font-size: 14px; white-space: pre-wrap; word-break: break-word; }
+.card-body { color: var(--text); font-size: var(--fs-lg); white-space: pre-wrap; word-break: break-word; }
 
-.card-meta { color: var(--muted); font-size: 12px; margin-top: 8px; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+.card-meta { color: var(--text-muted); font-size: var(--fs-sm); margin-top: 8px; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
 
-.vocab-term { font-weight: 800; font-size: 16px; }
+.vocab-term { font-weight: 800; font-size: var(--fs-xl); }
 .vocab-translation { color: var(--accent); font-weight: 600; }
-.vocab-sentence { color: var(--muted); font-size: 13px; margin-top: 4px; }
+.vocab-sentence { color: var(--text-muted); font-size: var(--fs-md); margin-top: 4px; }
 
 select.status-select {
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   padding: 3px 10px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--text);
   background: var(--surface);
   cursor: pointer;
 }
 
-.status-line { margin-top: 18px; color: var(--muted); font-size: 13px; min-height: 20px; }
+.status-line { margin-top: 18px; color: var(--text-muted); font-size: var(--fs-md); min-height: 20px; }
 .status-line.error { color: var(--danger); }
 
 /* dashboard review */
 .review-card {
   border: 1px solid var(--border);
-  border-radius: 16px;
+  border-radius: var(--r-lg);
   background: var(--surface);
   padding: 26px 20px;
   min-height: 170px;
   display: grid;
-  gap: 12px;
+  gap: var(--sp-3);
   text-align: center;
   cursor: pointer;
   align-content: center;
 }
-.review-term { font-size: 24px; font-weight: 800; }
-.review-sentence { color: var(--muted); font-style: italic; font-size: 14px; }
-.review-translation { color: var(--accent); font-weight: 700; font-size: 18px; }
-.review-explanation { color: var(--muted); font-size: 13px; }
+.review-term { font-size: var(--fs-3xl); font-weight: 800; }
+.review-sentence { color: var(--text-muted); font-style: italic; font-size: var(--fs-lg); }
+.review-translation { color: var(--accent); font-weight: 700; font-size: var(--fs-2xl); }
+.review-explanation { color: var(--text-muted); font-size: var(--fs-md); }
 .review-actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 14px; }
-.review-progress { text-align: center; color: var(--muted); font-size: 13px; margin-top: 12px; }
+.review-progress { text-align: center; color: var(--text-muted); font-size: var(--fs-md); margin-top: 12px; }
 .grade-btn {
   border: 1px solid var(--border);
   background: var(--surface);
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   padding: 8px 18px;
   cursor: pointer;
   font-weight: 700;
-  font-size: 13px;
+  font-size: var(--fs-md);
 }
 .grade-btn:hover { border-color: var(--accent); }
 
 .footer {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-2);
   justify-content: center;
-  margin-top: 40px;
+  margin-top: var(--sp-8);
   padding-top: 18px;
   border-top: 1px solid var(--border);
-  color: var(--muted);
-  font-size: 13px;
+  color: var(--text-muted);
+  font-size: var(--fs-md);
 }
-.footer-sep { color: var(--border); }
+/* The separator is a real piece of text, so it needs to be readable. */
+.footer-sep { color: var(--text-muted); }
 .danger-link { color: var(--danger); }
 .danger-link:hover { border-color: var(--danger); color: var(--danger); }
 
@@ -279,11 +278,13 @@ select.status-select {
 
 /* Keyboard focus was previously invisible everywhere on this page: every
    control signalled state with :hover only. This is a page-level safety net;
-   it uses :focus-visible so pointer users never see a ring on click. */
+   it uses :focus-visible so pointer users never see a ring on click.
+   The ring is the shared --focus-ring token, which is an opaque accent:
+   the old token resolved to a 12% accent wash, 1.17:1 against the page. */
 :where(a, button, select, input, textarea, [tabindex]):focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
-  border-radius: 6px;
+  border-radius: var(--r-sm);
 }
 
 [hidden] { display: none !important; }

@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>YouTube Digest · My Dashboard</title>
+    <link rel="stylesheet" href="/tokens.css" />
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
@@ -72,8 +73,8 @@
           <span class="count" id="vocabularyCount"></span>
         </div>
         <div class="empty" id="vocabularyEmpty" hidden>
-          No saved words yet. Open a video transcript in the extension and click
-          the ＋ Word button on a line to capture key vocabulary.
+          No saved words yet. Words you saved in the extension while signed in
+          appear here.
         </div>
         <div id="vocabularyList" class="cards"></div>
       </section>
@@ -83,7 +84,7 @@
           <h2>Review due words</h2>
           <span class="count" id="reviewCount"></span>
         </div>
-        <div class="empty" id="reviewEmpty" hidden>Nothing due right now. New words become due immediately after you add them.</div>
+        <div class="empty" id="reviewEmpty" hidden>Nothing due right now. Words you have saved come back here for review.</div>
         <div id="reviewCard" class="review-card" hidden>
           <div class="review-term" id="dashReviewTerm"></div>
           <div class="review-sentence" id="dashReviewSentence"></div>

@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>YouTube Digest</title>
+    <link rel="stylesheet" href="tokens.css" />
     <link rel="stylesheet" href="sidepanel.css" />
   </head>
   <body>
@@ -162,7 +163,10 @@
                 title="Clear search"
                 hidden
               >
-                &times;
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M18 6 6 18"></path>
+                  <path d="m6 6 12 12"></path>
+                </svg>
               </button>
               <output
                 class="transcript-search-count"
@@ -181,7 +185,9 @@
                   title="Previous match (Shift + Enter)"
                   disabled
                 >
-                  &#8593;
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="m18 15-6-6-6 6"></path>
+                  </svg>
                 </button>
                 <button
                   id="transcriptSearchNextBtn"
@@ -190,7 +196,9 @@
                   title="Next match (Enter)"
                   disabled
                 >
-                  &#8595;
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="m6 9 6 6 6-6"></path>
+                  </svg>
                 </button>
               </div>
             </div>

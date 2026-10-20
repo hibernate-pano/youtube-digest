@@ -55,6 +55,17 @@ if unzip -Z1 "$temporary_zip" | grep -En '(^|/)(config\.js|\.DS_Store|\.git)(/|$
   exit 1
 fi
 
+# The ZIP has to contain exactly the release file list: nothing missing, and
+# nothing that was not asked for. Without this check a stale or extra file
+# could ship while the release gate still reported success.
+expected_list="$(printf '%s\n' "${release_files[@]}" | LC_ALL=C sort)"
+actual_list="$(unzip -Z1 "$temporary_zip" | LC_ALL=C sort)"
+if [[ "$expected_list" != "$actual_list" ]]; then
+  printf 'Packaging failed: the ZIP contents do not match the release file list\n' >&2
+  diff <(printf '%s\n' "$expected_list") <(printf '%s\n' "$actual_list") >&2 || true
+  exit 1
+fi
+
 mv -f "$temporary_zip" "$output_zip"
 rmdir "$temporary_dir"
 trap - EXIT
