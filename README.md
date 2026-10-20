@@ -20,6 +20,11 @@ YouTube Digest is a bring-your-own-key project installed locally from GitHub. It
 
 The absolute address of the image above, for use outside this repository. The file name contains a space, so it is written as `%20`: `https://raw.githubusercontent.com/hibernate-pano/youtube-digest/main/YouTube%20Digest%20demo.jpg`
 
+## New in v1.7.3
+
+- A video you have not started playing is no longer blamed for missing subtitles. YouTube asks the page for the captions when the video starts, so a video that has not begun had nothing to read at all. The extension now waits for the video, says plainly that it has not started, and does not spend a credit on subtitles the page was about to hand over for nothing.
+- A video behind an advertisement no longer costs a credit. An advertisement is a video of its own, and the page asks for the advertisement's captions while it runs. The extension now waits for the video itself to take the player over, instead of giving up while the advertisement was still on screen.
+
 ## New in v1.7.2
 
 - The panel no longer says a video has no subtitles when it has them. Clicking another video inside YouTube used to be answered too early, while the page was still showing the previous one, and the extension reported that as "this video has no subtitles". It now waits for the page to catch up, and if the page is still not ready it says the page was not ready and offers a button that really tries again.
