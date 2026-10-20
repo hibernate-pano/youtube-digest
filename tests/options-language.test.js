@@ -321,7 +321,13 @@ test("the settings page names the panel's tabs the way the panel names them", ()
     `(${table[0].replace(/^const PANEL_COPY = /, "").replace(/;$/, "")})`,
   );
 
-  for (const key of ["tabTranscript", "tabOverview", "tabNotes"]) {
+  for (const key of [
+    "tabTranscript",
+    "tabSummary",
+    "tabNotes",
+    "tabWords",
+    "tabLibrary",
+  ]) {
     for (const language of ["en", "zh-CN"]) {
       assert.equal(
         options.translate(language, key, options.i18nParams(language)),

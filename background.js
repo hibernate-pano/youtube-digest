@@ -1267,7 +1267,7 @@ function validateAndFixTimestamps(analysis, maxSeconds) {
     .filter(Boolean)
     .sort((a, b) => a.timestampSeconds - b.timestampSeconds);
 
-  return { chapters, keyQuotes };
+  return { summary: safeString(analysis?.summary, 2000), chapters, keyQuotes };
 }
 
 // ============================================================

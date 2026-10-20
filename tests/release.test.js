@@ -278,16 +278,19 @@ test("product UI contains no emoji or emoji-like pictographs", () => {
   assert.doesNotMatch(productUi, /&#(?:9655|9888);/);
 });
 
-test("selection actions use two equal edge-to-edge hover areas", () => {
+test("selection actions use equal edge-to-edge hover areas", () => {
   const css = read("sidepanel.css");
 
   assert.match(
     css,
     /\.explain-tooltip\s*\{[^}]*padding:\s*0;[^}]*overflow:\s*hidden;/,
   );
+  // Three actions share the bar evenly: Explain, Note and Word. The third
+  // button is the one that adds a paid action, so it has to sit next to the
+  // other two in the same bar, not in a row of its own.
   assert.match(
     css,
-    /\.explain-btn,\s*\.selection-note-btn\s*\{[^}]*flex:\s*1 1 50%;[^}]*border-radius:\s*0;/,
+    /\.explain-btn,\s*\.selection-note-btn,\s*\.selection-word-btn\s*\{[^}]*flex:\s*1 1 33%;[^}]*border-radius:\s*0;/,
   );
   assert.match(
     css,
