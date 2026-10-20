@@ -423,6 +423,45 @@ function deferred() {
 // P0-3: the first-run dead end
 // ============================================================
 
+test("the panel finds the video in every shape YouTube serves one", () => {
+  const harness = createPanelHarness();
+  const { extractVideoId } = harness.helpers;
+
+  const shapes = [
+    ["https://www.youtube.com/watch?v=dQw4w9WgXcQ", "dQw4w9WgXcQ"],
+    ["https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PL123", "dQw4w9WgXcQ"],
+    ["https://youtu.be/dQw4w9WgXcQ", "dQw4w9WgXcQ"],
+    ["https://www.youtube.com/embed/dQw4w9WgXcQ", "dQw4w9WgXcQ"],
+    ["https://www.youtube.com/shorts/dQw4w9WgXcQ", "dQw4w9WgXcQ"],
+    ["https://www.youtube.com/live/dQw4w9WgXcQ", "dQw4w9WgXcQ"],
+    ["https://www.youtube.com/v/dQw4w9WgXcQ", "dQw4w9WgXcQ"],
+  ];
+
+  for (const [url, expected] of shapes) {
+    assert.equal(
+      extractVideoId(url),
+      expected,
+      `${url} should yield ${expected}`,
+    );
+  }
+
+  // A page with no video has to say so, rather than handing over something
+  // that is not an id.
+  for (const url of [
+    "https://www.youtube.com/",
+    "https://www.youtube.com/feed/subscriptions",
+    "https://www.youtube.com/watch?v=",
+    "https://www.youtube.com/watch?v=short",
+    "not a url at all",
+  ]) {
+    assert.equal(
+      extractVideoId(url),
+      null,
+      `${url} should yield no video`,
+    );
+  }
+});
+
 test("the panel starts with only a Supadata key", async () => {
   const harness = createPanelHarness({
     sendMessageImpl: async (message) => {

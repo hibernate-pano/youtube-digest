@@ -1806,23 +1806,47 @@ async function checkCurrentTab() {
   }
 }
 
+/**
+ * Finds the video id in whatever shape YouTube serves a video.
+ *
+ * The content script already knows how to read a Shorts, a live page or an
+ * embedded player, and it puts a Digest button on all of them. The panel
+ * has to agree: a button that opens a panel which says "no video" is worse
+ * than no button at all.
+ *
+ * @param {string} url the page URL
+ * @returns {string|null} the video id, or null when the page has no video
+ */
 function extractVideoId(url) {
   try {
     const urlObj = new URL(url);
+    const candidates = [];
 
     if (
       urlObj.hostname.includes("youtube.com") &&
       urlObj.searchParams.has("v")
     ) {
-      return urlObj.searchParams.get("v");
+      candidates.push(urlObj.searchParams.get("v"));
     }
 
-    if (urlObj.hostname === "youtu.be") {
-      return urlObj.pathname.slice(1);
+    if (urlObj.hostname === "youtu.be" || urlObj.hostname === "www.youtu.be") {
+      candidates.push(urlObj.pathname.split("/")[1]);
     }
 
-    if (urlObj.pathname.startsWith("/embed/")) {
-      return urlObj.pathname.split("/")[2];
+    // /embed/<id>, /shorts/<id>, /live/<id>, /v/<id>
+    const pathPrefixes = ["embed", "shorts", "live", "v"];
+    const segments = urlObj.pathname.split("/").filter(Boolean);
+    if (
+      segments.length >= 2 &&
+      pathPrefixes.includes(segments[0].toLowerCase())
+    ) {
+      candidates.push(segments[1]);
+    }
+
+    for (const candidate of candidates) {
+      if (candidate && /^[A-Za-z0-9_-]{6,20}$/.test(candidate)) {
+        return candidate;
+      }
     }
 
     return null;
@@ -6558,6 +6582,7 @@ globalThis.__YTD_PANEL_TESTING__ = {
   openLibraryEntry,
   showWordConfirmation,
   formatTimestamp,
+  extractVideoId,
   loadNotesDroppedNotice,
   showState,
   loadNotes,
