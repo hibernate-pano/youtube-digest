@@ -107,6 +107,10 @@ class FakeElement {
     return child;
   }
 
+  append(...children) {
+    for (const child of children) this.appendChild(child);
+  }
+
   insertBefore(child, before) {
     child.parentElement?.removeChild(child);
     const index = this.children.indexOf(before);

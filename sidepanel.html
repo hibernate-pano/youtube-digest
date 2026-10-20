@@ -8,6 +8,47 @@
     <link rel="stylesheet" href="sidepanel.css" />
   </head>
   <body>
+    <!-- SCREEN READER ANNOUNCERS -->
+    <!-- These two regions never leave the DOM. A live region that is hidden
+         with display:none is never announced, so the panel announces state
+         changes here instead of inside the state containers, which are shown
+         and hidden as the panel works. -->
+    <div
+      id="panelStatus"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+      style="
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        margin: -1px;
+        padding: 0;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+        clip-path: inset(50%);
+        white-space: nowrap;
+        border: 0;
+      "
+    ></div>
+    <div
+      id="panelAlert"
+      role="alert"
+      aria-atomic="true"
+      style="
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        margin: -1px;
+        padding: 0;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+        clip-path: inset(50%);
+        white-space: nowrap;
+        border: 0;
+      "
+    ></div>
+
     <!-- HEADER -->
     <!-- Note: the panel's own "YouTube Digest" title is shown by Chrome's side-panel
          title bar, so we don't repeat a logo here. -->
@@ -24,6 +65,8 @@
             id="syncBtn"
             type="button"
             title="Sign in with GitHub to back up your notes"
+            data-i18n="signIn"
+            data-i18n-title="signInTitle"
           >
             Sign in
           </button>
@@ -41,6 +84,9 @@
             type="button"
             title="Open YouTube Digest settings"
             aria-label="Open YouTube Digest settings"
+            data-i18n="settings"
+            data-i18n-title="openSettingsTitle"
+            data-i18n-aria-label="openSettingsTitle"
           >
             Settings
           </button>
@@ -49,6 +95,7 @@
             id="transcriptModeControl"
             role="group"
             aria-label="Content language"
+            data-i18n-aria-label="contentLanguage"
             style="display: none"
           >
             <button
@@ -56,18 +103,21 @@
               type="button"
               data-transcript-mode="original"
               aria-pressed="true"
+              data-i18n="modeOriginal"
             >Original</button>
             <button
               class="transcript-mode-btn"
               type="button"
               data-transcript-mode="zh"
               aria-pressed="false"
+              data-i18n="modeChinese"
             >中文</button>
             <button
               class="transcript-mode-btn"
               type="button"
               data-transcript-mode="bilingual"
               aria-pressed="false"
+              data-i18n="modeBilingual"
             >双语</button>
             <span
               class="translation-spinner"
@@ -97,10 +147,51 @@
       </p>
 
       <!-- Tab navigation -->
-      <div class="tabs" id="tabsNav" style="display: none">
-        <button class="tab active" data-tab="transcript">Transcript</button>
-        <button class="tab" data-tab="overview">Overview</button>
-        <button class="tab" data-tab="notes">Notes</button>
+      <div
+        class="tabs"
+        id="tabsNav"
+        role="tablist"
+        data-i18n-aria-label="tabListLabel"
+        style="display: none"
+      >
+        <button
+          class="tab active"
+          id="tab-transcript"
+          type="button"
+          role="tab"
+          data-tab="transcript"
+          aria-selected="true"
+          aria-controls="panel-transcript"
+          data-i18n="tabTranscript"
+        >
+          Transcript
+        </button>
+        <button
+          class="tab"
+          id="tab-overview"
+          type="button"
+          role="tab"
+          data-tab="overview"
+          aria-selected="false"
+          aria-controls="panel-overview"
+          tabindex="-1"
+          data-i18n="tabOverview"
+        >
+          Overview
+        </button>
+        <button
+          class="tab"
+          id="tab-notes"
+          type="button"
+          role="tab"
+          data-tab="notes"
+          aria-selected="false"
+          aria-controls="panel-notes"
+          tabindex="-1"
+          data-i18n="tabNotes"
+        >
+          Notes
+        </button>
       </div>
     </div>
 
@@ -150,15 +241,31 @@
       <!-- RESULTS -->
       <div id="resultsState" style="display: none">
         <!-- TAB: Transcript (default - no LLM required) -->
-        <div class="tab-panel active" data-panel="transcript">
+        <div
+          class="tab-panel active"
+          id="panel-transcript"
+          role="tabpanel"
+          aria-labelledby="tab-transcript"
+          data-panel="transcript"
+        >
           <div class="section">
             <div class="section-header transcript-section-header">
               <div class="section-title" data-i18n="fullTranscript">
                 Full Transcript
               </div>
               <div class="transcript-actions">
-                <button class="enhance-btn" id="copyTranscriptBtn">Copy</button>
-                <button class="enhance-btn" id="exportTranscriptBtn">
+                <button
+                  class="enhance-btn"
+                  id="copyTranscriptBtn"
+                  data-i18n="copy"
+                >
+                  Copy
+                </button>
+                <button
+                  class="enhance-btn"
+                  id="exportTranscriptBtn"
+                  data-i18n="export"
+                >
                   Export
                 </button>
               </div>
@@ -182,6 +289,8 @@
                 aria-controls="transcriptList"
                 autocomplete="off"
                 spellcheck="false"
+                data-i18n-placeholder="searchPlaceholder"
+                data-i18n-aria-label="searchTranscript"
               />
               <button
                 class="transcript-search-clear"
@@ -190,6 +299,8 @@
                 aria-label="Clear transcript search"
                 title="Clear search"
                 hidden
+                data-i18n-aria-label="clearSearch"
+                data-i18n-title="clearSearch"
               >
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M18 6 6 18"></path>
@@ -205,6 +316,7 @@
                 class="transcript-search-nav"
                 role="group"
                 aria-label="Search results"
+                data-i18n-aria-label="searchResults"
               >
                 <button
                   id="transcriptSearchPrevBtn"
@@ -212,6 +324,7 @@
                   aria-label="Previous transcript match"
                   title="Previous match (Shift + Enter)"
                   disabled
+                  data-i18n-aria-label="previousMatch"
                 >
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <path d="m18 15-6-6-6 6"></path>
@@ -223,6 +336,7 @@
                   aria-label="Next transcript match"
                   title="Next match (Enter)"
                   disabled
+                  data-i18n-aria-label="nextMatch"
                 >
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <path d="m6 9 6 6 6-6"></path>
@@ -235,10 +349,16 @@
         </div>
 
         <!-- TAB: Overview (chapters + key quotes) - requires LLM -->
-        <div class="tab-panel" data-panel="overview">
+        <div
+          class="tab-panel"
+          id="panel-overview"
+          role="tabpanel"
+          aria-labelledby="tab-overview"
+          data-panel="overview"
+        >
           <!-- Chapters -->
           <div class="section">
-            <div class="section-title">Chapters</div>
+            <div class="section-title" data-i18n="chapters">Chapters</div>
             <ul class="chapter-list" id="chapterList">
               <li
                 class="chapter-item"
@@ -256,7 +376,7 @@
 
           <!-- Key Quotes -->
           <div class="section">
-            <div class="section-title">Key Quotes</div>
+            <div class="section-title" data-i18n="keyQuotes">Key Quotes</div>
             <div id="quotesList">
               <div
                 class="quote-item"
@@ -279,7 +399,13 @@
         </div>
 
         <!-- TAB: Notes -->
-        <div class="tab-panel" data-panel="notes">
+        <div
+          class="tab-panel"
+          id="panel-notes"
+          role="tabpanel"
+          aria-labelledby="tab-notes"
+          data-panel="notes"
+        >
           <div class="section">
             <div class="section-header">
               <div class="section-title" data-i18n="savedNotes">Saved Notes</div>
@@ -288,6 +414,7 @@
                   class="enhance-btn active"
                   id="notesFilterThis"
                   aria-pressed="true"
+                  data-i18n="thisVideo"
                 >
                   This Video
                 </button>
@@ -295,12 +422,13 @@
                   class="enhance-btn"
                   id="notesFilterAll"
                   aria-pressed="false"
+                  data-i18n="allNotes"
                 >
                   All Notes
                 </button>
               </div>
             </div>
-            <p class="notes-intro" id="notesIntro">
+            <p class="notes-intro" id="notesIntro" data-i18n="notesIntro">
               Move your mouse over the video and click Note to save a
               timestamped note, or press the "n" key while the video is focused.
             </p>
@@ -316,6 +444,7 @@
       class="follow-playback-btn"
       id="followPlaybackBtn"
       style="display: none"
+      data-i18n="followPlayback"
     >
       Follow playback
     </button>

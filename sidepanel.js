@@ -111,6 +111,55 @@ const PANEL_COPY = {
     translationUnavailable: "Translation unavailable.",
     translating: "Translating...",
     retry: "Retry",
+    signIn: "Sign in",
+    signInTitle: "Sign in with GitHub to back up your notes",
+    settings: "Settings",
+    openSettingsTitle: "Open YouTube Digest settings",
+    contentLanguage: "Content language",
+    modeOriginal: "Original",
+    modeChinese: "中文",
+    modeBilingual: "Bilingual",
+    tabListLabel: "Panel sections",
+    tabTranscript: "Transcript",
+    tabOverview: "Overview",
+    tabNotes: "Notes",
+    copy: "Copy",
+    export: "Export",
+    chapters: "Chapters",
+    keyQuotes: "Key Quotes",
+    thisVideo: "This Video",
+    allNotes: "All Notes",
+    notesIntro:
+      'Move your mouse over the video and click Note to save a timestamped note, or press the "n" key while the video is focused.',
+    followPlayback: "Follow playback",
+    searchPlaceholder: "Search words or phrases",
+    searchTranscript: "Search transcript",
+    clearSearch: "Clear transcript search",
+    searchResults: "Search results",
+    previousMatch: "Previous transcript match",
+    nextMatch: "Next transcript match",
+    digestReady: "Digest ready",
+    explainTitle: "Explain",
+    close: "Close",
+    analyzing: "Analyzing...",
+    explainFailed: "Could not explain this selection.",
+    jumpTo: "Jump to {time}",
+    playFrom: "Play from {time}",
+    editNoteTitle: "Click to edit",
+    note: "Note",
+    copied: "Copied",
+    copyText: "Copy text",
+    copyTimestamp: "Copy timestamp",
+    play: "Play",
+    deleteNote: "Delete note",
+    save: "Save",
+    cancel: "Cancel",
+    couldNotSave: "Could not save. Try again.",
+    saveNote: "Save this quote as a note",
+    copyQuote: "Copy this quote",
+    saving: "Saving...",
+    saved: "Saved",
+    selectionActions: "Selected transcript actions",
   },
   "zh-CN": {
     welcomeTitle: "准备开始",
@@ -149,6 +198,55 @@ const PANEL_COPY = {
     translationUnavailable: "翻译不可用。",
     translating: "正在翻译...",
     retry: "重试",
+    signIn: "登录",
+    signInTitle: "使用 GitHub 登录以备份你的笔记",
+    settings: "设置",
+    openSettingsTitle: "打开 YouTube Digest 设置",
+    contentLanguage: "内容语言",
+    modeOriginal: "原文",
+    modeChinese: "中文",
+    modeBilingual: "双语",
+    tabListLabel: "面板分区",
+    tabTranscript: "字幕",
+    tabOverview: "概览",
+    tabNotes: "笔记",
+    copy: "复制",
+    export: "导出",
+    chapters: "章节",
+    keyQuotes: "精彩引用",
+    thisVideo: "本视频",
+    allNotes: "全部笔记",
+    notesIntro:
+      "把鼠标移到视频上并点击 Note 保存带时间戳的笔记，也可以在视频获得焦点时按 \"n\" 键。",
+    followPlayback: "跟随播放",
+    searchPlaceholder: "搜索词语或短语",
+    searchTranscript: "搜索字幕",
+    clearSearch: "清除字幕搜索",
+    searchResults: "搜索结果",
+    previousMatch: "上一个字幕匹配",
+    nextMatch: "下一个字幕匹配",
+    digestReady: "摘要已就绪",
+    explainTitle: "解释",
+    close: "关闭",
+    analyzing: "正在分析...",
+    explainFailed: "无法解释这段内容。",
+    jumpTo: "跳转到 {time}",
+    playFrom: "从 {time} 播放",
+    editNoteTitle: "点击编辑",
+    note: "笔记",
+    copied: "已复制",
+    copyText: "复制文字",
+    copyTimestamp: "复制时间戳",
+    play: "播放",
+    deleteNote: "删除笔记",
+    save: "保存",
+    cancel: "取消",
+    couldNotSave: "保存失败，请重试。",
+    saveNote: "把这个引用存为笔记",
+    copyQuote: "复制这个引用",
+    saving: "保存中...",
+    saved: "已保存",
+    selectionActions: "选中的字幕操作",
   },
 };
 
@@ -174,6 +272,17 @@ function panelCopy(key) {
 }
 
 /**
+ * Returns the copy for the current language with its {placeholders} filled
+ * in. Used for the labels that name a time, which read in a different order
+ * in English and Chinese.
+ */
+function panelCopyFormat(key, values = {}) {
+  return panelCopy(key).replace(/\{(\w+)\}/g, (match, name) =>
+    Object.hasOwn(values, name) ? String(values[name]) : match,
+  );
+}
+
+/**
  * Applies the translated copy to the static markup. Dynamic copy (errors,
  * empty states) is written at render time through panelCopy().
  */
@@ -183,6 +292,26 @@ function applyPanelCopy() {
     const value = panelCopy(key);
     if (value) element.textContent = value;
   });
+
+  // Labels, placeholders and tooltips follow the interface language too, so
+  // a screen reader never reads an English name on a Chinese panel.
+  const attributeBindings = [
+    ["data-i18n-aria-label", "aria-label"],
+    ["data-i18n-placeholder", "placeholder"],
+    ["data-i18n-title", "title"],
+  ];
+  for (const [marker, attribute] of attributeBindings) {
+    document.querySelectorAll(`[${marker}]`).forEach((element) => {
+      const key = element.getAttribute(marker);
+      const value = panelCopy(key);
+      if (value) element.setAttribute(attribute, value);
+    });
+  }
+
+  // The document language tells screen readers which pronunciation to use.
+  if (document.documentElement) {
+    document.documentElement.lang = panelLanguage;
+  }
 }
 
 /**
@@ -201,6 +330,87 @@ async function loadPanelLanguage() {
     panelLanguage = "en";
   }
   applyPanelCopy();
+}
+
+// ============================================================
+// KEYBOARD AND SCREEN READER HELPERS
+// ============================================================
+
+/**
+ * Makes an element that is not a real button operable with the keyboard.
+ *
+ * A screen reader calls out the role, and the element joins the tab order, so
+ * the action is reachable without a mouse. Enter and Space are handled here
+ * because an element that is not a button does not turn them into a click on
+ * its own, and Space would scroll the panel while it does.
+ */
+function makeKeyboardActivatable(
+  element,
+  activate,
+  { role = "button", label = "" } = {},
+) {
+  if (!element) return;
+  element.setAttribute("role", role);
+  element.setAttribute("tabindex", "0");
+  if (label) element.setAttribute("aria-label", label);
+  element.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " " && event.key !== "Spacebar") {
+      return;
+    }
+    // A control inside the row answers its own keys.
+    if (event.target && event.target !== element) return;
+    event.preventDefault();
+    activate();
+  });
+}
+
+/**
+ * Keeps the selection toolbar inside the panel.
+ *
+ * The toolbar is centred on the selection, so a selection near the left edge
+ * pushed half of it outside the panel, where overflow-x:hidden made it
+ * unreachable. The toolbar is therefore clamped between the two edges.
+ */
+function clampToolbarCenter(center, toolbarWidth, panelWidth) {
+  const half = toolbarWidth / 2;
+  if (!Number.isFinite(center) || !Number.isFinite(half)) return center;
+  if (!Number.isFinite(panelWidth) || panelWidth <= 0) return center;
+  const min = half;
+  const max = Math.max(half, panelWidth - half);
+  return Math.min(Math.max(center, min), max);
+}
+
+/** Elements a keyboard user can reach with Tab inside a container. */
+const FOCUSABLE_TAGS = new Set([
+  "a",
+  "button",
+  "input",
+  "select",
+  "textarea",
+]);
+
+/**
+ * Returns the focusable elements inside a container, in document order.
+ * The dialog trap needs this list, and it must not depend on a selector
+ * engine the panel can rely on everywhere.
+ */
+function collectFocusableElements(root) {
+  const items = [];
+  const visit = (node) => {
+    for (const child of node.children || []) {
+      const tag = String(child.tagName || "").toLowerCase();
+      const tabindex = child.getAttribute?.("tabindex");
+      const focusable =
+        FOCUSABLE_TAGS.has(tag) ||
+        (tabindex !== null && tabindex !== undefined && tabindex !== "-1");
+      const disabled = child.getAttribute?.("disabled") !== null;
+      const hidden = child.getAttribute?.("hidden") !== null;
+      if (focusable && !disabled && !hidden) items.push(child);
+      visit(child);
+    }
+  };
+  visit(root);
+  return items;
 }
 
 // --- Transcript search state ---
@@ -262,6 +472,12 @@ let transcriptViewStateSaveTimer = null;
 let isRestoringTranscriptView = false;
 let selectionActionsController = null;
 let lastTranscriptScrollTop = 0;
+// True while the explanation dialog owns the screen. The selection toolbar
+// stays put while the dialog is open, so the focus can go back to it.
+let explainModalOpen = false;
+// The width of the selection toolbar, measured after it is shown. The
+// toolbar is centred on the selection and clamped inside the panel.
+let selectionToolbarWidth = 0;
 
 // ============================================================
 // TRANSCRIPT GROUPING
@@ -752,6 +968,7 @@ function setupEventListeners() {
   // Tab switching
   document.querySelectorAll(".tab").forEach((tab) => {
     tab.addEventListener("click", () => switchTab(tab.dataset.tab));
+    tab.addEventListener("keydown", handleTabKeydown);
   });
 
   // Error retry
@@ -1354,8 +1571,11 @@ function renderAnalysisResults(analysis) {
     const li = document.createElement("li");
     li.className = "chapter-item";
     li.dataset.seconds = chapter.timestampSeconds;
+    // The timestamp is a real button, so a keyboard user can jump to a
+    // chapter. The list item keeps its list semantics and stays clickable
+    // for the mouse, and the click of the button bubbles up to it.
     li.innerHTML = `
-      <span class="chapter-timestamp">${escapeHtml(chapter.timestamp)}</span>
+      <button class="chapter-timestamp" type="button" style="border: none;" aria-label="${escapeHtml(panelCopyFormat("jumpTo", { time: chapter.timestamp }))}">${escapeHtml(chapter.timestamp)}</button>
       <div class="chapter-content">
         <span class="chapter-title">${renderLocalizedContent(chapter.title, "overview", `chapter-${index}-title`)}</span>
         <span class="chapter-summary">${renderLocalizedContent(chapter.summary || "", "overview", `chapter-${index}-summary`)}</span>
@@ -1382,16 +1602,24 @@ function renderAnalysisResults(analysis) {
     const div = document.createElement("div");
     div.className = "quote-item";
     div.dataset.seconds = quote.timestampSeconds;
+
+    // The quote card already holds two buttons of its own, so the card
+    // cannot be a button as well: nested controls are a trap for screen
+    // reader users. The timestamp is the control that jumps to the quote.
     div.innerHTML = `
       <div class="quote-text">${renderLocalizedContent(quote.quote, "overview", `quote-${index}`)}</div>
       <div class="quote-meta">
-        <span class="quote-timestamp">${escapeHtml(quote.timestamp)}</span>
+        <button class="quote-timestamp" type="button" style="border: none;" aria-label="${escapeHtml(panelCopyFormat("jumpTo", { time: quote.timestamp }))}">${escapeHtml(quote.timestamp)}</button>
         <div class="quote-actions">
-          <button class="quote-save-note-btn" title="Save this quote as a note">Note</button>
-          <button class="quote-copy-btn" title="Copy this quote">Copy</button>
+          <button class="quote-save-note-btn" type="button" title="${escapeHtml(panelCopy("saveNote"))}">${escapeHtml(panelCopy("note"))}</button>
+          <button class="quote-copy-btn" type="button" title="${escapeHtml(panelCopy("copyQuote"))}">${escapeHtml(panelCopy("copy"))}</button>
         </div>
       </div>
     `;
+
+    const quoteCopyBtn = div.querySelector(".quote-copy-btn");
+    const quoteSaveNoteBtn = div.querySelector(".quote-save-note-btn");
+
     div.addEventListener("click", () => {
       debugLog(
         "[YouTube Digest Panel] Quote clicked:",
@@ -1401,23 +1629,21 @@ function renderAnalysisResults(analysis) {
       seekTo(quote.timestampSeconds);
     });
 
-    const quoteCopyBtn = div.querySelector(".quote-copy-btn");
     quoteCopyBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
       try {
         await navigator.clipboard.writeText(
           getLocalizedPlainText(quote.quote, "overview", `quote-${index}`),
         );
-        quoteCopyBtn.textContent = "Copied";
+        quoteCopyBtn.textContent = panelCopy("copied");
         setTimeout(() => {
-          quoteCopyBtn.textContent = "Copy";
+          quoteCopyBtn.textContent = panelCopy("copy");
         }, 1500);
       } catch (err) {
         console.error("Copy failed:", err);
       }
     });
 
-    const quoteSaveNoteBtn = div.querySelector(".quote-save-note-btn");
     quoteSaveNoteBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
       await saveQuoteAsNote(quote, quoteSaveNoteBtn);
@@ -1441,7 +1667,7 @@ async function saveQuoteAsNote(quote, btn) {
   if (!currentVideoId) return;
 
   const originalText = btn.textContent;
-  btn.textContent = "Saving...";
+  btn.textContent = panelCopy("saving");
   btn.disabled = true;
 
   try {
@@ -1454,7 +1680,7 @@ async function saveQuoteAsNote(quote, btn) {
     });
 
     if (result.success) {
-      btn.textContent = "Saved";
+      btn.textContent = panelCopy("saved");
       setTimeout(() => {
         btn.textContent = originalText;
         btn.disabled = false;
@@ -1463,7 +1689,7 @@ async function saveQuoteAsNote(quote, btn) {
       loadNotes(currentVideoId);
     } else {
       console.error("[YouTube Digest] Save quote as note failed:", result.error);
-      btn.textContent = "Error";
+      btn.textContent = panelCopy("errorTitle");
       setTimeout(() => {
         btn.textContent = originalText;
         btn.disabled = false;
@@ -1471,7 +1697,7 @@ async function saveQuoteAsNote(quote, btn) {
     }
   } catch (error) {
     console.error("[YouTube Digest] Save quote as note error:", error);
-    btn.textContent = "Error";
+    btn.textContent = panelCopy("errorTitle");
     setTimeout(() => {
       btn.textContent = originalText;
       btn.disabled = false;
@@ -1540,10 +1766,20 @@ function renderTranscript() {
     const seconds = Math.floor(group.start % 60);
     const timestamp = `${minutes}:${String(seconds).padStart(2, "0")}`;
 
+    // The timestamp is a real button, so a keyboard user can jump to the
+    // moment and a screen reader hears a control instead of loose text.
     div.innerHTML = `
-      <span class="transcript-time">${timestamp}</span>
+      <button class="transcript-time" type="button" style="border: none; background: none; text-align: left; align-self: flex-start;" aria-label="${escapeHtml(panelCopyFormat("jumpTo", { time: timestamp }))}">${timestamp}</button>
       <span class="transcript-text">${renderSubtitleInlineMarkup(group.text)}</span>
     `;
+
+    // The timestamp always seeks, even while text is selected. The row
+    // itself stays quiet then, so a selection can be explained or copied.
+    const timeButton = div.querySelector(".transcript-time");
+    timeButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      seekTo(group.start);
+    });
 
     div.addEventListener("click", (event) =>
       seekFromTranscriptEntryClick(event, group.start),
@@ -1837,6 +2073,29 @@ function exportTranscript() {
 // UI STATE MANAGEMENT
 // ============================================================
 
+/**
+ * Announces a message to screen readers.
+ *
+ * The announcer is a permanent, visually hidden live region. It never leaves
+ * the DOM, so the message is read out no matter which state container is on
+ * screen. A live region inside a container that is hidden with display:none
+ * is never announced, which is why the panel announces here instead of inside
+ * the state blocks.
+ */
+function announceStatus(message) {
+  const region = document.getElementById("panelStatus");
+  if (region) region.textContent = message ? String(message) : "";
+}
+
+/**
+ * Announces a failure to screen readers, assertively. Used for the failures
+ * that have no alert container of their own.
+ */
+function announceAlert(message) {
+  const region = document.getElementById("panelAlert");
+  if (region) region.textContent = message ? String(message) : "";
+}
+
 function showState(state) {
   document.getElementById("welcomeState").style.display =
     state === "welcome" ? "flex" : "none";
@@ -1861,23 +2120,33 @@ function showState(state) {
   if (state !== "results") {
     stopPlaybackTracking();
   }
+
+  // The states that have no live region of their own are announced here, so
+  // a screen reader user learns that the panel moved on.
+  if (state === "results") {
+    announceStatus(panelCopy("digestReady"));
+  } else if (state === "welcome") {
+    announceStatus(panelCopy("welcomeTitle"));
+  }
 }
 
 function updateLoading(title, subtitle) {
   document.getElementById("loadingText").textContent = title;
   document.getElementById("loadingSubtext").textContent = subtitle;
+  announceStatus([title, subtitle].filter(Boolean).join(". "));
 }
 
 function showError(title, message, options = {}) {
   errorAction = options.action || null;
   showState("error");
-  document.getElementById("errorTitle").textContent =
-    title || panelCopy("errorTitle");
-  document.getElementById("errorMessage").textContent =
-    message || panelCopy("errorMessage");
+  const errorTitle = title || panelCopy("errorTitle");
+  const errorMessage = message || panelCopy("errorMessage");
+  document.getElementById("errorTitle").textContent = errorTitle;
+  document.getElementById("errorMessage").textContent = errorMessage;
   document.getElementById("errorBtn").textContent =
     options.buttonLabel ||
     (options.action ? panelCopy("openSettings") : panelCopy("tryAgain"));
+  announceAlert(`${errorTitle}. ${errorMessage}`);
 }
 
 /**
@@ -1887,13 +2156,12 @@ function showError(title, message, options = {}) {
 function showServiceError(message) {
   awaitingApiKey = false;
   showState("error");
-  document.getElementById("errorTitle").textContent = panelCopy(
-    "serviceErrorTitle",
-  );
-  document.getElementById("errorMessage").textContent = String(
-    message || panelCopy("errorMessage"),
-  );
+  const errorTitle = panelCopy("serviceErrorTitle");
+  const errorMessage = String(message || panelCopy("errorMessage"));
+  document.getElementById("errorTitle").textContent = errorTitle;
+  document.getElementById("errorMessage").textContent = errorMessage;
   document.getElementById("errorBtn").textContent = panelCopy("tryAgain");
+  announceAlert(`${errorTitle}. ${errorMessage}`);
   errorAction = () => {
     void bootPanel();
   };
@@ -1915,13 +2183,12 @@ function openOptions() {
 function showConfigError(configStatus) {
   awaitingApiKey = true;
   showState("error");
-  document.getElementById("errorTitle").textContent = panelCopy(
-    "apiKeysMissingTitle",
-  );
-  document.getElementById("errorMessage").textContent = panelCopy(
-    "addSupadataKey",
-  );
+  const errorTitle = panelCopy("apiKeysMissingTitle");
+  const errorMessage = panelCopy("addSupadataKey");
+  document.getElementById("errorTitle").textContent = errorTitle;
+  document.getElementById("errorMessage").textContent = errorMessage;
   document.getElementById("errorBtn").textContent = panelCopy("openSettings");
+  announceAlert(`${errorTitle}. ${errorMessage}`);
   errorAction = openOptions;
 }
 
@@ -1982,6 +2249,56 @@ function showTranscriptError(result) {
 // TAB SWITCHING
 // ============================================================
 
+/**
+ * Marks the selected tab and keeps the roving tab stop in step with it.
+ * Only the selected tab stays in the tab order, so a keyboard user reaches
+ * the tab bar in one stop instead of three.
+ */
+function syncTabState(tabName) {
+  document.querySelectorAll(".tab").forEach((tab) => {
+    const selected = tab.dataset.tab === tabName;
+    tab.setAttribute("aria-selected", selected ? "true" : "false");
+    tab.setAttribute("tabindex", selected ? "0" : "-1");
+  });
+}
+
+/**
+ * Moves the roving tab stop to a tab the user arrowed onto. The stop follows
+ * the focus, so Tab leaves the tab bar from where the user is looking.
+ */
+function moveTabFocus(nextTab) {
+  document.querySelectorAll(".tab").forEach((tab) => {
+    tab.setAttribute("tabindex", tab === nextTab ? "0" : "-1");
+  });
+  nextTab.focus();
+}
+
+/**
+ * Arrow keys move between the tabs, the way the ARIA tabs pattern asks for.
+ * They move the focus only: the Overview and Notes tabs can start a paid AI
+ * call, so the user activates a tab with Enter or Space, like any button.
+ */
+function handleTabKeydown(event) {
+  const tabs = [...document.querySelectorAll(".tab")];
+  const index = tabs.indexOf(event.currentTarget);
+  if (index === -1) return;
+
+  let nextIndex = null;
+  if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+    nextIndex = (index + 1) % tabs.length;
+  } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+    nextIndex = (index - 1 + tabs.length) % tabs.length;
+  } else if (event.key === "Home") {
+    nextIndex = 0;
+  } else if (event.key === "End") {
+    nextIndex = tabs.length - 1;
+  }
+  if (nextIndex === null) return;
+
+  event.preventDefault();
+  moveTabFocus(tabs[nextIndex]);
+}
+
 function switchTab(tabName) {
   // Capture the transcript position before another tab reuses the same scroll
   // area. Scrolling Overview or Notes must not replace this value.
@@ -1993,6 +2310,10 @@ function switchTab(tabName) {
   document.querySelectorAll(".tab").forEach((tab) => {
     tab.classList.toggle("active", tab.dataset.tab === tabName);
   });
+
+  // The tab bar now carries the ARIA tabs pattern: the selected tab says so
+  // with aria-selected, and only it stays in the tab order.
+  syncTabState(tabName);
 
   document.querySelectorAll(".tab-panel").forEach((panel) => {
     panel.classList.toggle("active", panel.dataset.panel === tabName);
@@ -2072,6 +2393,9 @@ async function triggerAnalysis() {
     chapterList.innerHTML = `<li class="chapter-item" style="color: var(--text-muted); border: none;">${escapeHtml(panelCopy("generatingOverview"))}</li>`;
   if (quotesList)
     quotesList.innerHTML = `<div class="quote-item" style="color: var(--text-muted); border-left-color: var(--border);">${escapeHtml(panelCopy("loadingQuotes"))}</div>`;
+
+  // The Overview tab loads in front of the user, so say that it is working.
+  announceStatus(panelCopy("generatingOverview"));
 
   try {
     const analysisResult = await chrome.runtime.sendMessage({
@@ -2154,6 +2478,9 @@ function renderAnalysisFailure(result) {
     item.textContent = message;
     quotesList.appendChild(item);
   }
+
+  // The failure sits inside the Overview tab, which has no alert of its own.
+  announceAlert(message);
 }
 
 // ============================================================
@@ -2315,11 +2642,18 @@ function setupExplainFeature() {
   tooltip.id = "explainTooltip";
   tooltip.className = "explain-tooltip";
   tooltip.setAttribute("role", "toolbar");
-  tooltip.setAttribute("aria-label", "Selected transcript actions");
+  tooltip.setAttribute("aria-label", panelCopy("selectionActions"));
+
   tooltip.innerHTML = `
     <button class="explain-btn" type="button">Explain</button>
     <button class="selection-note-btn" type="button">Note</button>
   `;
+  // The two actions follow the interface language.
+  const explainBtn = tooltip.querySelector(".explain-btn");
+  explainBtn.textContent = panelCopy("explainTitle");
+  const selectionNoteBtn = tooltip.querySelector(".selection-note-btn");
+  selectionNoteBtn.textContent = panelCopy("note");
+
   tooltip.style.display = "none";
   document.body.appendChild(tooltip);
 
@@ -2371,8 +2705,29 @@ function setupExplainFeature() {
         // one frame before moving it to the selection center.
         const rect = range.getBoundingClientRect();
         tooltip.style.top = `${rect.bottom + window.scrollY + 8}px`;
-        tooltip.style.left = `${rect.left + rect.width / 2}px`;
+        // The toolbar is centred on the selection, so a selection near the
+        // left edge pushed half of it out of the panel, where it could not be
+        // reached. The centre is clamped between the two panel edges.
+        const panelWidth =
+          document.documentElement?.clientWidth || window.innerWidth || 0;
+        tooltip.style.left = `${clampToolbarCenter(
+          rect.left + rect.width / 2,
+          selectionToolbarWidth,
+          panelWidth,
+        )}px`;
         tooltip.style.display = "flex";
+
+        // Measure the toolbar now that it is on screen, so the next
+        // placement can clamp it to its real width.
+        const measuredWidth = tooltip.offsetWidth;
+        if (measuredWidth && measuredWidth !== selectionToolbarWidth) {
+          selectionToolbarWidth = measuredWidth;
+          tooltip.style.left = `${clampToolbarCenter(
+            rect.left + rect.width / 2,
+            selectionToolbarWidth,
+            panelWidth,
+          )}px`;
+        }
       } else {
         tooltip.style.display = "none";
       }
@@ -2380,10 +2735,13 @@ function setupExplainFeature() {
     { signal: selectionSignal },
   );
 
-  // Hide tooltip when clicking elsewhere
+  // Hide tooltip when clicking elsewhere. The explanation dialog owns the
+  // screen while it is open, so the toolbar stays where it is until the
+  // dialog is closed and the focus comes back to it.
   document.addEventListener(
     "mousedown",
     (event) => {
+      if (explainModalOpen) return;
       if (!tooltip.contains(event.target)) {
         tooltip.style.display = "none";
       }
@@ -2392,96 +2750,190 @@ function setupExplainFeature() {
   );
 
   // Handle explain button click
-  tooltip
-    .querySelector(".explain-btn")
-    .addEventListener("click", async (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      if (!selectedText) return;
+  explainBtn.addEventListener("click", async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!selectedText) return;
 
-      tooltip.style.display = "none";
-      await showExplanation(selectedText);
-    });
+    // The toolbar stays on screen behind the dialog, so the focus can go
+    // back to this button when the dialog closes.
+    await showExplanation(selectedText, explainBtn);
+  });
 
   // Save the exact selected words at the first selected transcript row. This
   // action does not move playback and does not ask the AI to rewrite the text.
-  tooltip
-    .querySelector(".selection-note-btn")
-    .addEventListener("click", async (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      if (!selectedText || !currentVideoId) return;
+  selectionNoteBtn.addEventListener("click", async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!selectedText || !currentVideoId) return;
 
-      const button = event.currentTarget;
-      const originalText = button.textContent;
-      button.textContent = "Saving...";
-      button.disabled = true;
+    const button = event.currentTarget;
+    const originalText = button.textContent;
+    button.textContent = panelCopy("saving");
+    button.disabled = true;
 
-      try {
-        const result = await chrome.runtime.sendMessage({
-          action: "saveNote",
-          videoId: currentVideoId,
-          timestamp: selectedTimestamp,
-          videoTitle: currentVideoTitle,
-          channelName: currentChannelName,
-          selectedText,
-        });
+    try {
+      const result = await chrome.runtime.sendMessage({
+        action: "saveNote",
+        videoId: currentVideoId,
+        timestamp: selectedTimestamp,
+        videoTitle: currentVideoTitle,
+        channelName: currentChannelName,
+        selectedText,
+      });
 
-        if (!result?.success) {
-          throw new Error(result?.error || "Could not save note");
-        }
-
-        button.textContent = "Saved";
-        loadNotes(currentVideoId);
-        setTimeout(() => {
-          tooltip.style.display = "none";
-          button.textContent = originalText;
-          button.disabled = false;
-        }, 900);
-      } catch (error) {
-        console.error("[YouTube Digest] Save selected note error:", error);
-        button.textContent = "Error";
-        setTimeout(() => {
-          button.textContent = originalText;
-          button.disabled = false;
-        }, 1500);
+      if (!result?.success) {
+        throw new Error(result?.error || "Could not save note");
       }
-    });
+
+      button.textContent = panelCopy("saved");
+      loadNotes(currentVideoId);
+      setTimeout(() => {
+        tooltip.style.display = "none";
+        button.textContent = originalText;
+        button.disabled = false;
+      }, 900);
+    } catch (error) {
+      console.error("[YouTube Digest] Save selected note error:", error);
+      button.textContent = panelCopy("errorTitle");
+      setTimeout(() => {
+        button.textContent = originalText;
+        button.disabled = false;
+      }, 1500);
+    }
+  });
 }
 
 /**
  * Shows the explanation modal and fetches it from the configured AI provider.
+ *
+ * The modal is a real dialog: it names itself, takes the focus, keeps the
+ * focus inside, closes on Escape, and gives the focus back to the control
+ * that opened it. A screen reader user is not left guessing what happened.
  */
-async function showExplanation(selectedText) {
-  // Create modal
+async function showExplanation(selectedText, trigger = null) {
+  const returnFocusTo = trigger || document.activeElement;
+
   const modal = document.createElement("div");
   modal.id = "explainModal";
   modal.className = "explain-modal-overlay";
-  modal.innerHTML = `
-    <div class="explain-modal">
-      <div class="explain-modal-header">
-        <div class="explain-modal-title">Explain</div>
-        <button class="explain-modal-close" id="closeExplain">Close</button>
-      </div>
-      <div class="explain-selected-text">"${escapeHtml(selectedText.substring(0, 200))}${selectedText.length > 200 ? "..." : ""}"</div>
-      <div class="explain-modal-content" id="explanationContent">
-        <div class="explain-loading">
-          <div class="loading-bar"></div>
-          <span>Analyzing...</span>
-        </div>
-      </div>
-    </div>
-  `;
 
+  const dialog = document.createElement("div");
+  dialog.className = "explain-modal";
+  dialog.setAttribute("role", "dialog");
+  dialog.setAttribute("aria-modal", "true");
+  dialog.setAttribute("aria-labelledby", "explain-modal-title");
+  dialog.setAttribute("aria-describedby", "explain-selected-text");
+  dialog.setAttribute("tabindex", "-1");
+
+  const header = document.createElement("div");
+  header.className = "explain-modal-header";
+
+  const title = document.createElement("div");
+  title.className = "explain-modal-title";
+  title.id = "explain-modal-title";
+  title.textContent = panelCopy("explainTitle");
+
+  const closeButton = document.createElement("button");
+  closeButton.className = "explain-modal-close";
+  closeButton.id = "closeExplain";
+  closeButton.type = "button";
+  closeButton.textContent = panelCopy("close");
+
+  header.append(title, closeButton);
+
+  const selected = document.createElement("div");
+  selected.className = "explain-selected-text";
+  selected.id = "explain-selected-text";
+  selected.textContent = `"${selectedText.substring(0, 200)}${selectedText.length > 200 ? "..." : ""}"`;
+
+  const content = document.createElement("div");
+  content.className = "explain-modal-content";
+  content.id = "explanationContent";
+  content.setAttribute("aria-busy", "true");
+
+  const loading = document.createElement("div");
+  loading.className = "explain-loading";
+  const loadingBar = document.createElement("div");
+  loadingBar.className = "loading-bar";
+  const loadingText = document.createElement("span");
+  loadingText.textContent = panelCopy("analyzing");
+  loading.append(loadingBar, loadingText);
+  content.appendChild(loading);
+
+  dialog.append(header, selected, content);
+  modal.appendChild(dialog);
   document.body.appendChild(modal);
 
-  // Close handlers
-  document
-    .getElementById("closeExplain")
-    .addEventListener("click", () => modal.remove());
-  modal.addEventListener("click", (e) => {
-    if (e.target === modal) modal.remove();
+  // Everything behind the dialog is out of reach while it is open. The
+  // announcers stay live so a state change is still spoken.
+  const background = [...(document.body.children || [])].filter(
+    (child) =>
+      child !== modal &&
+      child.id !== "panelStatus" &&
+      child.id !== "panelAlert",
+  );
+  const previousInert = background.map((child) => [child, Boolean(child.inert)]);
+  background.forEach((child) => {
+    child.inert = true;
   });
+
+  const close = () => {
+    document.removeEventListener("keydown", onKeydown, true);
+    explainModalOpen = false;
+    previousInert.forEach(([child, wasInert]) => {
+      child.inert = wasInert;
+    });
+    modal.remove();
+    // The focus goes back where it came from, so the keyboard user is not
+    // dropped at the top of the panel.
+    if (returnFocusTo && typeof returnFocusTo.focus === "function") {
+      returnFocusTo.focus();
+    }
+  };
+
+  // Escape closes the dialog, and Tab cycles inside it. The listener sits
+  // on the document in the capture phase, so the dialog owns the keyboard
+  // for as long as it is open.
+  const onKeydown = (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      close();
+      return;
+    }
+    if (event.key !== "Tab") return;
+
+    const items = collectFocusableElements(dialog);
+    if (!items.length) {
+      event.preventDefault();
+      dialog.focus();
+      return;
+    }
+    const first = items[0];
+    const last = items[items.length - 1];
+    const active = document.activeElement;
+    if (event.shiftKey) {
+      if (active === first || !dialog.contains(active)) {
+        event.preventDefault();
+        last.focus();
+      }
+    } else if (active === last || !dialog.contains(active)) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
+  document.addEventListener("keydown", onKeydown, true);
+  explainModalOpen = true;
+
+  closeButton.addEventListener("click", close);
+  modal.addEventListener("click", (event) => {
+    if (event.target === modal) close();
+  });
+
+  // The focus moves into the dialog, so a screen reader reads the title
+  // before the user starts moving through it.
+  dialog.focus();
 
   // Get some context around the selection from the transcript
   const transcriptContext = getTranscriptContext(selectedText);
@@ -2496,14 +2948,18 @@ async function showExplanation(selectedText) {
     });
 
     const contentDiv = document.getElementById("explanationContent");
+    if (!contentDiv) return;
+    contentDiv.removeAttribute("aria-busy");
     if (result.success) {
       contentDiv.innerHTML = `<div class="explain-text">${escapeHtml(result.explanation).replace(/\n\n/g, "</p><p>").replace(/\n/g, "<br>")}</div>`;
     } else {
-      contentDiv.innerHTML = `<div class="explain-error">Failed to get explanation: ${escapeHtml(result.error)}</div>`;
+      contentDiv.innerHTML = `<div class="explain-error">${escapeHtml(panelCopy("explainFailed"))} ${escapeHtml(result.error || "")}</div>`;
     }
   } catch (error) {
     const contentDiv = document.getElementById("explanationContent");
-    contentDiv.innerHTML = `<div class="explain-error">Error: ${escapeHtml(error.message)}</div>`;
+    if (!contentDiv) return;
+    contentDiv.removeAttribute("aria-busy");
+    contentDiv.innerHTML = `<div class="explain-error">${escapeHtml(panelCopy("explainFailed"))} ${escapeHtml(error.message || "")}</div>`;
   }
 }
 
@@ -2708,14 +3164,14 @@ function renderNotes(notes, filteredVideoId) {
     noteEl.className = "note-item";
     noteEl.innerHTML = `
       <div class="note-header">
-        <span class="note-timestamp" data-url="${escapeHtml(note.timestampedUrl)}" data-seconds="${Number(note.timestampSeconds) || 0}">${escapeHtml(note.timestamp)}</span>
+        <button class="note-timestamp" type="button" style="border: none;" data-url="${escapeHtml(note.timestampedUrl)}" data-seconds="${Number(note.timestampSeconds) || 0}" aria-label="${escapeHtml(panelCopyFormat("playFrom", { time: note.timestamp }))}">${escapeHtml(note.timestamp)}</button>
         ${!filteredVideoId ? `<span class="note-video-title">${escapeHtml(note.videoTitle)}</span>` : ""}
       </div>
-      <div class="note-text" title="Click to edit">${renderLocalizedContent(note.text, "notes", translationId)}</div>
+      <div class="note-text" role="button" tabindex="0" title="${escapeHtml(panelCopy("editNoteTitle"))}">${renderLocalizedContent(note.text, "notes", translationId)}</div>
       <div class="note-actions">
-        <button class="note-action-btn note-copy-text">Copy text</button>
-        <button class="note-action-btn note-copy-link" data-url="${escapeHtml(note.timestampedUrl)}">Copy timestamp</button>
-        <button class="note-action-btn note-play" data-seconds="${Number(note.timestampSeconds) || 0}">Play</button>
+        <button class="note-action-btn note-copy-text" type="button">${escapeHtml(panelCopy("copyText"))}</button>
+        <button class="note-action-btn note-copy-link" type="button" data-url="${escapeHtml(note.timestampedUrl)}">${escapeHtml(panelCopy("copyTimestamp"))}</button>
+        <button class="note-action-btn note-play" type="button" data-seconds="${Number(note.timestampSeconds) || 0}">${escapeHtml(panelCopy("play"))}</button>
         <button class="note-delete" data-id="${escapeHtml(note.id)}" type="button" aria-label="Delete note" title="Delete note">
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M3 6h18"></path>
@@ -2729,61 +3185,63 @@ function renderNotes(notes, filteredVideoId) {
     `;
 
     // Timestamp click - play from this point (in this tab or a new one)
-    noteEl.querySelector(".note-timestamp").addEventListener("click", () => {
+    const timestampButton = noteEl.querySelector(".note-timestamp");
+    timestampButton.addEventListener("click", () => {
       playNote(note);
     });
 
-    // Click the note text to edit it
-    noteEl.querySelector(".note-text").addEventListener("click", (event) => {
+    // Click the note text to edit it. The text is a div, so it carries the
+    // button role itself and answers Enter and Space as well.
+    const textEl = noteEl.querySelector(".note-text");
+    textEl.addEventListener("click", (event) => {
       event.stopPropagation();
       startEditingNote(note, noteEl);
     });
+    makeKeyboardActivatable(textEl, () => startEditingNote(note, noteEl));
 
     // Delete button
-    noteEl
-      .querySelector(".note-delete")
-      .addEventListener("click", async (e) => {
-        e.stopPropagation();
-        await deleteNote(note.id);
-        loadNotes(filteredVideoId);
-      });
+    const deleteBtn = noteEl.querySelector(".note-delete");
+    deleteBtn.setAttribute("aria-label", panelCopy("deleteNote"));
+    deleteBtn.title = panelCopy("deleteNote");
+    deleteBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      await deleteNote(note.id);
+      loadNotes(filteredVideoId);
+    });
 
-    // Copy text button — copies just the note's text
-    noteEl
-      .querySelector(".note-copy-text")
-      .addEventListener("click", async () => {
-        try {
-          await navigator.clipboard.writeText(
-            getLocalizedPlainText(note.text, "notes", translationId),
-          );
-          const btn = noteEl.querySelector(".note-copy-text");
-          btn.textContent = "Copied";
-          setTimeout(() => {
-            btn.textContent = "Copy text";
-          }, 2000);
-        } catch (err) {
-          console.error("Copy failed:", err);
-        }
-      });
+    // Copy text button - copies just the note's text
+    const copyTextBtn = noteEl.querySelector(".note-copy-text");
+    copyTextBtn.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(
+          getLocalizedPlainText(note.text, "notes", translationId),
+        );
+        copyTextBtn.textContent = panelCopy("copied");
+        setTimeout(() => {
+          copyTextBtn.textContent = panelCopy("copyText");
+        }, 2000);
+      } catch (err) {
+        console.error("Copy failed:", err);
+      }
+    });
 
-    // Copy timestamp button — copies the timestamped YouTube link
-    noteEl
-      .querySelector(".note-copy-link")
-      .addEventListener("click", async () => {
-        try {
-          await navigator.clipboard.writeText(note.timestampedUrl);
-          const btn = noteEl.querySelector(".note-copy-link");
-          btn.textContent = "Copied";
-          setTimeout(() => {
-            btn.textContent = "Copy timestamp";
-          }, 2000);
-        } catch (err) {
-          console.error("Copy failed:", err);
-        }
-      });
+    // Copy timestamp button - copies the timestamped YouTube link
+    const copyLinkBtn = noteEl.querySelector(".note-copy-link");
+    copyLinkBtn.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(note.timestampedUrl);
+        copyLinkBtn.textContent = panelCopy("copied");
+        setTimeout(() => {
+          copyLinkBtn.textContent = panelCopy("copyTimestamp");
+        }, 2000);
+      } catch (err) {
+        console.error("Copy failed:", err);
+      }
+    });
 
-    // Play button (in this tab if it's the current video, else a new tab)
-    noteEl.querySelector(".note-play").addEventListener("click", () => {
+    // Play button (in this tab if it is the current video, else a new tab)
+    const playBtn = noteEl.querySelector(".note-play");
+    playBtn.addEventListener("click", () => {
       playNote(note);
     });
 
@@ -2814,11 +3272,11 @@ function startEditingNote(note, noteEl) {
   const saveBtn = document.createElement("button");
   saveBtn.type = "button";
   saveBtn.className = "note-action-btn";
-  saveBtn.textContent = "Save";
+  saveBtn.textContent = panelCopy("save");
   const cancelBtn = document.createElement("button");
   cancelBtn.type = "button";
   cancelBtn.className = "note-action-btn";
-  cancelBtn.textContent = "Cancel";
+  cancelBtn.textContent = panelCopy("cancel");
   actions.append(saveBtn, cancelBtn);
 
   textEl.replaceWith(textarea);
@@ -2829,12 +3287,14 @@ function startEditingNote(note, noteEl) {
   const restore = () => {
     const replacement = document.createElement("div");
     replacement.className = "note-text";
-    replacement.title = "Click to edit";
+    replacement.title = panelCopy("editNoteTitle");
     replacement.textContent = '"' + (note.text || "") + '"';
     replacement.addEventListener("click", (event) => {
       event.stopPropagation();
       startEditingNote(note, noteEl);
     });
+    // The restored text is a control again, so the keyboard can open it.
+    makeKeyboardActivatable(replacement, () => startEditingNote(note, noteEl));
     textarea.replaceWith(replacement);
     actions.remove();
   };
@@ -2864,7 +3324,7 @@ function startEditingNote(note, noteEl) {
     } else {
       const hint = document.createElement("span");
       hint.className = "word-sentence";
-      hint.textContent = "Could not save. Try again.";
+      hint.textContent = panelCopy("couldNotSave");
       actions.appendChild(hint);
     }
   });
@@ -3315,9 +3775,19 @@ function renderTranscriptModeRows(segments, mode) {
     const minutes = Math.floor(segment.start / 60);
     const seconds = Math.floor(segment.start % 60);
     const timestamp = `${minutes}:${String(seconds).padStart(2, "0")}`;
-    div.innerHTML = 
-      '<span class="transcript-time">' + timestamp + '</span>' +
-      renderTranscriptSegmentContent(segment, mode, cached, "") +
+
+    // The timestamp is a real button here too, so a translated transcript
+    // is no less reachable with the keyboard than the original one.
+    div.innerHTML = `
+      <button class="transcript-time" type="button" style="border: none; background: none; text-align: left; align-self: flex-start;" aria-label="${escapeHtml(panelCopyFormat("jumpTo", { time: timestamp }))}">${timestamp}</button>
+      ${renderTranscriptSegmentContent(segment, mode, cached, "")}
+    `;
+    const timeButton = div.querySelector(".transcript-time");
+    timeButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      seekTo(segment.start);
+    });
+
     div.addEventListener("click", (event) =>
       seekFromTranscriptEntryClick(event, segment.start),
     );
@@ -3604,6 +4074,16 @@ globalThis.__YTD_PANEL_TESTING__ = {
   panelCopy,
   loadPanelLanguage,
   applyPanelCopy,
+  showExplanation,
+  switchTab,
+  updateLoading,
+  renderAnalysisResults,
+  renderTranscript,
+  renderNotes,
+  setupExplainFeature,
+  clampToolbarCenter,
+  announceStatus,
+  announceAlert,
   setTranscriptMode: (mode) => {
     currentTranscriptMode = DISPLAY_LANGUAGE_MODES.has(mode)
       ? mode
