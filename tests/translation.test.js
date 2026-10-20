@@ -967,9 +967,9 @@ test("mergeNotesForSync drops notes deleted elsewhere (cloud is truth)", () => {
     { id: "note_new", text: "brand new", createdAt: 6000 },
   ];
   const cloud = [];
-  const { mergedNotes, toPush } = helpers.mergeNotesForSync(local, cloud);
-  assert.equal(mergedNotes.length, 1);
-  assert.equal(mergedNotes[0].id, "note_new");
+  const { mergedItems, toPush } = helpers.mergeNotesForSync(local, cloud);
+  assert.equal(mergedItems.length, 1);
+  assert.equal(mergedItems[0].id, "note_new");
   assert.equal(toPush.length, 1);
   assert.equal(toPush[0].id, "note_new");
 });
@@ -992,11 +992,11 @@ test("mergeNotesForSync pulls cloud-only notes and pushes local-only notes", () 
       updatedAt: "2026-01-01T00:00:00Z",
     },
   ];
-  const { mergedNotes, toPush } = helpers.mergeNotesForSync(local, cloud);
-  assert.equal(mergedNotes.length, 2);
+  const { mergedItems, toPush } = helpers.mergeNotesForSync(local, cloud);
+  assert.equal(mergedItems.length, 2);
   assert.equal(toPush.length, 1);
   assert.equal(toPush[0].id, "note_local_1");
-  const cloudMerged = mergedNotes.find((note) => note.id === "note_cloud_2");
+  const cloudMerged = mergedItems.find((note) => note.id === "note_cloud_2");
   assert.equal(cloudMerged.text, "cloud only");
   assert.equal(cloudMerged.timestamp, "0:42");
   assert.equal(cloudMerged.cloudId, "cloud-uuid-2");
@@ -1013,9 +1013,9 @@ test("mergeNotesForSync picks the newer of local and cloud by clientId", () => {
     createdAt: "2026-01-01T00:00:00Z",
     updatedAt: "2026-01-02T00:00:00Z",
   }];
-  const { mergedNotes, toPush } = helpers.mergeNotesForSync(local, cloud);
-  assert.equal(mergedNotes.length, 1);
-  assert.equal(mergedNotes[0].text, "cloud version");
+  const { mergedItems, toPush } = helpers.mergeNotesForSync(local, cloud);
+  assert.equal(mergedItems.length, 1);
+  assert.equal(mergedItems[0].text, "cloud version");
   assert.equal(toPush.length, 0);
 });
 

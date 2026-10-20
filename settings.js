@@ -112,6 +112,63 @@ var YTD_SETTINGS = (() => {
   }
 
   /**
+   * The vocabulary notebook's storage namespace.
+   *
+   * Same rule as the notes: one namespace per account, so one learner's
+   * words never show up in another account's view. It lives here for the
+   * same reason the notes namespace does - the sync layer writes it and
+   * the panel reads it, and a rule that only exists in one of them drifts.
+   */
+  const VOCABULARY_STORAGE_KEY = "ytd_vocabulary";
+
+  function vocabularyStorageKey(githubId) {
+    const id = String(githubId || "").trim();
+    return id ? `${VOCABULARY_STORAGE_KEY}_${id}` : VOCABULARY_STORAGE_KEY;
+  }
+
+  /**
+   * True for every storage key that holds saved words.
+   */
+  function isVocabularyStorageKey(key) {
+    const name = String(key || "");
+    if (name === VOCABULARY_STORAGE_KEY) return true;
+    if (!name.startsWith(`${VOCABULARY_STORAGE_KEY}_`)) return false;
+    return /^\d+$/.test(name.slice(VOCABULARY_STORAGE_KEY.length + 1));
+  }
+
+  /**
+   * How many words the local store keeps.
+   *
+   * The cap exists so the store cannot grow without bound, but a word that
+   * disappears without a word is a word the user lost - and a word is
+   * exactly what a learner cannot afford to lose. So the number lives
+   * here, in one place, and both the store that enforces it and the panel
+   * that shows it read it from here.
+   */
+  const MAX_LOCAL_VOCABULARY = 500;
+
+  /**
+   * Where the store records that it had to drop words.
+   *
+   * The panel reads this key and tells the user how many words went, so
+   * the loss is a fact on the screen and not a silent truncation.
+   */
+  const VOCABULARY_DROPPED_KEY = "ytd_vocabulary_dropped";
+
+  /**
+   * The drop record for one account.
+   *
+   * Words are namespaced per account, so the record of a loss has to be
+   * too: a drop that happened while signed in must not be shown to the
+   * same user after they signed out and are looking at a different, much
+   * smaller store.
+   */
+  function vocabularyDroppedKey(githubId) {
+    const id = String(githubId || "").trim();
+    return id ? `${VOCABULARY_DROPPED_KEY}_${id}` : VOCABULARY_DROPPED_KEY;
+  }
+
+  /**
    * Copy for the GitHub sync chip in the panel header. The signed-in and
    * signed-out labels already ship in the markup; these strings cover the
    * tooltip, the accessible name, and the expired-session state.
@@ -263,6 +320,12 @@ var YTD_SETTINGS = (() => {
     notesStorageKey,
     notesDroppedKey,
     isNotesStorageKey,
+    VOCABULARY_STORAGE_KEY,
+    vocabularyStorageKey,
+    isVocabularyStorageKey,
+    MAX_LOCAL_VOCABULARY,
+    VOCABULARY_DROPPED_KEY,
+    vocabularyDroppedKey,
     SYNC_COPY,
     normalizeUiLanguage,
     translateSyncCopy,
