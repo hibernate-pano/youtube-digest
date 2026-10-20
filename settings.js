@@ -38,6 +38,15 @@ var YTD_SETTINGS = (() => {
   const SYNC_EXPIRED_KEY = "ytd_sync_expired";
 
   /**
+   * The session id some AI gateways route on. The OpenCode Go gateway
+   * answers 400 MissingSessionID when the request carries no session
+   * header, and it reuses a cached prompt only inside one session. The id
+   * belongs to this browser: it is random, stored once, and never leaves
+   * the device except as a header on an AI request.
+   */
+  const AI_SESSION_STORAGE_KEY = "ytd_ai_session";
+
+  /**
    * Reason code for a sync request that ran out of time.
    *
    * The sync service is the extension's own backend, so a request that does
@@ -307,6 +316,10 @@ var YTD_SETTINGS = (() => {
       apiKeyField: "opencodeGoApiKey",
       usesThinkingDisabled: false,
       supportsJsonMode: true,
+      // This gateway routes on a session id and answers 400 MissingSessionID
+      // without one. The header name is the gateway's own, so it sits in the
+      // registry next to the base URL and the model.
+      sessionHeader: "x-opencode-session",
     },
   });
 
@@ -544,6 +557,7 @@ var YTD_SETTINGS = (() => {
     GITHUB_SESSION_KEY,
     SYNC_SESSION_EXPIRED,
     SYNC_EXPIRED_KEY,
+    AI_SESSION_STORAGE_KEY,
     SYNC_REQUEST_TIMEOUT,
     TRANSCRIPT_REQUEST_TIMEOUT,
     STORAGE_QUOTA_EXCEEDED,

@@ -803,6 +803,71 @@ test("active provider sends only its own key and skips unsupported fields", asyn
   assert.equal(Object.hasOwn(requests[0].body, "thinking"), false);
 });
 
+test("the OpenCode Go gateway is asked with the session it routes on", async () => {
+  const requests = [];
+  const helpers = loadBackgroundHelpers({
+    settings: {
+      provider: "opencode-go",
+      opencodeGoApiKey: "opencode-secret",
+    },
+    fetchImpl: async (url, options) => {
+      requests.push({ url, headers: { ...options.headers } });
+      return {
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: "ok" } }] }),
+      };
+    },
+  });
+
+  const ask = () =>
+    helpers.requestAiCompletion({
+      maxTokens: 64,
+      messages: [{ role: "user", content: "Hello." }],
+    });
+
+  await ask();
+  await ask();
+
+  assert.equal(requests.length, 2);
+  assert.equal(
+    requests[0].url,
+    "https://opencode.ai/zen/go/v1/chat/completions",
+  );
+  const session = requests[0].headers["x-opencode-session"];
+  assert.equal(typeof session, "string");
+  assert.ok(session.length > 0, "the gateway needs a session id to answer at all");
+  // The same conversation has to stay in the same session, or the gateway
+  // cannot reuse the prompt it already read.
+  assert.equal(requests[1].headers["x-opencode-session"], session);
+  // The key of the active provider still goes out, and only that one.
+  assert.equal(requests[0].headers.Authorization, "Bearer opencode-secret");
+});
+
+test("a gateway that does not route on a session is asked without one", async () => {
+  const requests = [];
+  const helpers = loadBackgroundHelpers({
+    settings: { provider: "deepseek", aiApiKey: "deepseek-secret" },
+    fetchImpl: async (url, options) => {
+      requests.push({ url, headers: { ...options.headers } });
+      return {
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: "ok" } }] }),
+      };
+    },
+  });
+
+  await helpers.requestAiCompletion({
+    maxTokens: 64,
+    messages: [{ role: "user", content: "Hello." }],
+  });
+
+  assert.equal(requests.length, 1);
+  assert.equal(
+    Object.hasOwn(requests[0].headers, "x-opencode-session"),
+    false,
+  );
+});
+
 test("provider rejecting response_format with HTTP 400 retries once without it", async () => {
   const requests = [];
   const helpers = loadBackgroundHelpers({

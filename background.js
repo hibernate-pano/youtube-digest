@@ -96,6 +96,50 @@ function getActiveProvider(settings) {
   return YTD_SETTINGS.getProvider(settings.provider);
 }
 
+/**
+ * The session id for the AI gateways that route on one.
+ *
+ * The OpenCode Go gateway answers 400 MissingSessionID when the request
+ * carries no session header, and it only reuses a prompt it already read
+ * inside the same session. So the same id goes out on every request.
+ *
+ * The id is random and belongs to this browser. It says nothing about the
+ * user, and two people never share one.
+ */
+let aiSessionIdPromise = null;
+
+function createAiSessionId() {
+  if (
+    typeof crypto !== "undefined" &&
+    typeof crypto.randomUUID === "function"
+  ) {
+    return crypto.randomUUID();
+  }
+  // A browser without randomUUID still needs a stable id.
+  return `ytd-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
+async function getAiSessionId() {
+  if (!aiSessionIdPromise) {
+    aiSessionIdPromise = (async () => {
+      const key = YTD_SETTINGS.AI_SESSION_STORAGE_KEY;
+      try {
+        const stored = await chrome.storage.local.get(key);
+        const existing = String(stored?.[key] || "").trim();
+        if (existing) return existing;
+        const created = createAiSessionId();
+        await chrome.storage.local.set({ [key]: created });
+        return created;
+      } catch (error) {
+        // The id only has to hold still while this worker lives. A storage
+        // failure must not stop the AI request itself.
+        return createAiSessionId();
+      }
+    })();
+  }
+  return aiSessionIdPromise;
+}
+
 const promptFileCache = new Map();
 
 async function loadPromptSection(fileName, heading, variables = {}) {
@@ -185,6 +229,17 @@ async function requestAiCompletion({
   );
   resetIdleTimeout();
   let sentResponseFormat = !!body.response_format;
+  const headers = {
+    "Content-Type": "application/json",
+    // Always the active provider's own key: keys for inactive
+    // providers are stored side by side but must never be sent.
+    Authorization: `Bearer ${getActiveAiKey(settings)}`,
+  };
+  // Some gateways route on a session id and answer 400 without one. Which
+  // header that is comes from the provider registry, not from a branch here.
+  if (provider.sessionHeader) {
+    headers[provider.sessionHeader] = await getAiSessionId();
+  }
   try {
     let response;
     let data;
@@ -193,12 +248,7 @@ async function requestAiCompletion({
         YTD_SETTINGS.chatCompletionsUrl(settings.provider),
         {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            // Always the active provider's own key: keys for inactive
-            // providers are stored side by side but must never be sent.
-            Authorization: `Bearer ${getActiveAiKey(settings)}`,
-          },
+          headers,
           body: JSON.stringify(body),
           signal: controller.signal,
         },

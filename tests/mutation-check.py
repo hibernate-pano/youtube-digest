@@ -353,6 +353,24 @@ MUTATIONS = [
             ),
         ],
     },
+    {
+        "name": "M14 the gateway is asked without the session it routes on",
+        "file": "background.js",
+        "hunks": [
+            (
+                """  if (provider.sessionHeader) {
+    headers[provider.sessionHeader] = await getAiSessionId();
+  }""",
+                """  // The session header was left out of the request.""",
+            )
+        ],
+        "expect": [
+            (
+                "translation.test.js",
+                "the OpenCode Go gateway is asked with the session it routes on",
+            ),
+        ],
+    },
 ]
 
 
