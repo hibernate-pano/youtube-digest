@@ -26,7 +26,7 @@
     </header>
     <main class="privacy-body">
       <h1>Privacy</h1>
-      <p><em>Last updated: 2026-08-14</em></p>
+      <p><em>Last updated: 2026-10-20</em></p>
 
       <h2>What this service is</h2>
       <p>
@@ -37,7 +37,10 @@
       <h2>What we store</h2>
       <ul>
         <li><strong>Your GitHub identity</strong> (id, login name) so your account can be recognised.</li>
-        <li><strong>Your notes, vocabulary and review progress</strong> that you save while signed in.</li>
+        <li><strong>Your notes</strong> that you write while watching a video, plus the
+            <strong>words you keep for review</strong> and the review progress this service
+            schedules for them. Words are collected in the extension; this service only stores
+            them and schedules their reviews.</li>
       </ul>
       <p>
         Data is stored in a Neon (PostgreSQL) database and is isolated per GitHub account:
@@ -57,13 +60,17 @@
         <li><strong>Export:</strong> download all your data as JSON from the dashboard (Export button).</li>
         <li><strong>Delete:</strong> delete your account and all your data from the dashboard
             (Delete account button). This is permanent and cannot be undone.</li>
-        <li><strong>Sign out:</strong> stops the extension from syncing; your data remains in your account.</li>
+        <li><strong>Sign out on this page</strong> only clears the sign-in this page keeps in
+            your browser; the extension keeps its own session and keeps syncing. To stop the
+            extension from syncing, click your account name in the side panel header. Either way
+            your data stays in your account, and you can sign back in at any time.</li>
       </ul>
 
       <h2>Security</h2>
       <p>
-        Sign-in uses GitHub OAuth; the extension stores only a short-lived token.
-        Connections are HTTPS. The database is not publicly accessible.
+        Sign-in uses GitHub OAuth; the extension stores only the access token this service
+        issues, and that token expires after 30 days. There is no refresh token, so you sign in
+        again once it expires. Connections are HTTPS. The database is not publicly accessible.
       </p>
 
       <h2>Contact</h2>
