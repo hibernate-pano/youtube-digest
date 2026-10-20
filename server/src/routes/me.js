@@ -1,4 +1,4 @@
-const { json } = require("../middleware");
+const { json, HttpError } = require("../middleware");
 
 async function me(ctx) {
   return json({
@@ -14,6 +14,12 @@ async function me(ctx) {
 async function syncDelta(ctx) {
   const url = new URL(ctx.request.url);
   const since = url.searchParams.get("since") || "";
+  // An unparseable timestamp used to become an Invalid Date, which compares
+  // false against every row: the delta came back empty and the change was
+  // silently lost. It is a client error instead.
+  if (since && Number.isNaN(Date.parse(since))) {
+    throw new HttpError(400, "since must be an ISO 8601 timestamp.");
+  }
   const delta = await ctx.store.getSyncDelta(ctx.user.id, since || undefined);
   return json(delta);
 }

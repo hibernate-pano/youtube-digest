@@ -54,19 +54,27 @@ async function signToken(payload, secret, ttlSeconds) {
  */
 async function verifyToken(token, secret) {
   if (typeof token !== "string") return null;
+  // A missing or empty secret makes `crypto.subtle.importKey` throw a
+  // DataError, which would turn every authenticated route into a 500.
+  if (typeof secret !== "string" || secret.length === 0) return null;
   const parts = token.split(".");
   if (parts.length !== 3) return null;
   const encodedHeader = parts[0];
   const encodedBody = parts[1];
   const encodedSignature = parts[2];
+  // BOTH decodes are inside the try: `atob` throws InvalidCharacterError on
+  // anything that is not valid base64. A malformed signature must be an
+  // expired session (401), never a server error (500), otherwise the client
+  // treats it as a transient blip and never asks the user to sign in again.
   let payload;
+  let supplied;
   try {
     payload = JSON.parse(new TextDecoder().decode(base64UrlDecode(encodedBody)));
+    supplied = base64UrlDecode(encodedSignature);
   } catch {
     return null;
   }
   const expected = await hmacSha256(secret, encodedHeader + "." + encodedBody);
-  const supplied = base64UrlDecode(encodedSignature);
   if (expected.length !== supplied.length) return null;
   let equal = true;
   for (let i = 0; i < expected.length; i++) {

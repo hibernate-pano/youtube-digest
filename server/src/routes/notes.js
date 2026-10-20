@@ -1,5 +1,13 @@
-const { json, HttpError } = require("../middleware");
-const { parseNote } = require("../validate");
+const { json, HttpError, readJsonObject } = require("../middleware");
+const { parseNote, parseNotePatch } = require("../validate");
+
+/**
+ * Reads and parses a JSON body, refusing a body that is not JSON.
+ * @returns {Promise<object>} the parsed object.
+ */
+async function readObjectBody(ctx) {
+  return readJsonObject(ctx.request);
+}
 
 async function listNotes(ctx) {
   const rows = await ctx.store.listNotes(ctx.user.id);
@@ -7,7 +15,7 @@ async function listNotes(ctx) {
 }
 
 async function createNote(ctx) {
-  const input = await ctx.request.json().catch(() => null);
+  const input = await readObjectBody(ctx);
   const note = parseNote(input);
   if (!note) throw new HttpError(400, "A non-empty note is required.");
   if (!note.clientId) {
@@ -18,7 +26,7 @@ async function createNote(ctx) {
 }
 
 async function setNoteStarred(ctx) {
-  const input = await ctx.request.json().catch(() => null);
+  const input = await readObjectBody(ctx);
   if (typeof input?.starred !== "boolean") {
     throw new HttpError(400, "starred must be a boolean.");
   }
@@ -37,8 +45,10 @@ async function deleteNoteByClientId(ctx) {
 }
 
 async function updateNote(ctx) {
-  const input = await ctx.request.json().catch(() => null);
-  const note = parseNote(input);
+  const input = await readObjectBody(ctx);
+  // A PATCH is sparse: only the fields the client actually sent are
+  // written. The strict parser would zero every omitted field.
+  const note = parseNotePatch(input);
   if (!note) throw new HttpError(400, "A non-empty note is required.");
   const row = await ctx.store.updateNote(ctx.user.id, ctx.params.id, note);
   if (!row) throw new HttpError(404, "Note not found.");
@@ -58,4 +68,5 @@ module.exports = {
   deleteNote,
   deleteNoteByClientId,
   setNoteStarred,
+  readObjectBody,
 };

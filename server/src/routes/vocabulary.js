@@ -1,5 +1,6 @@
 const { json, HttpError } = require("../middleware");
 const { parseVocabulary, VOCABULARY_STATUSES } = require("../validate");
+const { readObjectBody } = require("./notes");
 
 async function listVocabulary(ctx) {
   const rows = await ctx.store.listVocabulary(ctx.user.id);
@@ -7,7 +8,7 @@ async function listVocabulary(ctx) {
 }
 
 async function upsertVocabulary(ctx) {
-  const input = await ctx.request.json().catch(() => null);
+  const input = await readObjectBody(ctx);
   const vocab = parseVocabulary(input);
   if (!vocab) throw new HttpError(400, "A non-empty term is required.");
   const row = await ctx.store.upsertVocabulary(ctx.user.id, vocab);
@@ -15,7 +16,7 @@ async function upsertVocabulary(ctx) {
 }
 
 async function updateVocabularyStatus(ctx) {
-  const input = await ctx.request.json().catch(() => null);
+  const input = await readObjectBody(ctx);
   const status = input && input.status;
   if (!VOCABULARY_STATUSES.has(status)) {
     throw new HttpError(400, "Status must be learning, reviewing, or mastered.");

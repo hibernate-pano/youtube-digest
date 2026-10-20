@@ -9,6 +9,15 @@
 
 const DEFAULT_REVIEW_LIMIT = 50;
 
+/** Hard cap on the rows a list endpoint returns. */
+const MAX_LIST_ROWS = 5_000;
+
+/** Hard cap on the rows an export blob contains. */
+const MAX_EXPORT_ROWS = 10_000;
+
+/** The longest review interval, in days. */
+const MAX_INTERVAL_DAYS = 365;
+
 function toIso(value) {
   if (value instanceof Date) return value.toISOString();
   if (typeof value === "string") return value;
@@ -47,13 +56,52 @@ function rowToVocabulary(row) {
   };
 }
 
+/**
+ * Builds a parameterized UPDATE statement from a fixed column whitelist.
+ *
+ * The column names come from the code, never from the request, so the
+ * statement text can never be influenced by the client. The result is a
+ * tagged-template argument list, which both the Neon driver and the test
+ * fake accept.
+ */
+function buildUpdateStatement(prefix, assignments, whereClauses) {
+  const strings = [];
+  const values = [];
+  let lead = prefix;
+  for (const assignment of assignments) {
+    strings.push(lead + assignment.before);
+    values.push(assignment.value);
+    lead = assignment.after;
+  }
+  for (const clause of whereClauses) {
+    strings.push(lead + clause.before);
+    values.push(clause.value);
+    lead = clause.after;
+  }
+  strings.push(lead);
+  return { strings, values };
+}
+
+/** Review rows are keyed by owner as well as vocabulary, like the database. */
+function reviewKey(userId, vocabularyId) {
+  return userId + ":" + vocabularyId;
+}
+
+/**
+ * Postgres hands out account ids from a global sequence, so two accounts
+ * never share one. The in-memory store mirrors that with a process-wide
+ * counter: two store instances in the same process must never hand out the
+ * same account id, or a per-account rate limit would treat two different
+ * accounts as one.
+ */
+let nextMemoryUserId = 1;
+
 class MemoryStore {
   constructor() {
-    this.nextUserId = 1;
     this.users = new Map(); // github_id -> user
     this.notes = new Map(); // id -> row
     this.vocabulary = new Map(); // id -> row
-    this.reviews = new Map(); // vocabulary_id -> row
+    this.reviews = new Map(); // `${userId}:${vocabularyId}` -> row
     this.clock = () => new Date();
   }
 
@@ -61,23 +109,44 @@ class MemoryStore {
     let user = this.users.get(githubUser.githubId);
     if (!user) {
       user = {
-        id: this.nextUserId++,
+        id: nextMemoryUserId++,
         githubId: githubUser.githubId,
         login: githubUser.login,
         avatarUrl: githubUser.avatarUrl || "",
+        tokenVersion: 0,
       };
       this.users.set(githubUser.githubId, user);
     } else {
       user.login = githubUser.login;
       user.avatarUrl = githubUser.avatarUrl || user.avatarUrl;
     }
-    return { id: user.id, githubId: user.githubId, login: user.login, avatarUrl: user.avatarUrl };
+    return {
+      id: user.id,
+      githubId: user.githubId,
+      login: user.login,
+      avatarUrl: user.avatarUrl,
+      tokenVersion: user.tokenVersion || 0,
+    };
   }
 
-  async listNotes(userId) {
+  /**
+   * The token version stored for an account. `null` means the account does
+   * not exist, so no token can authenticate as it any more.
+   */
+  async getTokenVersion(userId) {
+    const user = [...this.users.values()].find(
+      (row) => String(row.id) === String(userId),
+    );
+    if (!user) return null;
+    return user.tokenVersion || 0;
+  }
+
+  async listNotes(userId, limit = MAX_LIST_ROWS) {
     return [...this.notes.values()]
       .filter((row) => row.userId === userId)
-      .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+      .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
+      .slice(0, limit)
+      .map(rowToNote);
   }
 
   async createNote(userId, note) {
@@ -124,6 +193,10 @@ class MemoryStore {
     // flag alone, so the two stores agree on what a note update does.
     const next = Object.assign({}, patch);
     if (typeof patch.starred !== "boolean") delete next.starred;
+    // clientId is the sync identity key (`unique (user_id, client_id)`), so
+    // it is immutable on edit: renaming it would make the next full sync
+    // treat the note as deleted elsewhere and drop it.
+    delete next.clientId;
     Object.assign(row, next, { updatedAt: this.clock().toISOString() });
     return rowToNote(row);
   }
@@ -135,10 +208,12 @@ class MemoryStore {
     return true;
   }
 
-  async listVocabulary(userId) {
+  async listVocabulary(userId, limit = MAX_LIST_ROWS) {
     return [...this.vocabulary.values()]
       .filter((row) => row.userId === userId)
-      .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+      .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
+      .slice(0, limit)
+      .map(rowToVocabulary);
   }
 
   async upsertVocabulary(userId, vocab) {
@@ -159,7 +234,8 @@ class MemoryStore {
     this.vocabulary.set(row.id, row);
     // A brand-new word is due for its first review immediately. Existing
     // entries keep their review schedule untouched.
-    this.reviews.set(row.id, {
+    this.reviews.set(reviewKey(userId, row.id), {
+      userId,
       vocabularyId: row.id,
       intervalDays: 0,
       ease: 2.5,
@@ -182,7 +258,7 @@ class MemoryStore {
     const row = this.vocabulary.get(vocabId);
     if (!row || row.userId !== userId) return false;
     this.vocabulary.delete(vocabId);
-    this.reviews.delete(vocabId);
+    this.reviews.delete(reviewKey(userId, vocabId));
     return true;
   }
 
@@ -191,7 +267,12 @@ class MemoryStore {
     return [...this.reviews.values()]
       .filter((review) => {
         const vocab = this.vocabulary.get(review.vocabularyId);
-        return vocab && vocab.userId === userId && new Date(review.dueAt) <= now;
+        return (
+          review.userId === userId &&
+          vocab &&
+          vocab.userId === userId &&
+          new Date(review.dueAt) <= now
+        );
       })
       .sort((a, b) => (a.dueAt < b.dueAt ? -1 : 1))
       .slice(0, limit)
@@ -209,19 +290,23 @@ class MemoryStore {
   async submitReview(userId, vocabId, grade) {
     const vocab = this.vocabulary.get(vocabId);
     if (!vocab || vocab.userId !== userId) return null;
-    let review = this.reviews.get(vocabId);
+    const key = reviewKey(userId, vocabId);
+    let review = this.reviews.get(key);
     if (!review) {
       review = {
+        userId,
         vocabularyId: vocabId,
         intervalDays: 0,
         ease: 2.5,
         reps: 0,
         lapses: 0,
       };
-      this.reviews.set(vocabId, review);
+      this.reviews.set(key, review);
     }
     const updated = applyGrade(review, grade, this.clock());
-    this.reviews.set(vocabId, updated);
+    updated.userId = userId;
+    updated.vocabularyId = vocabId;
+    this.reviews.set(key, updated);
     return {
       dueAt: updated.dueAt,
       intervalDays: updated.intervalDays,
@@ -232,7 +317,7 @@ class MemoryStore {
   }
 
   async getSyncDelta(userId, sinceIso) {
-    const since = sinceIso ? new Date(sinceIso) : new Date(0);
+    const since = parseSince(sinceIso);
     const notes = [...this.notes.values()]
       .filter((row) => row.userId === userId && new Date(row.updatedAt) > since)
       .map(rowToNote);
@@ -242,30 +327,50 @@ class MemoryStore {
     return { notes, vocabulary };
   }
 
+  /** Counts a user's rows in one of the two content tables. */
+  async countRows(table, userId) {
+    const rows = table === "vocabulary" ? this.vocabulary : this.notes;
+    return [...rows.values()].filter((row) => row.userId === userId).length;
+  }
+
   async getAllUserData(userId) {
     const user = [...this.users.values()].find(
       (row) => String(row.id) === String(userId),
     );
-    const reviews = [...this.reviews.entries()]
-      .filter(([vocabId]) => {
-        const vocab = this.vocabulary.get(vocabId);
-        return vocab && vocab.userId === userId;
-      })
-      .map(([vocabId, review]) => ({
-        vocabularyId: vocabId,
+    const allNotes = [...this.notes.values()].filter((row) => row.userId === userId);
+    const allVocabulary = [...this.vocabulary.values()].filter(
+      (row) => row.userId === userId,
+    );
+    const reviews = [...this.reviews.values()]
+      .filter((review) => review.userId === userId)
+      .map((review) => ({
+        vocabularyId: review.vocabularyId,
         dueAt: review.dueAt,
         intervalDays: review.intervalDays,
         ease: review.ease,
         reps: review.reps,
         lapses: review.lapses,
       }));
+    const notes = allNotes
+      .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
+      .slice(0, MAX_EXPORT_ROWS)
+      .map(rowToNote);
+    const vocabulary = allVocabulary
+      .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
+      .slice(0, MAX_EXPORT_ROWS)
+      .map(rowToVocabulary);
     return {
       user: user
         ? { id: user.id, githubId: user.githubId, login: user.login, avatarUrl: user.avatarUrl }
         : null,
-      notes: await this.listNotes(userId),
-      vocabulary: await this.listVocabulary(userId),
+      notes,
+      vocabulary,
       reviews,
+      // Report what was left out, so a truncated export is never silent.
+      truncated: {
+        notes: Math.max(0, allNotes.length - notes.length),
+        vocabulary: Math.max(0, allVocabulary.length - vocabulary.length),
+      },
     };
   }
 
@@ -277,14 +382,39 @@ class MemoryStore {
     for (const [key, row] of [...this.vocabulary.entries()]) {
       if (row.userId === userId) {
         this.vocabulary.delete(key);
-        this.reviews.delete(key);
+        this.reviews.delete(reviewKey(userId, key));
       }
     }
-    for (const [key, row] of [...this.users.entries()]) {
-      if (String(row.id) === String(userId)) this.users.delete(key);
+    // The account row is kept as a revocation tombstone: bumping the token
+    // version invalidates every token issued before the deletion, so the
+    // deleted account can never act again.
+    for (const user of this.users.values()) {
+      if (String(user.id) === String(userId)) {
+        user.tokenVersion = (user.tokenVersion || 0) + 1;
+      }
     }
     return before;
   }
+}
+
+/**
+ * Parses a `since` timestamp. An unparseable value is an error, not an
+ * empty result: `new Date("nonsense")` yields an Invalid Date, which
+ * compares false against every row and would silently drop the whole
+ * delta.
+ */
+function parseSince(sinceIso) {
+  if (sinceIso === undefined || sinceIso === null || sinceIso === "") {
+    return new Date(0);
+  }
+  const parsed = Date.parse(sinceIso);
+  if (Number.isNaN(parsed)) {
+    const error = new Error("since must be an ISO 8601 timestamp.");
+    error.status = 400;
+    error.code = "INVALID_SINCE";
+    throw error;
+  }
+  return new Date(parsed);
 }
 
 /**
@@ -306,7 +436,12 @@ function applyGrade(review, grade, now) {
     next.intervalDays = grade >= 4 ? 4 : 3;
   } else {
     const multiplier = grade >= 4 ? next.ease * 1.1 : next.ease;
-    next.intervalDays = Math.max(1, Math.round(next.intervalDays * multiplier));
+    // Capped: an uncapped interval eventually overflows timestamptz, which
+    // would make every later review submission fail for that account.
+    next.intervalDays = Math.min(
+      MAX_INTERVAL_DAYS,
+      Math.max(1, Math.round(next.intervalDays * multiplier)),
+    );
   }
   next.ease = Math.min(2.8, next.ease + (grade >= 4 ? 0.1 : 0));
   next.dueAt = new Date(now.getTime() + next.intervalDays * 86_400_000).toISOString();
@@ -335,17 +470,30 @@ class NeonStore {
       on conflict (github_id) do update set
         github_login = excluded.github_login,
         avatar_url = excluded.avatar_url
-      returning id, github_id as "githubId", github_login as "login", avatar_url as "avatarUrl"
+      returning id, github_id as "githubId", github_login as "login", avatar_url as "avatarUrl",
+        token_version as "tokenVersion"
     `;
     return rows[0];
   }
 
-  async listNotes(userId) {
+  /**
+   * The token version stored for an account. `null` means the account does
+   * not exist, so no token can authenticate as it any more.
+   */
+  async getTokenVersion(userId) {
+    const rows = await this.sql`
+      select token_version as "tokenVersion" from users where id = ${userId}
+    `;
+    if (!rows.length) return null;
+    return Number(rows[0].tokenVersion) || 0;
+  }
+
+  async listNotes(userId, limit = MAX_LIST_ROWS) {
     const rows = await this.sql`
       select id, client_id as "clientId", starred, video_id as "videoId", video_title as "videoTitle",
         channel_name as "channelName", timestamp_seconds as "timestampSeconds", quote, note,
         created_at as "createdAt", updated_at as "updatedAt"
-      from notes where user_id = ${userId} order by updated_at desc
+      from notes where user_id = ${userId} order by updated_at desc limit ${limit}
     `;
     return rows.map(rowToNote);
   }
@@ -392,21 +540,43 @@ class NeonStore {
   }
 
   async updateNote(userId, noteId, patch) {
-    // Same tri-state rule as createNote: only an explicit boolean moves the
-    // stored flag. `starred` is also selected back below, otherwise every
-    // PATCH response would report starred=false for a starred note.
-    const starred = typeof patch.starred === "boolean" ? patch.starred : null;
-    const rows = await this.sql`
-      update notes set
-        video_title = ${patch.videoTitle}, channel_name = ${patch.channelName},
-        timestamp_seconds = ${patch.timestampSeconds}, quote = ${patch.quote}, note = ${patch.note},
-        starred = coalesce(${starred}, starred),
-        updated_at = now()
-      where id = ${noteId} and user_id = ${userId}
-      returning id, client_id as "clientId", starred, video_id as "videoId", video_title as "videoTitle",
-        channel_name as "channelName", timestamp_seconds as "timestampSeconds", quote, note,
-        created_at as "createdAt", updated_at as "updatedAt"
-    `;
+    // Only the fields the client actually sent are written, so a partial
+    // update never zeroes the fields it left out. The column list is a
+    // hardcoded whitelist: no column name ever comes from the request.
+    // `starred` keeps the tri-state rule: coalesce($, starred) leaves the
+    // stored flag alone when the client did not mention it.
+    const assignments = [{ before: "note = ", after: ", ", value: patch.note }];
+    if (patch.videoId !== undefined) {
+      assignments.push({ before: "video_id = ", after: ", ", value: patch.videoId });
+    }
+    if (patch.videoTitle !== undefined) {
+      assignments.push({ before: "video_title = ", after: ", ", value: patch.videoTitle });
+    }
+    if (patch.channelName !== undefined) {
+      assignments.push({ before: "channel_name = ", after: ", ", value: patch.channelName });
+    }
+    if (patch.timestampSeconds !== undefined) {
+      assignments.push({ before: "timestamp_seconds = ", after: ", ", value: patch.timestampSeconds });
+    }
+    if (patch.quote !== undefined) {
+      assignments.push({ before: "quote = ", after: ", ", value: patch.quote });
+    }
+    if (typeof patch.starred === "boolean") {
+      assignments.push({
+        before: "starred = coalesce(",
+        after: ", starred)",
+        value: patch.starred,
+      });
+    }
+    const statement = buildUpdateStatement(
+      "update notes set ",
+      assignments,
+      [
+        { before: " where id = ", after: " and user_id = ", value: noteId },
+        { before: "", after: "", value: userId },
+      ],
+    );
+    const rows = await this.sql(statement.strings, ...statement.values);
     return rows.length ? rowToNote(rows[0]) : null;
   }
 
@@ -417,12 +587,12 @@ class NeonStore {
     return rows.length > 0;
   }
 
-  async listVocabulary(userId) {
+  async listVocabulary(userId, limit = MAX_LIST_ROWS) {
     const rows = await this.sql`
       select id, term, translation, sentence, sentence_translation as "sentenceTranslation",
         video_id as "videoId", video_title as "videoTitle", timestamp_seconds as "timestampSeconds", status,
         created_at as "createdAt", updated_at as "updatedAt"
-      from vocabulary where user_id = ${userId} order by updated_at desc
+      from vocabulary where user_id = ${userId} order by updated_at desc limit ${limit}
     `;
     return rows.map(rowToVocabulary);
   }
@@ -522,18 +692,19 @@ class NeonStore {
   }
 
   async getSyncDelta(userId, sinceIso) {
-    const since = sinceIso || new Date(0).toISOString();
+    const since = parseSince(sinceIso);
+    const sinceIsoText = since.toISOString();
     const notes = await this.sql`
       select id, client_id as "clientId", starred, video_id as "videoId", video_title as "videoTitle",
         channel_name as "channelName", timestamp_seconds as "timestampSeconds", quote, note,
         created_at as "createdAt", updated_at as "updatedAt"
-      from notes where user_id = ${userId} and updated_at > ${since}
+      from notes where user_id = ${userId} and updated_at > ${sinceIsoText}
     `;
     const vocabulary = await this.sql`
       select id, term, translation, sentence, sentence_translation as "sentenceTranslation",
         video_id as "videoId", video_title as "videoTitle", timestamp_seconds as "timestampSeconds", status,
         created_at as "createdAt", updated_at as "updatedAt"
-      from vocabulary where user_id = ${userId} and updated_at > ${since}
+      from vocabulary where user_id = ${userId} and updated_at > ${sinceIsoText}
     `;
     return {
       notes: notes.map(rowToNote),
@@ -546,8 +717,8 @@ class NeonStore {
       select id, github_id as "githubId", github_login as "login", avatar_url as "avatarUrl"
       from users where id = ${userId}
     `;
-    const notes = await this.listNotes(userId);
-    const vocabulary = await this.listVocabulary(userId);
+    const notes = await this.listNotes(userId, MAX_EXPORT_ROWS);
+    const vocabulary = await this.listVocabulary(userId, MAX_EXPORT_ROWS);
     const reviews = await this.sql`
       select ri.vocabulary_id as "vocabularyId", ri.due_at as "dueAt",
         ri.interval_days as "intervalDays", ri.ease, ri.reps, ri.lapses
@@ -555,12 +726,34 @@ class NeonStore {
       join vocabulary v on v.id = ri.vocabulary_id
       where ri.user_id = ${userId} and v.user_id = ${userId}
     `;
+    const noteCount = await this.countRows("notes", userId);
+    const vocabularyCount = await this.countRows("vocabulary", userId);
     return {
-      user: users[0] || null,
+      user: users[0]
+        ? {
+            id: users[0].id,
+            githubId: users[0].githubId,
+            login: users[0].login,
+            avatarUrl: users[0].avatarUrl,
+          }
+        : null,
       notes,
       vocabulary,
       reviews,
+      // Report what was left out, so a truncated export is never silent.
+      truncated: {
+        notes: Math.max(0, noteCount - notes.length),
+        vocabulary: Math.max(0, vocabularyCount - vocabulary.length),
+      },
     };
+  }
+
+  /** Counts a user's rows in one of the two content tables. */
+  async countRows(table, userId) {
+    const rows = await this.sql`
+      select count(*) as count from ${table} where user_id = ${userId}
+    `;
+    return rows.length ? Number(rows[0].count) || 0 : 0;
   }
 
   async deleteUserData(userId) {
@@ -576,8 +769,11 @@ class NeonStore {
     await this.sql`
       delete from vocabulary where user_id = ${userId}
     `;
+    // The account row is kept as a revocation tombstone: bumping the token
+    // version invalidates every token issued before the deletion, so the
+    // deleted account can never act again.
     await this.sql`
-      delete from users where id = ${userId}
+      update users set token_version = token_version + 1 where id = ${userId}
     `;
     return Number(result[0].count) || 0;
   }
@@ -591,4 +787,13 @@ function createStore(env) {
   return new MemoryStore();
 }
 
-module.exports = { MemoryStore, NeonStore, createStore, applyGrade };
+module.exports = {
+  MemoryStore,
+  NeonStore,
+  createStore,
+  applyGrade,
+  parseSince,
+  MAX_LIST_ROWS,
+  MAX_EXPORT_ROWS,
+  MAX_INTERVAL_DAYS,
+};

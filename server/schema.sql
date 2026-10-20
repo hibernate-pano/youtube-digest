@@ -7,6 +7,9 @@ create table if not exists users (
   github_id bigint not null unique,
   github_login text not null,
   avatar_url text,
+  -- Bumped when the account is deleted, which invalidates every JWT that
+  -- was issued for it (the token carries the version it was signed with).
+  token_version integer not null default 0,
   created_at timestamptz not null default now()
 );
 
@@ -51,7 +54,7 @@ create table if not exists review_items (
   user_id bigint not null references users(id) on delete cascade,
   vocabulary_id uuid not null references vocabulary(id) on delete cascade,
   due_at timestamptz not null default now(),
-  interval_days integer not null default 0,
+  interval_days integer not null default 0 check (interval_days between 0 and 365),
   ease real not null default 2.5,
   reps integer not null default 0,
   lapses integer not null default 0,
@@ -59,3 +62,6 @@ create table if not exists review_items (
   unique (user_id, vocabulary_id)
 );
 create index if not exists review_due_idx on review_items (user_id, due_at);
+-- The foreign key on vocabulary_id has no index of its own, so deleting a
+-- vocabulary sequentially scans review_items.
+create index if not exists review_vocab_idx on review_items (vocabulary_id);

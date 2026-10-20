@@ -3,6 +3,12 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- The dashboard loads only same-origin scripts and styles and has no
+         inline handlers, so a strict policy costs it nothing. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; object-src 'none'"
+    />
     <title>YouTube Digest · My Dashboard</title>
     <link rel="stylesheet" href="/style.css" />
   </head>

@@ -78,7 +78,14 @@ function parseCookies(request) {
     if (index === -1) continue;
     const name = part.slice(0, index).trim();
     const value = part.slice(index + 1).trim();
-    cookies[name] = decodeURIComponent(value);
+    // A malformed percent-escape makes decodeURIComponent throw a URIError.
+    // Skip that cookie instead of turning the whole request into a 500; a
+    // broken cookie simply means the CSRF state does not match.
+    try {
+      cookies[name] = decodeURIComponent(value);
+    } catch {
+      // Ignore the undecodable cookie.
+    }
   }
   return cookies;
 }
@@ -91,6 +98,9 @@ function setCookie(name, value, options) {
   if (options.maxAgeSeconds !== undefined) {
     parts.push("Max-Age=" + options.maxAgeSeconds);
   }
+  // The CSRF state cookie must not travel in cleartext. `secure: false` is
+  // only for local development over plain http.
+  if (options.secure !== false) parts.push("Secure");
   return parts.join("; ");
 }
 

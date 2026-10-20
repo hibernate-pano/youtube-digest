@@ -51,6 +51,9 @@ function createFixture(name) {
       addNote(userId, fields) {
         return store.createNote(userId, fields);
       },
+      addUser(userId) {
+        return store.upsertUser({ githubId: userId, login: "u" + userId, avatarUrl: "" });
+      },
     };
   }
 
@@ -91,6 +94,10 @@ function createFixture(name) {
         }),
       );
       return Promise.resolve({ id: row.id, clientId: row.client_id, starred: !!row.starred });
+    },
+    addUser(userId) {
+      const row = sql.__fake.seedUser(userId);
+      return Promise.resolve(row);
     },
   };
 }
@@ -250,6 +257,151 @@ for (const name of ["MemoryStore", "NeonStore"]) {
     assert.equal(bobStillHasData.length, 1, "another account's vocabulary must survive a delete");
     const bobReviews = await f.store.listDueReviews(BOB);
     assert.equal(bobReviews.length, 1, "another account's review row must survive a delete");
+  });
+
+  test(`[${name}] updateNote never rewrites the client id`, async () => {
+    const f = createFixture(name);
+    const created = await f.addNote(ALICE, { clientId: "note_client_id", note: "original" });
+
+    const updated = await f.store.updateNote(ALICE, created.id, {
+      clientId: "hijacked_client_id",
+      note: "edited",
+    });
+    assert.ok(updated, "the owner must be able to update their note");
+    assert.equal(
+      updated.clientId,
+      "note_client_id",
+      "clientId is the sync identity key and must be immutable on edit",
+    );
+
+    const listed = await f.store.listNotes(ALICE);
+    assert.equal(listed[0].clientId, "note_client_id");
+  });
+
+  test(`[${name}] a sparse note update leaves unmentioned fields alone`, async () => {
+    const f = createFixture(name);
+    const created = await f.addNote(ALICE, {
+      clientId: "note_sparse",
+      note: "original",
+      videoTitle: "A title",
+      channelName: "A channel",
+      timestampSeconds: 42,
+      quote: "a quote",
+    });
+
+    const updated = await f.store.updateNote(ALICE, created.id, { note: "edited" });
+    assert.ok(updated, "the owner must be able to update their note");
+    assert.equal(updated.note, "edited");
+    assert.equal(updated.videoTitle, "A title", "an omitted field must survive the update");
+    assert.equal(updated.channelName, "A channel");
+    assert.equal(updated.timestampSeconds, 42);
+    assert.equal(updated.quote, "a quote");
+  });
+
+  test(`[${name}] a note update can move the note to another video`, async () => {
+    const f = createFixture(name);
+    const created = await f.addNote(ALICE, {
+      clientId: "note_video",
+      note: "text",
+      videoId: "abc123xyz",
+    });
+
+    // The extension sends the whole note on every push, videoId included, so
+    // the update path has to honour it. Otherwise the two stores disagree:
+    // one moves the note, the other keeps the old video.
+    const updated = await f.store.updateNote(ALICE, created.id, {
+      note: "text",
+      videoId: "zzz999yyy",
+    });
+    assert.ok(updated, "the owner must be able to update their note");
+    assert.equal(updated.videoId, "zzz999yyy", "the video id must be updated too");
+
+    const listed = await f.store.listNotes(ALICE);
+    assert.equal(listed[0].videoId, "zzz999yyy");
+  });
+
+  test(`[${name}] listNotes and listVocabulary expose the same public shape`, async () => {
+    const f = createFixture(name);
+    await f.addNote(ALICE, { clientId: "note_shape", note: "text" });
+    await f.addVocabulary(ALICE, { term: "shape" });
+
+    const notes = await f.store.listNotes(ALICE);
+    const vocabulary = await f.store.listVocabulary(ALICE);
+    assert.equal(notes.length, 1);
+    assert.equal(vocabulary.length, 1);
+
+    // The two stores must publish exactly the same key set: an extra
+    // `userId` leaks the internal account id, and a missing `starred`
+    // silently breaks the favorites feature in the local dev store.
+    assert.deepEqual(
+      Object.keys(notes[0]).sort(),
+      [
+        "channelName",
+        "clientId",
+        "createdAt",
+        "id",
+        "note",
+        "quote",
+        "starred",
+        "timestampSeconds",
+        "updatedAt",
+        "videoId",
+        "videoTitle",
+      ],
+      "listNotes must return the public note shape",
+    );
+    assert.deepEqual(
+      Object.keys(vocabulary[0]).sort(),
+      [
+        "createdAt",
+        "id",
+        "sentence",
+        "sentenceTranslation",
+        "status",
+        "term",
+        "timestampSeconds",
+        "translation",
+        "updatedAt",
+        "videoId",
+        "videoTitle",
+      ],
+      "listVocabulary must return the public vocabulary shape",
+    );
+    assert.ok(!("userId" in notes[0]), "the internal user id must not be published");
+    assert.ok(!("userId" in vocabulary[0]), "the internal user id must not be published");
+    assert.equal(notes[0].starred, false, "starred must always be present");
+  });
+
+  test(`[${name}] getSyncDelta rejects an unparseable since value`, async () => {
+    const f = createFixture(name);
+    await f.addNote(ALICE, { clientId: "note_delta", note: "text" });
+    await assert.rejects(
+      () => f.store.getSyncDelta(ALICE, "not-a-date"),
+      /since/i,
+      "an unparseable since value must be an error, not an empty delta",
+    );
+    const delta = await f.store.getSyncDelta(ALICE, "2000-01-01T00:00:00Z");
+    assert.equal(delta.notes.length, 1);
+  });
+
+  test(`[${name}] deleting the account bumps the token version`, async () => {
+    const f = createFixture(name);
+    await f.addUser(ALICE);
+    assert.equal(await f.store.getTokenVersion(ALICE), 0);
+    await f.store.deleteUserData(ALICE);
+    // The account row stays behind as a revocation tombstone, but its token
+    // version has moved on: every token issued before the deletion must stop
+    // authenticating.
+    const version = await f.store.getTokenVersion(ALICE);
+    assert.notEqual(
+      version,
+      0,
+      "a deleted account must not keep an authenticating token version",
+    );
+    assert.ok(
+      version === null || version === undefined || Number(version) > 0,
+      "the token version must either be gone or bumped past the pre-deletion value",
+    );
   });
 }
 

@@ -1,5 +1,6 @@
 const { json, HttpError } = require("../middleware");
 const { parseReviewGrade } = require("../validate");
+const { readObjectBody } = require("./notes");
 
 async function listDueReviews(ctx) {
   const url = new URL(ctx.request.url);
@@ -9,8 +10,10 @@ async function listDueReviews(ctx) {
 }
 
 async function submitReview(ctx) {
-  const input = await ctx.request.json().catch(() => null);
-  const grade = parseReviewGrade(input && input.grade);
+  // A body that is not JSON at all is a different failure from a body whose
+  // grade is invalid. The first is a client bug, the second is a bad value.
+  const input = await readObjectBody(ctx);
+  const grade = parseReviewGrade(input.grade);
   if (grade === null) {
     throw new HttpError(400, "grade must be an integer from 0 to 5.");
   }
