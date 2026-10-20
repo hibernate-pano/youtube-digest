@@ -450,6 +450,22 @@ MUTATIONS = [
             ),
         ],
     },
+    {
+        "name": "M23 the error button does nothing",
+        "file": "sidepanel.js",
+        "hunks": [
+            (
+                """  const action = options.action || retryTranscript;""",
+                """  const action = options.action || (() => {});""",
+            )
+        ],
+        "expect": [
+            (
+                "panel-feedback.test.js",
+                "a failure the panel does not know still leaves a way out",
+            ),
+        ],
+    },
 ]
 
 

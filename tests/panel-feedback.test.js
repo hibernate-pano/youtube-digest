@@ -942,3 +942,37 @@ test("an empty transcript can be tried again as well", async () => {
     "the retry was answered from what the worker remembers, so it did nothing",
   );
 });
+
+test("a failure the panel does not know still leaves a way out", async () => {
+  const panel = createPanel({
+    sendMessageImpl: workerRouter({
+      fetchTranscript: {
+        success: false,
+        error: "A_CODE_WE_DO_NOT_KNOW",
+        message: "Something the worker said.",
+      },
+    }),
+  });
+  await panel.boot();
+  await panel.helpers.startDigest(
+    "videoA",
+    "https://www.youtube.com/watch?v=videoA",
+  );
+
+  // A code with no sentence of its own still gets a screen with a button
+  // that does something.
+  assert.equal(panel.el("errorBtn").textContent, "Try Again");
+
+  await panel.click(panel.el("errorBtn"));
+  await flush();
+
+  const afterRetry = panel.sentMessages.filter(
+    (message) => message.action === "fetchTranscript",
+  );
+  assert.equal(afterRetry.length, 2, "the retry never reached the worker");
+  assert.equal(
+    afterRetry[1].force,
+    true,
+    "the retry was answered from what the worker remembers, so it did nothing",
+  );
+});

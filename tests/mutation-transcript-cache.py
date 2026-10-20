@@ -256,8 +256,8 @@ MUTATIONS = [
         "file": "sidepanel.js",
         "hunks": [
             (
-                """      startDigest(currentVideoId, currentVideoUrl, { force: true });""",
-                """      startDigest(currentVideoId, currentVideoUrl);""",
+                """  await startDigest(currentVideoId, currentVideoUrl, { force: true });""",
+                """  await startDigest(currentVideoId, currentVideoUrl);""",
             )
         ],
         "expect": [

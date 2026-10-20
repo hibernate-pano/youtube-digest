@@ -1771,16 +1771,11 @@ function setupEventListeners() {
     hideToast();
   });
 
-  // Error retry
+  // Error retry. The action belongs to the screen that is showing, so the
+  // button does exactly what the screen promised.
   document.getElementById("errorBtn").addEventListener("click", () => {
     if (errorAction) {
       errorAction();
-      return;
-    }
-    if (currentVideoId) {
-      // The user pressed the button, so the worker has to look the video up
-      // again instead of answering with the failure it remembers.
-      startDigest(currentVideoId, currentVideoUrl, { force: true });
     }
   });
 
@@ -3287,15 +3282,22 @@ function updateLoading(title, subtitle) {
 }
 
 function showError(title, message, options = {}) {
-  errorAction = options.action || null;
+  // Every error screen has exactly one action, and the button says what that
+  // action does. The default is to look the video up again, because a
+  // failure the user cannot retry is a dead end.
+  const action = options.action || retryTranscript;
+  errorAction = () => {
+    void action();
+  };
   showState("error");
   const errorTitle = title || panelCopy("errorTitle");
   const errorMessage = message || panelCopy("errorMessage");
   document.getElementById("errorTitle").textContent = errorTitle;
   document.getElementById("errorMessage").textContent = errorMessage;
+  // The label belongs to the screen, not to the shape of the options: a
+  // screen that opens the settings says so, a screen that retries says so.
   document.getElementById("errorBtn").textContent =
-    options.buttonLabel ||
-    (options.action ? panelCopy("openSettings") : panelCopy("tryAgain"));
+    options.buttonLabel || panelCopy("tryAgain");
 
   // A failure with no way out is a dead end. The secondary action is only
   // shown when the user has somewhere else to go.
@@ -3406,9 +3408,8 @@ function showTranscriptError(result) {
   // the same thing on every screen, whatever went wrong.
   const retry = {
     buttonLabel: panelCopy("tryAgain"),
-    action: () => {
-      void retryTranscript();
-    },
+    // The screen's own action is the retry, so the button needs no action of
+    // its own here.
     // A failure the user cannot get out of is a dead end. Another video is
     // one click away in the browser, and the panel follows it there.
     secondaryAction: goToWelcome,
@@ -3433,6 +3434,7 @@ function showTranscriptError(result) {
         panelCopy("noCaptionsNoKey"),
         {
           action: openOptions,
+          buttonLabel: panelCopy("openSettings"),
           secondaryAction: goToWelcome,
         },
       );
@@ -3441,7 +3443,11 @@ function showTranscriptError(result) {
       showError(
         panelCopy("invalidApiKeyTitle"),
         panelCopy("invalidSupadataKey"),
-        { action: openOptions, secondaryAction: goToWelcome },
+        {
+          action: openOptions,
+          buttonLabel: panelCopy("openSettings"),
+          secondaryAction: goToWelcome,
+        },
       );
       return;
     case "OUT_OF_CREDITS":
@@ -3788,9 +3794,10 @@ async function triggerAnalysis() {
 }
 
 /**
- * Shows why the analysis failed. The provider already sends a readable
- * message, so the panel shows that instead of a raw error code, and offers
- * a way out when a key is missing.
+ * Shows why the analysis failed. The worker names the failure with a code,
+ * and the panel turns that code into a sentence in the user's language. A
+ * message the provider sent itself is still shown as it is, because the panel
+ * has no translation of it.
  */
 function renderAnalysisFailure(result) {
   const chapterList = document.getElementById("chapterList");
