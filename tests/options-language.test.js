@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const vm = require("node:vm");
 
 const options = require("../options.js");
 
@@ -279,7 +280,9 @@ test("the static HTML fallback says the same thing as the runtime copy", () => {
     const text = inner.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
     if (!text) continue;
 
-    const expected = options.translate("en", key);
+    // Some copy names another part of the interface ({tabOverview}), so it
+    // is resolved with the same parameters the page uses at runtime.
+    const expected = options.translate("en", key, options.i18nParams("en"));
     assert.ok(expected, `Missing English copy for ${key}`);
     // Some strings carry a trailing space so a link that follows them as a
     // sibling keeps a visual gap. Compare on collapsed whitespace.
@@ -302,6 +305,46 @@ test("the static HTML fallback says the same thing as the runtime copy", () => {
     checked >= 20,
     `only ${checked} static strings were compared - the matcher probably stopped working`,
   );
+});
+
+test("the settings page names the panel's tabs the way the panel names them", () => {
+  // The settings page walks the user through the panel, so it refers to the
+  // panel's tabs by name. Those names are localized, and the two pages are
+  // separate bundles with no shared copy table — so the two can drift apart
+  // and leave a Chinese instruction pointing at a tab that does not exist.
+  const sidepanel = read("sidepanel.js");
+  const table = sidepanel.match(/const PANEL_COPY = \{[\s\S]*?\n\};/);
+  assert.ok(table, "the panel needs a copy table");
+  // The literal is evaluated, so this compares the real values rather than
+  // the shape of the source.
+  const panelCopy = vm.runInNewContext(
+    `(${table[0].replace(/^const PANEL_COPY = /, "").replace(/;$/, "")})`,
+  );
+
+  for (const key of ["tabTranscript", "tabOverview", "tabNotes"]) {
+    for (const language of ["en", "zh-CN"]) {
+      assert.equal(
+        options.translate(language, key, options.i18nParams(language)),
+        panelCopy[language][key],
+        `the settings page and the side panel disagree on ${key} in ${language}`,
+      );
+    }
+  }
+});
+
+test("the Chinese copy names interface elements in Chinese, not in English", () => {
+  // A Chinese instruction that says "click Note" while the button reads
+  // 笔记 points at nothing the user can find. Product names stay in Latin
+  // script; everything the user has to locate must not.
+  const chinese = options.COPY["zh-CN"];
+  for (const key of ["setupGuideStep3"]) {
+    const value = options.translate("zh-CN", key, options.i18nParams("zh-CN"));
+    assert.doesNotMatch(
+      value,
+      /\b(Overview|Transcript|Notes|Note)\b/,
+      `the Chinese copy for ${key} still names an interface element in English: ${value}`,
+    );
+  }
 });
 
 test("every notes namespace is recognised, whatever account it belongs to", () => {
