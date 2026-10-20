@@ -868,11 +868,16 @@ async function getPlayerVideoDetails(tabId) {
  * The third one matters because a page that has not started playing yet has
  * no player object but does have the script tag.
  *
+ * The video id comes back with the tracks, from the same player response.
+ * The tab can be showing a different video than the one the panel asked for
+ * - the user navigated while the request was on the wire - and reading that
+ * video's captions would attach the wrong transcript to the right title.
+ *
  * Runs in the page's MAIN world, where YouTube's player object lives. A
  * content script lives in an isolated world and cannot see it.
  *
  * @param {number} tabId the YouTube tab to read
- * @returns {Promise<Array<{baseUrl: string, languageCode: string}>|null>}
+ * @returns {Promise<{videoId: string, tracks: Array<{baseUrl: string, languageCode: string}>}|null>}
  */
 async function readCaptionTracksFromTab(tabId) {
   try {
@@ -922,12 +927,17 @@ async function readCaptionTracksFromTab(tabId) {
               ?.captionTracks;
           if (!Array.isArray(tracks) || tracks.length === 0) return null;
 
-          return tracks
-            .filter((track) => typeof track.baseUrl === "string" && track.baseUrl)
-            .map((track) => ({
-              baseUrl: track.baseUrl,
-              languageCode: track.languageCode || "",
-            }));
+          return {
+            videoId: String(playerResponse?.videoDetails?.videoId || ""),
+            tracks: tracks
+              .filter(
+                (track) => typeof track.baseUrl === "string" && track.baseUrl,
+              )
+              .map((track) => ({
+                baseUrl: track.baseUrl,
+                languageCode: track.languageCode || "",
+              })),
+          };
         } catch (error) {
           return null;
         }
@@ -1114,14 +1124,39 @@ async function fetchTimedtextTranscript(baseUrl, language) {
  * local path is a bonus, never the only path: YouTube can change its page
  * internals at any time, and a video can have no caption track at all.
  *
+ * The tab must be showing the video that was asked for. The user can
+ * navigate while the request is on the wire, and the captions of the video
+ * they navigated to would otherwise be handed over as if they belonged to
+ * the video the panel is showing. A wrong transcript under the right title
+ * is worse than no transcript at all.
+ *
  * @param {number} tabId the YouTube tab to read
+ * @param {string} expectedVideoId the video the caller wants
  * @returns {Promise<Object|null>} the transcript, or null
  */
-async function tryLocalTranscript(tabId) {
+async function tryLocalTranscript(tabId, expectedVideoId) {
   if (!tabId) return null;
-  const tracks = await readCaptionTracksFromTab(tabId);
-  if (!tracks) return null;
-  const track = pickCaptionTrack(tracks);
+  const captionTracks = await readCaptionTracksFromTab(tabId);
+  if (!captionTracks) return null;
+
+  // The page tells us which video it is showing. When it does not say, the
+  // page is in a state we do not understand, and guessing is how the wrong
+  // transcript gets attached to the right video.
+  const pageVideoId = String(captionTracks.videoId || "");
+  if (!pageVideoId) {
+    debugLog(
+      "[YouTube Digest BG] The page did not say which video it is showing",
+    );
+    return null;
+  }
+  if (expectedVideoId && pageVideoId !== expectedVideoId) {
+    debugLog(
+      `[YouTube Digest BG] The tab is showing ${pageVideoId}, not ${expectedVideoId}`,
+    );
+    return null;
+  }
+
+  const track = pickCaptionTrack(captionTracks.tracks);
   if (!track) return null;
   return await fetchTimedtextTranscript(
     track.baseUrl,
@@ -1143,7 +1178,7 @@ async function tryLocalTranscript(tabId) {
  */
 async function handleFetchTranscriptLocalFirst(videoId, tabId) {
   if (tabId) {
-    const local = await tryLocalTranscript(tabId);
+    const local = await tryLocalTranscript(tabId, videoId);
     if (local?.success) {
       debugLog("[YouTube Digest BG] Transcript read locally:", videoId);
       return { ...local, source: "local" };

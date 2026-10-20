@@ -156,9 +156,10 @@ function loadWorker({
  * The function the worker injects looks for the player response in three
  * places. The test plants it in the first one, which is the live player.
  */
-function installFakePage(sandbox, captionTracks) {
+function installFakePage(sandbox, captionTracks, videoId = "dQw4w9WgXcQ") {
   const page = {
     getPlayerResponse: () => ({
+      videoDetails: { videoId },
       captions: captionTracks
         ? {
             playerCaptionsTracklistRenderer: {
@@ -266,6 +267,67 @@ test("the speaker marker is not part of the caption", async () => {
   const result = await worker.helpers.handleFetchTranscriptLocalFirst("dQw4w9WgXcQ", 7);
 
   assert.equal(result.transcript[0].text, "A caption");
+});
+
+test("the captions of a different video are not used", async () => {
+  const worker = loadWorker();
+  // The user navigated while the request was on the wire. The tab is now
+  // showing another video.
+  installFakePage(
+    worker.sandbox,
+    [
+      {
+        baseUrl: "https://www.youtube.com/api/timedtext?v=other",
+        languageCode: "en",
+      },
+    ],
+    "aaaaaaaaaaa",
+  );
+
+  const result = await worker.helpers.handleFetchTranscriptLocalFirst(
+    "dQw4w9WgXcQ",
+    7,
+  );
+
+  assert.notEqual(
+    result.source,
+    "local",
+    "another video's captions were handed over as this video's transcript",
+  );
+  assert.equal(
+    worker.requests.filter((request) => request.url.includes("timedtext")).length,
+    0,
+    "the other video's captions were fetched at all",
+  );
+});
+
+test("a page that does not say which video it is showing is not trusted", async () => {
+  const worker = loadWorker();
+  // The page is playing something, but it does not say what. The video id
+  // is empty, so it cannot be checked against the one that was asked for.
+  installFakePage(
+    worker.sandbox,
+    [
+      {
+        baseUrl: "https://www.youtube.com/api/timedtext?v=abc",
+        languageCode: "en",
+      },
+    ],
+    "",
+  );
+
+  const result = await worker.helpers.handleFetchTranscriptLocalFirst("", 7);
+
+  assert.notEqual(
+    result.source,
+    "local",
+    "captions of an unidentified page were used",
+  );
+  assert.equal(
+    worker.requests.filter((request) => request.url.includes("timedtext")).length,
+    0,
+    "the unidentified page's captions were fetched at all",
+  );
 });
 
 /* ============================================================
