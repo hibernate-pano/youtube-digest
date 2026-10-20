@@ -9,6 +9,7 @@ Produces chapters covering the whole video and 3-5 key quotes with timestamps.
 You're my executive assistant. I'm interested in this YouTube video. Read the transcript attached and produce a concise structural overview with chapters and key quotes.
 
 You must provide:
+- A SUMMARY: 2-4 sentences that say what this video is actually about and what the speaker concludes. No preamble, no "this video discusses" — start with the substance. It is the first thing the reader sees, so it has to stand on its own.
 - Chapters with timestamps that COVER THE ENTIRE VIDEO from start to finish. This video runs until {durationFormatted}. Use your own judgment for how many chapters there should be and where the natural topic shifts happen — make as many or as few as the content genuinely calls for. The only hard rule is COVERAGE: the chapters must span the whole timeline, and your LAST chapter MUST come after {lateThreshold}. Do NOT stop partway through or cluster all the chapters near the beginning — the later parts of the video need chapters too.
 - 3-5 key quotes from the transcript with their timestamps
 
@@ -60,6 +61,7 @@ For CHAPTERS: Find where a topic begins, use that line's timestamp
 For QUOTES: Find the line containing the quote, use that line's timestamp
 Output JSON (no markdown fences):
 {
+  "summary": "2-4 sentences about what the video is about and what it concludes.",
   "chapters": [
     {"title": "Title", "timestamp": "0:00", "timestampSeconds": 0, "summary": "What this section covers"}
   ],
