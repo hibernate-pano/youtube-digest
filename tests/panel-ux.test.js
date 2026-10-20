@@ -902,6 +902,34 @@ test("the panel discloses that it spends the user's own credits", () => {
   assert.match(html, /provider balance/);
 });
 
+test("the panel does not claim every transcript costs a credit", () => {
+  // Transcripts are read out of the page now, so the common case is free.
+  // A cost note that says otherwise is a false statement on screen.
+  const html = read("sidepanel.html");
+  const source = read("sidepanel.js");
+
+  assert.doesNotMatch(
+    html,
+    /Each transcript lookup uses 1/,
+    "the static page still says every lookup costs a credit",
+  );
+  assert.doesNotMatch(
+    source,
+    /Each transcript lookup uses 1/,
+    "the panel still says every lookup costs a credit",
+  );
+  assert.match(
+    html,
+    /cost nothing/i,
+    "the page does not say the usual case is free",
+  );
+  assert.match(
+    source,
+    /cost nothing/i,
+    "the panel does not say the usual case is free",
+  );
+});
+
 test("the panel copy is complete in both languages", () => {
   const source = read("sidepanel.js");
   const table = source.match(/const PANEL_COPY = \{[\s\S]*?\n\};/);

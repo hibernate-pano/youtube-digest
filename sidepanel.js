@@ -99,11 +99,12 @@ let videoTicket = 0;
 // same video is a new run, but the work it does is still valid.
 let digestRunCount = 0;
 
-// The panel pays for every transcript lookup (one Supadata credit) and for
-// every analysis (the user's own provider balance), so the same work must
-// never be paid for twice. These ledgers hold one entry per video: while the
-// request is on the wire a second run joins it, and once it settled with a
-// result the result is kept, so a later run reuses it instead of paying again.
+// The panel pays for every analysis (the user's own provider balance), and
+// for a transcript lookup whenever the local caption read failed and the
+// paid fallback had to run. The same work must never be paid for twice.
+// These ledgers hold one entry per video: while the request is on the wire
+// a second run joins it, and once it settled with a result the result is
+// kept, so a later run reuses it instead of paying again.
 const transcriptLedger = new Map(); // videoId -> paid request
 const analysisLedger = new Map(); // videoId -> paid request
 
@@ -250,7 +251,7 @@ const PANEL_COPY = {
     noNotesYet:
       "No notes saved yet. Hover over a video and click Note to save.",
     costDisclosure:
-      "AI calls use your own provider balance. Each transcript lookup uses 1 Supadata credit.",
+      "AI calls use your own provider balance. Transcripts are read out of the page, so they cost nothing; only the fallback uses a Supadata credit.",
     translationUnavailable: "Translation unavailable.",
     translationFailed: "Translation failed.",
     translationWaiting: "Waiting for translation...",
@@ -472,7 +473,7 @@ const PANEL_COPY = {
     noNotesYet:
       "还没有保存任何笔记。把鼠标移到视频上并点击视频上的「笔记」按钮即可保存。",
     costDisclosure:
-      "AI 调用使用你自己的服务额度。每次字幕查询会消耗 1 个 Supadata 额度。",
+      "AI 调用使用你自己的服务额度。字幕直接从页面里读，不花钱；只有兜底那一次会消耗 1 个 Supadata 额度。",
     translationUnavailable: "翻译不可用。",
     translationFailed: "翻译失败。",
     translationWaiting: "等待翻译...",
@@ -1993,8 +1994,9 @@ async function startDigest(videoId, videoUrl) {
   showState("loading");
   updateLoading(panelCopy("fetchingTranscript"), panelCopy("extractingCaptions"));
 
-  // A transcript lookup costs one Supadata credit. The ledger makes sure
-  // the panel pays for it once, no matter how many runs ask for it.
+  // A transcript lookup can cost a Supadata credit, when the local caption
+  // read did not work and the paid fallback had to run. The ledger makes
+  // sure the panel pays for it once, no matter how many runs ask for it.
   const transcriptRequest = startPaidRequest(transcriptLedger, videoId, () =>
     chrome.runtime.sendMessage({
       action: "fetchTranscript",
@@ -2463,8 +2465,9 @@ function renderAnalysisResults(analysis) {
  * Saves a key quote as a timestamped note.
  *
  * The quote itself travels with the request. Without it the background would
- * have to look the transcript up again - another Supadata credit - and clean
- * up a different line with the AI, throwing the quote the user picked away.
+ * have to look the transcript up again - another lookup, and a credit if the
+ * fallback has to run - and clean up a different line with the AI, throwing
+ * the quote the user picked away.
  */
 async function saveQuoteAsNote(quote, btn) {
   if (!currentVideoId) return;
@@ -4956,7 +4959,8 @@ async function saveQuickNote() {
       channelName: currentChannelName,
       // The panel already holds the exact words, so the background stores
       // them as they are. Without this the background would fetch the
-      // transcript again (a credit) and pay an AI call to rewrite them.
+      // transcript again (a credit if the fallback has to run) and pay an
+      // AI call to rewrite them.
       selectedText: text,
     });
 
