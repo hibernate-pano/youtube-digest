@@ -578,7 +578,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           hasAiKey: !!getActiveAiKey(settings),
         }),
       )
-      .catch((error) => sendResponse({ error: error.message }));
+      // Keep the shape stable: a caller must be able to tell a broken
+      // extension apart from a missing key.
+      .catch((error) =>
+        sendResponse({
+          hasSupadataKey: false,
+          hasAiKey: false,
+          error: error.message,
+        }),
+      );
     return true;
   }
 
@@ -596,15 +604,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // IMPORTANT: we call setOptions + open synchronously (no await between them)
     // to preserve the user gesture context. Chrome requires sidePanel.open()
     // to be called within a user gesture — awaiting anything first can expire it.
-    if (tabId) {
-      chrome.sidePanel.setOptions({
-        tabId,
-        path: "sidepanel.html",
-        enabled: true,
-      });
-      chrome.sidePanel
-        .open({ tabId })
+    const openForTab = (targetTabId) => {
+      try {
+        chrome.sidePanel.setOptions({
+          tabId: targetTabId,
+          path: "sidepanel.html",
+          enabled: true,
+        });
+        return Promise.resolve(chrome.sidePanel.open({ tabId: targetTabId }));
+      } catch (error) {
+        return Promise.reject(error);
+      }
+    };
+
+    // The caller (the Digest button on the page) needs to know whether the
+    // panel really opened. Reporting success before the promise settles
+    // turned every failure into a button that did nothing.
+    const respond = (opening) => {
+      opening
         .then(() => {
+          sendResponse({ success: true });
           // Broadcast to side panel to start digest (in case it's already open)
           setTimeout(() => {
             chrome.runtime
@@ -614,30 +633,36 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         })
         .catch((err) => {
           console.error("[YouTube Digest BG] openSidePanel error:", err);
+          sendResponse({
+            success: false,
+            error: err?.message || "Could not open the side panel.",
+          });
         });
+    };
+
+    if (tabId) {
+      respond(openForTab(tabId));
     } else {
       // Fallback: find the active tab
       chrome.tabs
         .query({ active: true, lastFocusedWindow: true })
         .then((tabs) => {
           if (tabs[0]) {
-            chrome.sidePanel.setOptions({
-              tabId: tabs[0].id,
-              path: "sidepanel.html",
-              enabled: true,
-            });
-            chrome.sidePanel.open({ tabId: tabs[0].id }).catch((err) => {
-              console.error(
-                "[YouTube Digest BG] openSidePanel fallback error:",
-                err,
-              );
-            });
+            respond(openForTab(tabs[0].id));
+            return;
           }
-        });
+          sendResponse({ success: false, error: "No active tab to open." });
+        })
+        .catch((err) =>
+          sendResponse({
+            success: false,
+            error: err?.message || "Could not find the active tab.",
+          }),
+        );
     }
 
-    sendResponse({ success: true });
-    return false;
+    // Keep the message channel open for the asynchronous response.
+    return true;
   }
 
   // Relay messages from side panel to content script
@@ -835,6 +860,14 @@ async function handleFetchTranscript(videoId) {
           success: false,
           error: "NO_TRANSCRIPT",
           message: "No subtitles found for this video.",
+        };
+      }
+      if (response.status === 402) {
+        return {
+          success: false,
+          error: "OUT_OF_CREDITS",
+          message:
+            "Your Supadata credits are exhausted. Add credits at dash.supadata.ai.",
         };
       }
       if (response.status === 429) {
@@ -1223,14 +1256,7 @@ function validateAndFixTimestamps(analysis, maxSeconds) {
     .filter(Boolean)
     .sort((a, b) => a.timestampSeconds - b.timestampSeconds);
 
-  const keyMoments = (
-    Array.isArray(analysis?.keyMoments) ? analysis.keyMoments : []
-  )
-    .map(safeSeconds)
-    .filter((seconds) => seconds !== null)
-    .slice(0, 100);
-
-  return { chapters, keyQuotes, keyMoments };
+  return { chapters, keyQuotes };
 }
 
 // ============================================================
@@ -1270,6 +1296,21 @@ async function handleGetVideoInfo(tabId) {
 // ============================================================
 
 /**
+ * Builds a note id that cannot collide.
+ *
+ * The id is the cloud sync key (unique per user), so two notes saved in the
+ * same millisecond used to overwrite each other silently: Date.now() alone
+ * only has millisecond resolution.
+ */
+function createNoteId() {
+  const random =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID().slice(0, 8)
+      : Math.random().toString(16).slice(2, 10).padEnd(8, "0");
+  return `note_${Date.now()}_${random}`;
+}
+
+/**
  * Saves a note at a timestamp. Exact selected text is stored directly.
  * Other note requests find the relevant transcript line and clean it up.
  */
@@ -1294,7 +1335,7 @@ async function handleSaveNote(
       const minutes = Math.floor(safeTimestamp / 60);
       const seconds = safeTimestamp % 60;
       const note = {
-        id: `note_${Date.now()}`,
+        id: createNoteId(),
         videoId,
         videoTitle:
           typeof videoTitle === "string"
@@ -1424,7 +1465,7 @@ async function handleSaveNote(
 
     // Create the note object
     const note = {
-      id: `note_${Date.now()}`,
+      id: createNoteId(),
       videoId: videoId,
       videoTitle:
         typeof videoTitle === "string"
@@ -1466,7 +1507,9 @@ async function cleanupNoteText(
   videoTitle,
 ) {
   const settings = await getSettings();
-  if (!settings.aiApiKey) {
+  // The active provider owns the key. Checking the DeepSeek field only meant
+  // that a MiniMax or OpenCode Go user never got their notes cleaned up.
+  if (!getActiveAiKey(settings)) {
     return [beforeText, targetText, afterText].filter(Boolean).join(" ");
   }
 
@@ -1892,6 +1935,9 @@ globalThis.__YTD_TRANSLATION_TESTING__ = {
   handleSubmitReview,
   closePanelForTab,
   updatePanelForTab,
+  handleFetchTranscript,
+  cleanupNoteText,
+  createNoteId,
 };
 
 // Persistent OAuth completion listener. The service worker may be suspended

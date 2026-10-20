@@ -6,8 +6,8 @@
  *
  * It handles:
  * 1. Extracting video info (title, channel name) from the page
- * 2. Injecting "key moment" markers onto YouTube's progress bar
- * 3. Adding a "Digest" button to YouTube's action bar (next to Share/Save)
+ * 2. Adding a "Digest" button to YouTube's action bar (next to Share/Save)
+ * 3. Adding a timestamped "Note" button to the player controls
  *
  * Think of it like a robot sitting inside the YouTube tab,
  * reading the page and making small visual changes.
@@ -119,7 +119,6 @@ if (document.readyState === "loading") {
 /**
  * Listen for messages from the side panel or background script.
  * When they ask for video info, we read it from the page.
- * When they send key moments, we highlight them on the progress bar.
  */
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   debugLog("[YouTube Digest Content] Received message:", message.action, message);
@@ -130,12 +129,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     debugLog("[YouTube Digest Content] Returning video info:", info);
     sendResponse(info);
     return false; // Synchronous response
-  }
-
-  if (message.action === "highlightMoments") {
-    // Key moment markers disabled — chapters are shown in the side panel only.
-    sendResponse({ success: true });
-    return false;
   }
 
   if (message.action === "getCurrentTime") {
@@ -232,7 +225,14 @@ function createDigestButton() {
   digestButton.id = "ytd-digest-button";
   digestButton.type = "button";
   digestButton.setAttribute("aria-label", "Open YouTube Digest");
-  digestButton.innerHTML = `<span class="ytd-digest-label">Digest</span>`;
+  // The label changes while the panel opens, so screen readers are told
+  // about the state change instead of only the new text.
+  digestButton.setAttribute("aria-live", "polite");
+
+  const label = document.createElement("span");
+  label.className = "ytd-digest-label";
+  label.textContent = "Digest";
+  digestButton.appendChild(label);
 
   // Style the button — rounded pill in our terracotta accent, sized to sit
   // comfortably among YouTube's native action buttons.
@@ -271,6 +271,11 @@ function createDigestButton() {
     digestButton.style.transform = "scale(1)";
   });
 
+  const resetButton = () => {
+    label.textContent = "Digest";
+    digestButton.disabled = false;
+  };
+
   // Click handler — open the side panel
   digestButton.addEventListener("click", async (e) => {
     e.preventDefault();
@@ -278,14 +283,28 @@ function createDigestButton() {
 
     debugLog("[YouTube Digest] Digest button clicked");
 
-    // Send message to background script to open side panel
+    // Give the button a visible state. Chrome only allows sidePanel.open()
+    // inside a user gesture, so the request can fail. Without a state the
+    // user clicks a terracotta button and nothing happens at all.
+    label.textContent = "Opening…";
+    digestButton.disabled = true;
+
     try {
       const result = await chrome.runtime.sendMessage({
         action: "openSidePanel",
       });
       debugLog("[YouTube Digest] openSidePanel response:", result);
+      if (result && result.success === false) {
+        throw new Error(result.error || "Could not open the side panel.");
+      }
+      resetButton();
     } catch (err) {
       console.error("[YouTube Digest] Failed to open side panel:", err);
+      resetButton();
+      showToast(
+        "Could not open the panel",
+        "Click the YouTube Digest icon in the Chrome toolbar to open the side panel.",
+      );
     }
   });
 
@@ -631,22 +650,30 @@ async function saveCurrentNote() {
 }
 
 /**
- * Shows a toast notification when a note is saved.
+ * Shows a toast notification in the bottom-right corner of the page.
+ * Every toast on the page uses this builder so they look the same.
  */
-function showNoteSavedToast(note) {
+function showToast(
+  title,
+  body,
+  {
+    id = "ytd-toast",
+    subtitle = "",
+    footerHtml = "",
+    dismissAfter = 5000,
+  } = {},
+) {
   // Remove existing toast
-  const existing = document.getElementById("ytd-note-toast");
+  const existing = document.getElementById(id);
   if (existing) existing.remove();
 
   const toast = document.createElement("div");
-  toast.id = "ytd-note-toast";
+  toast.id = id;
   toast.innerHTML = `
-    <div style="font-weight: 700; margin-bottom: 6px; color: #c8674f;">Note saved</div>
-    <div style="font-size: 12px; color: #6b6258; margin-bottom: 8px;">${escapeHtmlForContent(note.timestamp)} — ${escapeHtmlForContent(note.videoTitle)}</div>
-    <div style="font-size: 13px; line-height: 1.55; color: #2e2a24;">"${escapeHtmlForContent(note.text)}"</div>
-    <div style="margin-top: 10px; font-size: 11px;">
-      <a href="${escapeHtmlForContent(note.timestampedUrl)}" style="color: #c8674f; font-weight: 600; text-decoration: none;">Copy link</a>
-    </div>
+    <div style="font-weight: 700; margin-bottom: 6px; color: #c8674f;">${escapeHtmlForContent(title)}</div>
+    ${subtitle ? `<div style="font-size: 12px; color: #6b6258; margin-bottom: 8px;">${escapeHtmlForContent(subtitle)}</div>` : ""}
+    <div style="font-size: 13px; line-height: 1.55; color: #2e2a24;">${escapeHtmlForContent(body)}</div>
+    ${footerHtml}
   `;
 
   toast.style.cssText = `
@@ -674,6 +701,37 @@ function showNoteSavedToast(note) {
   `;
   document.head.appendChild(style);
 
+  document.body.appendChild(toast);
+
+  // Auto-dismiss after 5 seconds
+  if (dismissAfter > 0) {
+    setTimeout(() => {
+      toast.style.animation = "ytdSlideIn 0.3s ease reverse";
+      setTimeout(() => toast.remove(), 300);
+    }, dismissAfter);
+  }
+
+  return toast;
+}
+
+/**
+ * Shows a toast notification when a note is saved.
+ */
+function showNoteSavedToast(note) {
+  const toast = showToast(
+    "Note saved",
+    `"${note.text}"`,
+    {
+      id: "ytd-note-toast",
+      subtitle: `${note.timestamp} — ${note.videoTitle}`,
+      footerHtml: `
+        <div style="margin-top: 10px; font-size: 11px;">
+          <a href="${escapeHtmlForContent(note.timestampedUrl)}" style="color: #c8674f; font-weight: 600; text-decoration: none;">Copy link</a>
+        </div>
+      `,
+    },
+  );
+
   // Copy link handler
   toast.querySelector("a").addEventListener("click", async (e) => {
     e.preventDefault();
@@ -684,14 +742,6 @@ function showNoteSavedToast(note) {
       console.error("Copy failed:", err);
     }
   });
-
-  document.body.appendChild(toast);
-
-  // Auto-dismiss after 5 seconds
-  setTimeout(() => {
-    toast.style.animation = "ytdSlideIn 0.3s ease reverse";
-    setTimeout(() => toast.remove(), 300);
-  }, 5000);
 }
 
 // ============================================================
@@ -730,28 +780,6 @@ function extractVideoInfo() {
     duration: videoElement?.duration || 0,
     description: descriptionElement?.textContent?.trim() || "",
   };
-}
-
-// ============================================================
-// PROGRESS BAR KEY MOMENTS
-// ============================================================
-
-/**
- * Adds colored marker dots to YouTube's video progress bar
- * at the positions of key moments identified by the AI provider.
- *
- * How it works:
- * - YouTube's progress bar is a <div> element with a known class
- * - We calculate each moment's position as a percentage of total duration
- * - We inject small colored <div> elements at those positions
- * - The markers are absolutely positioned on top of the progress bar
- *
- * This is a "bonus feature" — it gives you a visual preview
- * of where the good stuff is in the video.
- */
-function highlightKeyMoments(moments, videoDuration) {
-  // Disabled: no timeline markers. Chapters live only in the side panel.
-  return;
 }
 
 // ============================================================
@@ -801,10 +829,6 @@ function escapeHtmlForContent(text) {
  * we clean up old markers and re-inject the button.
  */
 document.addEventListener("yt-navigate-finish", () => {
-  // Clean up old key moment markers when navigating to a new video
-  const existingMarkers = document.querySelectorAll(".ytd-key-moment-markers");
-  existingMarkers.forEach((m) => m.remove());
-
   // Remove old buttons (they will be re-injected for the new video)
   document
     .querySelectorAll("#ytd-digest-button")
@@ -828,8 +852,10 @@ document.addEventListener("yt-navigate-finish", () => {
   }
 
   // Remove any toasts
-  const existingToast = document.getElementById("ytd-note-toast");
-  if (existingToast) existingToast.remove();
+  ["ytd-note-toast", "ytd-toast"].forEach((id) => {
+    const existingToast = document.getElementById(id);
+    if (existingToast) existingToast.remove();
+  });
 
   // Re-inject buttons for the new video (with a small delay for YouTube to render)
   setTimeout(() => {

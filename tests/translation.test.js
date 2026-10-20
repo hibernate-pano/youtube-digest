@@ -120,6 +120,7 @@ function loadBackgroundHelpers({
   },
 } = {}) {
   const listeners = { addListener() {} };
+  const messageListeners = [];
   const localStorage = { ytd_settings: settings };
   const openedLoginTabs = [];
   const sandbox = {
@@ -129,6 +130,9 @@ function loadBackgroundHelpers({
     TextEncoder,
     fetch: fetchImpl,
     AbortController,
+    // The service worker builds note ids with crypto.randomUUID(). A bare vm
+    // context has no crypto, so the harness provides the real one.
+    crypto: globalThis.crypto,
     setTimeout: setTimeoutImpl,
     clearTimeout: clearTimeoutImpl,
     importScripts() {},
@@ -160,7 +164,11 @@ function loadBackgroundHelpers({
       sidePanel,
       runtime: {
         onInstalled: listeners,
-        onMessage: listeners,
+        onMessage: {
+          addListener(listener) {
+            messageListeners.push(listener);
+          },
+        },
         openOptionsPage() {},
         getURL: (resourcePath) => `chrome-extension://test/${resourcePath}`,
         sendMessage: () => Promise.resolve({ success: true }),
@@ -254,6 +262,7 @@ function loadBackgroundHelpers({
   vm.runInNewContext(read("background.js"), sandbox);
   const helpers = sandbox.__YTD_TRANSLATION_TESTING__;
   helpers.openedLoginTabs = openedLoginTabs;
+  helpers.messageListeners = messageListeners;
   return helpers;
 }
 
@@ -1700,3 +1709,171 @@ test("sync header copy is bilingual and free of pictographs", () => {
 });
 
 
+
+// ============================================================
+// Transcript and note failure modes
+// ============================================================
+
+test("an exhausted Supadata balance has its own error code", async () => {
+  const background = loadBackgroundHelpers({
+    settings: {
+      provider: "deepseek",
+      aiApiKey: "test-key",
+      supadataApiKey: "sd_test",
+    },
+    fetchImpl: async (url) => {
+      assert.match(url, /supadata/);
+      return {
+        ok: false,
+        status: 402,
+        json: async () => ({ message: "Payment required" }),
+      };
+    },
+  });
+
+  const result = await background.handleFetchTranscript("videoA");
+
+  assert.equal(result.success, false);
+  assert.equal(result.error, "OUT_OF_CREDITS");
+  assert.match(result.message, /credits/i);
+  assert.match(result.message, /dash\.supadata\.ai/);
+});
+
+test("note ids cannot collide inside the same millisecond", async () => {
+  const background = loadBackgroundHelpers({
+    settings: {
+      provider: "deepseek",
+      aiApiKey: "test-key",
+      supadataApiKey: "sd_test",
+    },
+  });
+
+  const first = await background.handleSaveNote(
+    "videoA",
+    12,
+    "A video",
+    "A channel",
+    "The exact selected text",
+  );
+  const second = await background.handleSaveNote(
+    "videoA",
+    13,
+    "A video",
+    "A channel",
+    "The exact selected text",
+  );
+
+  assert.equal(first.success, true);
+  assert.equal(second.success, true);
+  assert.notEqual(first.note.id, second.note.id);
+  assert.match(first.note.id, /^note_\d+_[0-9a-f]{8}$/);
+  assert.match(second.note.id, /^note_\d+_[0-9a-f]{8}$/);
+});
+
+test("the note cleanup uses the key of the active provider", async () => {
+  const requests = [];
+  const background = loadBackgroundHelpers({
+    settings: {
+      provider: "minimax",
+      aiApiKey: "",
+      minimaxApiKey: "minimax-key",
+      supadataApiKey: "sd_test",
+    },
+    fetchImpl: async (url, options) => {
+      if (url.startsWith("chrome-extension://")) {
+        return { ok: true, text: async () => read("prompts/note-cleanup.md") };
+      }
+      requests.push({ url, options });
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: '{"quote":"Cleaned note."}' } }],
+        }),
+      };
+    },
+  });
+
+  const cleaned = await background.cleanupNoteText(
+    "raw note text",
+    "before",
+    "after",
+    "before raw note text after",
+    "A video",
+  );
+
+  assert.equal(requests.length, 1, "the active provider was never called");
+  assert.match(requests[0].url, /minimaxi\.com/);
+  assert.equal(requests[0].options.headers.Authorization, "Bearer minimax-key");
+  assert.equal(cleaned, "Cleaned note.");
+});
+
+test("the note cleanup stays local when no provider key is configured", async () => {
+  let called = 0;
+  const background = loadBackgroundHelpers({
+    settings: {
+      provider: "minimax",
+      aiApiKey: "",
+      minimaxApiKey: "",
+      supadataApiKey: "sd_test",
+    },
+    fetchImpl: async () => {
+      called += 1;
+      return { ok: true, text: async () => "" };
+    },
+  });
+
+  const cleaned = await background.cleanupNoteText(
+    "raw note text",
+    "before",
+    "after",
+    "context",
+    "A video",
+  );
+
+  assert.equal(called, 0);
+  assert.equal(cleaned, "before raw note text after");
+});
+
+test("a refused side panel open is reported to the page", async () => {
+  const background = loadBackgroundHelpers({
+    sidePanel: {
+      setPanelBehavior() {},
+      setOptions: async () => {},
+      open: async () => {
+        throw new Error("sidePanel.open requires a user gesture");
+      },
+    },
+  });
+
+  const listener = background.messageListeners[0];
+  assert.ok(listener, "the background must listen for panel messages");
+
+  let response = null;
+  listener({ action: "openSidePanel" }, { tab: { id: 7 } }, (value) => {
+    response = value;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.ok(response, "the page must get an answer");
+  assert.equal(response.success, false);
+  assert.match(response.error, /user gesture/);
+});
+
+test("a successful side panel open is reported as success", async () => {
+  const background = loadBackgroundHelpers({
+    sidePanel: {
+      setPanelBehavior() {},
+      setOptions: async () => {},
+      open: async () => {},
+    },
+  });
+
+  const listener = background.messageListeners[0];
+  let response = null;
+  listener({ action: "openSidePanel" }, { tab: { id: 7 } }, (value) => {
+    response = value;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(JSON.parse(JSON.stringify(response)), { success: true });
+});
