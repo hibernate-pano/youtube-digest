@@ -261,3 +261,45 @@ test("localized prompt updates preserve the textarea selection and scroll", () =
   assert.equal(textarea.scrollTop, 90);
   assert.equal(textarea.scrollLeft, 7);
 });
+
+test("the static HTML fallback says the same thing as the runtime copy", () => {
+  const html = read("options.html");
+  const elements = [
+    ...html.matchAll(
+      /<(\w+)([^>]*\bdata-i18n="([^"]+)"[^>]*)>([\s\S]*?)<\/\1\s*>/g,
+    ),
+  ];
+  let checked = 0;
+  const drift = [];
+
+  for (const [, , , key, inner] of elements) {
+    // The runtime replaces the element's content with the translated
+    // string, so any static text has to be that same string. A node the
+    // script fills in later carries no static text and is skipped.
+    const text = inner.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+    if (!text) continue;
+
+    const expected = options.translate("en", key);
+    assert.ok(expected, `Missing English copy for ${key}`);
+    // Some strings carry a trailing space so a link that follows them as a
+    // sibling keeps a visual gap. Compare on collapsed whitespace.
+    const collapsed = expected.replace(/\s+/g, " ").trim();
+    if (text !== collapsed) {
+      drift.push({ key, staticText: text, runtimeCopy: collapsed });
+    }
+    checked += 1;
+  }
+
+  assert.deepEqual(
+    drift,
+    [],
+    `the static HTML and the runtime copy disagree on: ${drift
+      .map((item) => item.key)
+      .join(", ")}`,
+  );
+
+  assert.ok(
+    checked >= 20,
+    `only ${checked} static strings were compared - the matcher probably stopped working`,
+  );
+});
