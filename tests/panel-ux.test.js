@@ -225,6 +225,7 @@ function createPanelHarness({
   const elements = [];
   const documentListeners = new Map();
   const storageListeners = [];
+  const tabUpdatedListeners = [];
   const timers = new Map();
   const sentMessages = [];
   let nextTimerId = 1;
@@ -326,9 +327,15 @@ function createPanelHarness({
       },
       windows: { getCurrent: () => Promise.resolve({ id: 1 }) },
       tabs: {
-        onUpdated: { addListener() {} },
+        onUpdated: {
+          addListener(listener) {
+            tabUpdatedListeners.push(listener);
+          },
+        },
         onActivated: { addListener() {} },
-        query: async () => tabs,
+        // The front tab can change while the panel works, so the harness
+        // accepts a function that returns the current tab.
+        query: async () => (typeof tabs === "function" ? tabs() : tabs),
         sendMessage: async () => ({ success: true }),
         create() {},
       },
@@ -358,6 +365,30 @@ function createPanelHarness({
     },
     fireStorageChange: (changes) => {
       for (const listener of storageListeners) listener(changes, "local");
+    },
+    // Reproduces a YouTube navigation: the extension hears about the new
+    // URL the way Chrome reports it.
+    fireTabUpdate: (tabId, changeInfo, tab) => {
+      for (const listener of tabUpdatedListeners) {
+        listener(tabId, changeInfo, tab);
+      }
+    },
+    // Runs the timers the panel scheduled, e.g. the debounced refresh that
+    // a navigation starts.
+    runTimers: () => {
+      const pending = [...timers.values()];
+      timers.clear();
+      for (const timer of pending) timer.callback();
+    },
+    // Everything the panel put on screen inside one element, whether it
+    // arrived as markup or as child elements.
+    htmlOf: (id) => {
+      const element = document.getElementById(id);
+      if (!element) return "";
+      return [
+        element.innerHTML,
+        ...element.children.map((child) => child.innerHTML),
+      ].join("");
     },
     flush: async () => {
       await new Promise((resolve) => setImmediate(resolve));
@@ -994,4 +1025,393 @@ test("a mode change invalidates the translation that is still on the wire", asyn
   });
   await chinese;
   await bilingual;
+});
+
+// ============================================================
+// The work the user pays for must happen once, and must not
+// be thrown away
+// ============================================================
+
+function analysisPayload() {
+  return {
+    success: true,
+    analysis: {
+      chapters: [
+        {
+          title: "Opening",
+          summary: "What the video is about",
+          timestamp: "0:00",
+          timestampSeconds: 0,
+        },
+      ],
+      keyQuotes: [
+        {
+          quote: "A quote worth keeping",
+          timestamp: "0:30",
+          timestampSeconds: 30,
+        },
+      ],
+    },
+  };
+}
+
+/**
+ * A panel that is ready to work: a Supadata key, an AI key and a YouTube
+ * tab in front of it.
+ */
+function createYoutubeHarness(options = {}) {
+  return createPanelHarness({
+    tabs: options.tabs ?? [{ id: 7, url: VIDEO_URL }],
+    sendMessageImpl: async (message) => {
+      if (options.sendMessageImpl) {
+        const custom = await options.sendMessageImpl(message);
+        if (custom !== undefined) return custom;
+      }
+      if (message.action === "checkConfig") {
+        return { hasSupadataKey: true, hasAiKey: true };
+      }
+      if (message.action === "fetchTranscript") return transcriptPayload("A");
+      if (message.action === "analyzeTranscript") return analysisPayload();
+      if (message.action === "getNotes") return { success: true, notes: [] };
+      if (message.action === "syncNotes") return { success: true };
+      if (message.action === "getGithubSession") return { success: false };
+      return { success: true };
+    },
+  });
+}
+
+test("opening the panel on a YouTube video buys one transcript, not two", async () => {
+  const transcript = deferred();
+  let transcriptLookups = 0;
+  const harness = createYoutubeHarness({
+    sendMessageImpl: async (message) => {
+      if (message.action === "fetchTranscript") {
+        transcriptLookups += 1;
+        return transcript.promise;
+      }
+      return undefined;
+    },
+  });
+
+  // The panel opens: the boot path asks for the transcript of the video.
+  const boot = harness.fire("DOMContentLoaded");
+  await harness.flush();
+  assert.equal(transcriptLookups, 1, "the panel never asked for the transcript");
+
+  // YouTube finishes loading the page and the extension hears about the
+  // navigation while the first lookup is still on the wire.
+  harness.fireTabUpdate(
+    7,
+    { url: VIDEO_URL },
+    { id: 7, url: VIDEO_URL, active: true, windowId: 1 },
+  );
+  harness.runTimers();
+  await harness.flush();
+
+  transcript.resolve(transcriptPayload("A"));
+  await boot;
+  await harness.flush();
+
+  assert.equal(
+    transcriptLookups,
+    1,
+    "the panel paid for the same transcript twice",
+  );
+  assert.equal(
+    harness.helpers.getState().currentTranscriptText,
+    "A caption",
+    "the transcript never reached the panel",
+  );
+});
+
+test("a paid analysis survives the refresh a navigation starts", async () => {
+  const analysis = deferred();
+  let analysisCalls = 0;
+  let frontTab = { id: 7, url: VIDEO_URL };
+  const harness = createYoutubeHarness({
+    tabs: () => [frontTab],
+    sendMessageImpl: async (message) => {
+      if (message.action === "analyzeTranscript") {
+        analysisCalls += 1;
+        return analysis.promise;
+      }
+      return undefined;
+    },
+  });
+
+  await harness.fire("DOMContentLoaded");
+  await harness.flush();
+
+  // The user opens the Overview tab: the analysis goes out and is paid for.
+  const run = harness.helpers.triggerAnalysis();
+  await harness.flush();
+  assert.match(harness.htmlOf("chapterList"), /Generating overview/);
+
+  // The user moves to another video and back while the AI is still working.
+  // The refresh the first navigation scheduled fires for the video that is
+  // on screen now, so the panel runs the digest for it again.
+  harness.fireTabUpdate(
+    7,
+    { url: "https://www.youtube.com/watch?v=videoB" },
+    {
+      id: 7,
+      url: "https://www.youtube.com/watch?v=videoB",
+      active: true,
+      windowId: 1,
+    },
+  );
+  frontTab = { id: 7, url: VIDEO_URL };
+  harness.runTimers();
+  await harness.flush();
+
+  analysis.resolve(analysisPayload());
+  await run;
+  await harness.flush();
+
+  assert.equal(analysisCalls, 1, "the analysis was paid for more than once");
+  assert.doesNotMatch(
+    harness.htmlOf("chapterList"),
+    /Generating overview/,
+    "the Overview tab is stuck on the loading message",
+  );
+  assert.match(
+    harness.htmlOf("chapterList"),
+    /Opening/,
+    "the paid analysis was thrown away",
+  );
+});
+
+test("a second analysis for the same video joins the one on the wire", async () => {
+  const analysis = deferred();
+  let analysisCalls = 0;
+  const harness = createYoutubeHarness({
+    sendMessageImpl: async (message) => {
+      if (message.action === "analyzeTranscript") {
+        analysisCalls += 1;
+        return analysis.promise;
+      }
+      return undefined;
+    },
+  });
+
+  await harness.fire("DOMContentLoaded");
+  await harness.flush();
+
+  const first = harness.helpers.triggerAnalysis();
+  await harness.flush();
+
+  // The panel runs the digest for the same video again - a navigation
+  // refresh does exactly that - while the analysis is still working.
+  await harness.helpers.startDigest("videoA", VIDEO_URL);
+  await harness.flush();
+
+  // The user comes back to the Overview tab.
+  const second = harness.helpers.triggerAnalysis();
+  await harness.flush();
+
+  assert.equal(analysisCalls, 1, "the same analysis was paid for twice");
+
+  analysis.resolve(analysisPayload());
+  await first;
+  await second;
+  await harness.flush();
+
+  assert.match(harness.htmlOf("chapterList"), /Opening/);
+});
+
+test("a second transcript lookup for the same video joins the one on the wire", async () => {
+  const transcript = deferred();
+  let transcriptLookups = 0;
+  const harness = createYoutubeHarness({
+    sendMessageImpl: async (message) => {
+      if (message.action === "fetchTranscript") {
+        transcriptLookups += 1;
+        return transcript.promise;
+      }
+      return undefined;
+    },
+  });
+
+  const first = harness.helpers.startDigest("videoA", VIDEO_URL);
+  await harness.flush();
+  const second = harness.helpers.startDigest("videoA", VIDEO_URL);
+  await harness.flush();
+
+  assert.equal(transcriptLookups, 1, "the same transcript was bought twice");
+
+  transcript.resolve(transcriptPayload("A"));
+  await first;
+  await second;
+  await harness.flush();
+
+  assert.equal(harness.helpers.getState().currentTranscriptText, "A caption");
+});
+
+test("the previous video's chapters and quotes do not survive a video change", async () => {
+  const harness = createYoutubeHarness();
+
+  await harness.helpers.startDigest("videoA", VIDEO_URL);
+  await harness.helpers.triggerAnalysis();
+  await harness.flush();
+  assert.match(harness.htmlOf("chapterList"), /Opening/);
+  assert.match(harness.htmlOf("quotesList"), /A quote worth keeping/);
+
+  await harness.helpers.startDigest(
+    "videoB",
+    "https://www.youtube.com/watch?v=videoB",
+  );
+  await harness.flush();
+
+  assert.doesNotMatch(
+    harness.htmlOf("chapterList"),
+    /Opening/,
+    "the chapters of the previous video are still on screen",
+  );
+  assert.doesNotMatch(
+    harness.htmlOf("quotesList"),
+    /A quote worth keeping/,
+    "the quotes of the previous video are still on screen",
+  );
+  assert.equal(
+    harness.helpers.getState().currentAnalysis,
+    null,
+    "the analysis of the previous video is still loaded",
+  );
+});
+
+test("a re-run for the same video does not invalidate the work in flight", async () => {
+  const harness = createYoutubeHarness();
+
+  await harness.helpers.startDigest("videoA", VIDEO_URL);
+  const afterFirst = harness.helpers.getState();
+  assert.equal(afterFirst.videoTicket, 1, "the video ticket must follow the video");
+
+  await harness.helpers.startDigest("videoA", VIDEO_URL);
+  const afterSecond = harness.helpers.getState();
+
+  assert.equal(
+    afterSecond.videoTicket,
+    afterFirst.videoTicket,
+    "a re-run for the same video changed the video ticket",
+  );
+  assert.equal(
+    afterSecond.digestRunCount,
+    afterFirst.digestRunCount + 1,
+    "a re-run for the same video is still a run",
+  );
+});
+
+test("the panel does not fall back to the video the user already left", async () => {
+  let frontTab = { id: 7, url: VIDEO_URL };
+  const harness = createYoutubeHarness({
+    tabs: () => [frontTab],
+    sendMessageImpl: async (message) => {
+      if (message.action === "relayToContent") {
+        // The user moves to another video while the title is on the wire.
+        frontTab = {
+          id: 7,
+          url: "https://www.youtube.com/watch?v=videoB",
+        };
+        return {
+          success: true,
+          response: { title: "Video A", channelName: "Channel A" },
+        };
+      }
+      return undefined;
+    },
+  });
+
+  await harness.helpers.checkCurrentTab();
+  await harness.flush();
+
+  assert.equal(
+    harness.helpers.getState().currentVideoId,
+    null,
+    "the panel digested the video the user already left",
+  );
+  assert.equal(harness.helpers.getState().currentTranscriptText, null);
+});
+
+test("a translation that arrives after the language changed is kept for its video", async () => {
+  const pendingTranslations = [];
+  let translationRequests = 0;
+  const harness = createPanelHarness({
+    sendMessageImpl: async (message) => {
+      if (message.action === "fetchTranscript") return transcriptPayload("A");
+      if (message.action === "translateContent") {
+        translationRequests += 1;
+        const request = message;
+        return new Promise((resolve) => {
+          pendingTranslations.push(() =>
+            resolve({
+              success: true,
+              translatedContent: {
+                segments: request.content.segments.map((segment) => ({
+                  id: segment.id,
+                  text: `译:${segment.text}`,
+                })),
+              },
+            }),
+          );
+        });
+      }
+      if (message.action === "getNotes") return { success: true, notes: [] };
+      return { success: true };
+    },
+  });
+
+  await harness.helpers.startDigest("videoA", VIDEO_URL);
+  await harness.flush();
+
+  // The user asks for Chinese: the translation goes out and is paid for.
+  const chinese = harness.helpers.handleDisplayLanguageModeChange("zh");
+  await harness.flush();
+  assert.equal(translationRequests, 1, "the translation never left the panel");
+
+  // The user changes their mind before it lands.
+  const original = harness.helpers.handleDisplayLanguageModeChange("original");
+  await harness.flush();
+
+  // The paid translation arrives after the panel moved on.
+  pendingTranslations[0]();
+  await chinese;
+  await original;
+  await harness.flush();
+
+  // Asking for Chinese again must not pay for the same text twice.
+  const chineseAgain = harness.helpers.handleDisplayLanguageModeChange("zh");
+  await harness.flush();
+  assert.equal(
+    translationRequests,
+    1,
+    "the same translation was paid for twice",
+  );
+  await chineseAgain;
+});
+
+test("the Overview tab says what the analysis costs when it starts", async () => {
+  const analysis = deferred();
+  const harness = createYoutubeHarness({
+    sendMessageImpl: async (message) => {
+      if (message.action === "analyzeTranscript") return analysis.promise;
+      return undefined;
+    },
+  });
+
+  await harness.helpers.startDigest("videoA", VIDEO_URL);
+  await harness.flush();
+
+  const run = harness.helpers.triggerAnalysis();
+  await harness.flush();
+
+  const message = harness.htmlOf("chapterList");
+  assert.match(message, /Generating overview/);
+  assert.match(
+    message,
+    /AI balance/,
+    "the cost of the analysis is not stated where the user triggers it",
+  );
+
+  analysis.resolve(analysisPayload());
+  await run;
 });

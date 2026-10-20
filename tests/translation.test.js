@@ -1946,3 +1946,143 @@ test("the account that owns a note can still import it again", async () => {
   const raw = await storageMock.get(null);
   assert.equal(raw.ytd_notes_1001.length, 1, "the note is still owned by the account");
 });
+
+// ============================================================
+// A note the panel already has the text for must not cost
+// anything
+// ============================================================
+
+test("a key quote is stored as it is, without a lookup or an AI cleanup", async () => {
+  const requests = [];
+  const background = loadBackgroundHelpers({
+    settings: {
+      provider: "deepseek",
+      aiApiKey: "test-key",
+      supadataApiKey: "sd_test",
+    },
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options });
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: '{"quote":"Something else."}' } }],
+        }),
+      };
+    },
+  });
+
+  const result = await background.handleSaveNote(
+    "videoA",
+    30,
+    "A video",
+    "A channel",
+    undefined,
+    "The quote the user picked",
+  );
+
+  assert.equal(result.success, true);
+  assert.equal(
+    result.note.text,
+    "The quote the user picked",
+    "the quote was thrown away",
+  );
+  assert.equal(result.note.rawText, "The quote the user picked");
+  assert.equal(result.note.timestampSeconds, 30);
+  assert.equal(result.note.videoId, "videoA");
+  assert.equal(
+    requests.length,
+    0,
+    "the note cost a transcript lookup or an AI cleanup",
+  );
+});
+
+test("the saveNote message carries the quote through to the note", async () => {
+  const requests = [];
+  const background = loadBackgroundHelpers({
+    settings: {
+      provider: "deepseek",
+      aiApiKey: "test-key",
+      supadataApiKey: "sd_test",
+    },
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options });
+      return { ok: true, json: async () => ({ choices: [] }) };
+    },
+  });
+
+  const listener = background.messageListeners[0];
+  assert.ok(listener, "the background must listen for panel messages");
+
+  let response = null;
+  listener(
+    {
+      action: "saveNote",
+      videoId: "videoA",
+      timestamp: 30,
+      videoTitle: "A video",
+      channelName: "A channel",
+      quote: "The quote the user picked",
+    },
+    { tab: { id: 7 } },
+    (value) => {
+      response = value;
+    },
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.ok(response, "the panel must get an answer");
+  assert.equal(response.success, true);
+  assert.equal(response.note.text, "The quote the user picked");
+  assert.equal(requests.length, 0, "the note cost a paid request");
+});
+
+test("a note without any text still finds the transcript line", async () => {
+  const requests = [];
+  const background = loadBackgroundHelpers({
+    settings: {
+      provider: "deepseek",
+      aiApiKey: "",
+      supadataApiKey: "sd_test",
+    },
+    storageMock: {
+      values: {
+        digest_videoA: {
+          transcript: [
+            { text: "first line", start: 0, duration: 2 },
+            { text: "the line at the timestamp", start: 30, duration: 2 },
+          ],
+        },
+      },
+      get(key) {
+        return Promise.resolve({ [key]: this.values[key] });
+      },
+      set(items) {
+        Object.assign(this.values, items);
+        return Promise.resolve();
+      },
+      remove(key) {
+        delete this.values[key];
+        return Promise.resolve();
+      },
+    },
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options });
+      return { ok: true, json: async () => ({ choices: [] }) };
+    },
+  });
+
+  const result = await background.handleSaveNote(
+    "videoA",
+    30,
+    "A video",
+    "A channel",
+  );
+
+  assert.equal(result.success, true);
+  assert.match(result.note.text, /the line at the timestamp/);
+  assert.equal(
+    requests.length,
+    0,
+    "the cached transcript was not used",
+  );
+});

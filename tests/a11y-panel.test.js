@@ -1113,6 +1113,31 @@ test("a control inside a row does not fire the row action twice", async () => {
   assert.equal(seeks.length, 0, "the quote did not seek");
 });
 
+test("the Note button on a key quote hands the quote over", async () => {
+  const harness = await createLoadedHarness();
+  harness.helpers.renderAnalysisResults(analysisPayload().analysis);
+
+  const before = harness.sentMessages.length;
+  const noteButton = harness.document.querySelector(
+    "#quotesList .quote-save-note-btn",
+  );
+  assert.ok(noteButton, "the quote card offers a Note action");
+  harness.dispatch(noteButton, "click");
+  await harness.flush();
+
+  const saves = harness.sentMessages
+    .slice(before)
+    .filter((message) => message?.action === "saveNote");
+  assert.equal(saves.length, 1, "the Note action must save exactly one note");
+  assert.equal(
+    saves[0].quote,
+    "A quote worth keeping",
+    "the quote itself must travel with the request",
+  );
+  assert.equal(saves[0].timestamp, 30, "the note must point at the quote");
+  assert.equal(saves[0].videoId, "videoA", "the note must belong to the video");
+});
+
 test("the transcript timestamp seeks even while text is selected", async () => {
   const harness = await createLoadedHarness();
 

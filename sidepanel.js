@@ -25,7 +25,6 @@ let currentVideoTitle = "";
 let currentChannelName = "";
 let currentVideoDescription = "";
 let currentVideoDuration = 0;
-let isAnalysisLoading = false; // Track if analysis is in progress
 let youtubeTabId = null; // Store the YouTube tab ID for reliable messaging
 let errorAction = null;
 // True while the panel waits for the user to add a missing API key. The
@@ -56,10 +55,78 @@ let currentNotesFilterVideoId = null;
 const TRANSLATION_MESSAGE_TIMEOUT_MS = 130_000;
 const TRANSLATION_BATCH_SIZE = 3;
 
-// Every digest run gets a ticket. A slow transcript or analysis response
-// carries the ticket it was started with, so a response for a video the user
-// already left can never be applied to the video on screen.
-let digestGeneration = 0;
+// The video on screen changed. This ticket changes ONLY when that happens,
+// so a response that is still perfectly valid - because the user re-ran the
+// digest for the same video - is never thrown away.
+let videoTicket = 0;
+
+// A digest run started. This counts runs, not video changes: a re-run for the
+// same video is a new run, but the work it does is still valid.
+let digestRunCount = 0;
+
+// The panel pays for every transcript lookup (one Supadata credit) and for
+// every analysis (the user's own provider balance), so the same work must
+// never be paid for twice. These ledgers hold one entry per video: while the
+// request is on the wire a second run joins it, and once it settled with a
+// result the result is kept, so a later run reuses it instead of paying again.
+const transcriptLedger = new Map(); // videoId -> paid request
+const analysisLedger = new Map(); // videoId -> paid request
+
+// The ledgers live for the whole life of the panel document, so they are
+// kept small. The persistent digest cache still holds the older videos.
+const PAID_REQUEST_LEDGER_LIMIT = 20;
+
+/**
+ * Runs a request that costs the user money and keeps it in the ledger.
+ *
+ * A request that failed leaves the ledger, so the user can retry it. A
+ * request that succeeded stays, because its result is worth keeping.
+ */
+function startPaidRequest(ledger, videoId, send) {
+  const existing = ledger.get(videoId);
+  if (existing) return existing;
+
+  const entry = { settled: false, result: null, promise: null };
+  entry.promise = (async () => {
+    try {
+      return await send();
+    } catch (error) {
+      return { success: false, error: error?.message || String(error) };
+    }
+  })().then((result) => {
+    entry.settled = true;
+    entry.result = result;
+    if (!result?.success && ledger.get(videoId) === entry) {
+      ledger.delete(videoId);
+    }
+    return result;
+  });
+  ledger.set(videoId, entry);
+
+  while (ledger.size > PAID_REQUEST_LEDGER_LIMIT) {
+    const oldest = ledger.keys().next().value;
+    if (oldest === undefined) break;
+    ledger.delete(oldest);
+  }
+
+  return entry;
+}
+
+/**
+ * True while a request for this video is still on the wire. A request that
+ * already settled is not in flight: the user may start a new one.
+ */
+function isRequestInFlight(ledger, videoId) {
+  const entry = ledger.get(videoId);
+  return Boolean(entry && !entry.settled);
+}
+
+/**
+ * True while the analysis of the video on screen is being paid for.
+ */
+function isAnalysisInFlight(videoId = currentVideoId) {
+  return isRequestInFlight(analysisLedger, videoId);
+}
 
 // ============================================================
 // PANEL COPY (LOCALIZATION)
@@ -1090,16 +1157,41 @@ async function saveNotesFilter(showAll) {
 // VIDEO DETECTION
 // ============================================================
 
+/**
+ * Reads the tab the panel belongs to. The panel belongs only to the active
+ * tab: looking for another open YouTube tab here can keep an old transcript
+ * visible on a non-YouTube page, so never fall back to background tabs.
+ */
+async function getFrontTab() {
+  const tabs = await chrome.tabs.query({
+    active: true,
+    lastFocusedWindow: true,
+  });
+  return tabs[0] || null;
+}
+
+/**
+ * Reads the title, the channel and the description of the video on screen.
+ * A failure is not fatal: the panel shows the transcript without them.
+ */
+async function requestVideoMetadata() {
+  try {
+    // Route through background script for reliable message passing
+    const result = await chrome.runtime.sendMessage({
+      action: "relayToContent",
+      payload: { action: "getVideoInfo" },
+    });
+    debugLog("[YouTube Digest Panel] getVideoInfo result:", result);
+    if (result?.success && result.response) return result.response;
+  } catch (e) {
+    console.error("[YouTube Digest Panel] getVideoInfo error:", e);
+  }
+  return null;
+}
+
 async function checkCurrentTab() {
   try {
-    // The panel belongs only to the active tab. Looking for another open
-    // YouTube tab here can keep an old transcript visible on a non-YouTube
-    // page, so never fall back to background tabs.
-    const tabs = await chrome.tabs.query({
-      active: true,
-      lastFocusedWindow: true,
-    });
-    const tab = tabs[0] || null;
+    const tab = await getFrontTab();
 
     debugLog("[YouTube Digest Panel] Found tab:", tab?.id, tab?.url);
 
@@ -1118,34 +1210,35 @@ async function checkCurrentTab() {
 
     const videoId = extractVideoId(tab.url);
 
-    if (videoId) {
-      currentVideoUrl = tab.url;
-
-      try {
-        // Route through background script for reliable message passing
-        const result = await chrome.runtime.sendMessage({
-          action: "relayToContent",
-          payload: { action: "getVideoInfo" },
-        });
-        debugLog("[YouTube Digest Panel] getVideoInfo result:", result);
-        if (result.success && result.response) {
-          currentVideoTitle = result.response.title || "";
-          currentChannelName = result.response.channelName || "";
-          currentVideoDescription = result.response.description || "";
-          currentVideoDuration = result.response.duration || 0;
-        }
-      } catch (e) {
-        console.error("[YouTube Digest Panel] getVideoInfo error:", e);
-        currentVideoTitle = "";
-        currentChannelName = "";
-        currentVideoDescription = "";
-        currentVideoDuration = 0;
-      }
-
-      startDigest(videoId, tab.url);
-    } else {
+    if (!videoId) {
       showState("welcome");
+      return;
     }
+
+    const metadata = await requestVideoMetadata();
+
+    // The user can move to another video while the metadata request is on
+    // the wire. The title that just arrived belongs to the video we asked
+    // about, so it must not be applied to the video on screen now.
+    const frontTab = await getFrontTab();
+    const frontVideoId = frontTab?.url
+      ? extractVideoId(frontTab.url)
+      : null;
+    if (frontVideoId !== videoId) {
+      // The video changed under us. The navigation handler refreshes the
+      // panel for the new video, so this run has nothing left to do.
+      return;
+    }
+
+    if (metadata) {
+      currentVideoTitle = metadata.title || "";
+      currentChannelName = metadata.channelName || "";
+      currentVideoDescription = metadata.description || "";
+      currentVideoDuration = metadata.duration || 0;
+    }
+    currentVideoUrl = tab.url;
+
+    startDigest(videoId, tab.url);
   } catch (error) {
     console.error("Tab check error:", error);
     showState("welcome");
@@ -1181,6 +1274,20 @@ function extractVideoId(url) {
 // DIGEST PIPELINE
 // ============================================================
 
+/**
+ * Moves the panel to another video. The chapters, the quotes and the analysis
+ * on screen belong to the video the user just left, so they must not stay
+ * visible for the new one.
+ */
+function onVideoChanged(videoId) {
+  currentVideoId = videoId;
+  // The ticket changes with the video, so a response for the video the user
+  // left can never be applied to the one on screen.
+  videoTicket += 1;
+  currentAnalysis = null;
+  clearOverviewLists();
+}
+
 async function startDigest(videoId, videoUrl) {
   // Check if we already have this video loaded in memory
   if (videoId === currentVideoId && currentAnalysis) {
@@ -1188,11 +1295,19 @@ async function startDigest(videoId, videoUrl) {
     return;
   }
 
-  // A new digest run invalidates the previous one. Without this ticket, a
-  // slow transcript or analysis response for a video the user already left
-  // lands on the video that is on screen now.
-  const generation = ++digestGeneration;
+  // A digest run started. This counts runs, not video changes: a re-run for
+  // the same video is a new run, but the work it does is still valid.
+  digestRunCount += 1;
+  debugLog("[YouTube Digest Panel] Digest run", digestRunCount, videoId);
+
+  // The video on screen changed. Everything the panel shows belongs to the
+  // video the user just left, so it has to go before the new one is fetched.
   const videoChanged = videoId !== currentVideoId;
+  if (videoChanged) onVideoChanged(videoId);
+
+  // The ticket this run belongs to. It only changes when the video changes,
+  // so a response that is still valid is never thrown away.
+  const ticket = videoTicket;
 
   // Every video change invalidates observer work and in-flight translations.
   if (videoChanged) {
@@ -1208,11 +1323,11 @@ async function startDigest(videoId, videoUrl) {
     interfaceTranslationInFlight.clear();
     pruneTranslationCachesForVideo(videoId);
     pendingTranscriptViewState = await loadTranscriptViewState(videoId);
-    if (generation !== digestGeneration) return;
+    if (ticket !== videoTicket) return;
     // An unseen video always starts in Original, so opening it never spends
     // translation tokens. A saved choice is restored only for this video.
     currentTranscriptMode = await loadDisplayLanguageMode(videoId);
-    if (generation !== digestGeneration) return;
+    if (ticket !== videoTicket) return;
     document
       .getElementById("contentArea")
       ?.classList.toggle(
@@ -1223,17 +1338,15 @@ async function startDigest(videoId, videoUrl) {
 
   // Check cache for this video
   const cached = await loadFromCache(videoId);
-  if (generation !== digestGeneration) return;
+  if (ticket !== videoTicket) return;
   if (cached) {
     debugLog("Loading from cache:", videoId);
-    currentVideoId = videoId;
     currentVideoUrl = videoUrl;
     currentAnalysis = cached.analysis || null;
     currentTranscript = cached.transcript;
     currentTranscriptText = cached.transcriptText;
     currentTranscriptTimestamped = cached.transcriptTimestamped;
     currentTranscriptLanguage = cached.transcriptLanguage || null;
-    isAnalysisLoading = false;
 
     // Restore semantic-segment translations from persistent storage.
     if (cached.paragraphCache) {
@@ -1275,14 +1388,12 @@ async function startDigest(videoId, videoUrl) {
     return;
   }
 
-  currentVideoId = videoId;
   currentVideoUrl = videoUrl;
   currentAnalysis = null;
   currentTranscript = null;
   currentTranscriptText = null;
   currentTranscriptTimestamped = null;
   currentTranscriptLanguage = null;
-  isAnalysisLoading = false;
 
   if (currentVideoTitle || currentChannelName) {
     const videoInfo = document.getElementById("videoInfo");
@@ -1294,14 +1405,19 @@ async function startDigest(videoId, videoUrl) {
   showState("loading");
   updateLoading(panelCopy("fetchingTranscript"), panelCopy("extractingCaptions"));
 
-  const transcriptResult = await chrome.runtime.sendMessage({
-    action: "fetchTranscript",
-    videoId: videoId,
-  });
+  // A transcript lookup costs one Supadata credit. The ledger makes sure
+  // the panel pays for it once, no matter how many runs ask for it.
+  const transcriptRequest = startPaidRequest(transcriptLedger, videoId, () =>
+    chrome.runtime.sendMessage({
+      action: "fetchTranscript",
+      videoId: videoId,
+    }),
+  );
+  const transcriptResult = await transcriptRequest.promise;
 
   // The video can change while the transcript is on the wire. A transcript
   // for a video the user already left must not overwrite the current one.
-  if (generation !== digestGeneration || videoId !== currentVideoId) return;
+  if (ticket !== videoTicket || videoId !== currentVideoId) return;
 
   if (!transcriptResult.success) {
     showTranscriptError(transcriptResult);
@@ -1560,6 +1676,43 @@ function translateNotesContent() {
 }
 
 /**
+ * Empties the Overview tab and puts the empty state back.
+ *
+ * The chapters and the quotes on screen belong to the video that was open
+ * before. Leaving them there would let the user save a note from the
+ * previous video under the new one.
+ */
+function clearOverviewLists() {
+  const chapterList = document.getElementById("chapterList");
+  if (chapterList) {
+    chapterList.innerHTML = "";
+    const item = document.createElement("li");
+    item.className = "chapter-item";
+    item.style.color = "var(--text-muted)";
+    item.style.cursor = "default";
+    item.style.borderColor = "var(--border)";
+    item.textContent = panelCopy("chaptersEmpty");
+    chapterList.appendChild(item);
+  }
+
+  const quotesList = document.getElementById("quotesList");
+  if (quotesList) {
+    quotesList.innerHTML = "";
+    const item = document.createElement("div");
+    item.className = "quote-item";
+    item.style.color = "var(--text-muted)";
+    item.style.borderLeftColor = "var(--border)";
+    item.style.cursor = "default";
+    const text = document.createElement("div");
+    text.className = "quote-text";
+    text.style.fontStyle = "normal";
+    text.textContent = panelCopy("quotesEmpty");
+    item.appendChild(text);
+    quotesList.appendChild(item);
+  }
+}
+
+/**
  * Renders the analysis results into the Overview tab.
  * Shows chapters and key quotes only.
  */
@@ -1662,6 +1815,10 @@ function renderAnalysisResults(analysis) {
 
 /**
  * Saves a key quote as a timestamped note.
+ *
+ * The quote itself travels with the request. Without it the background would
+ * have to look the transcript up again - another Supadata credit - and clean
+ * up a different line with the AI, throwing the quote the user picked away.
  */
 async function saveQuoteAsNote(quote, btn) {
   if (!currentVideoId) return;
@@ -1677,6 +1834,7 @@ async function saveQuoteAsNote(quote, btn) {
       timestamp: quote.timestampSeconds,
       videoTitle: currentVideoTitle,
       channelName: currentChannelName,
+      quote: quote.quote,
     });
 
     if (result.success) {
@@ -2349,7 +2507,7 @@ function switchTab(tabName) {
   // Translate only the visible tab. This prevents hidden surfaces from using
   // tokens or competing with the batch queue the user is waiting for.
   if (tabName === "overview") {
-    if (!currentAnalysis && !isAnalysisLoading) {
+    if (!currentAnalysis && !isAnalysisInFlight()) {
       triggerAnalysis();
     } else if (currentAnalysis && currentTranscriptMode !== "original") {
       void translateOverviewContent();
@@ -2370,22 +2528,10 @@ function switchTab(tabName) {
 }
 
 /**
- * Triggers the LLM analysis (lazy-loaded when user clicks Overview or Quotes tab).
- * This saves tokens by not running analysis until needed.
+ * Shows that the Overview tab is being paid for. The cost is stated here, at
+ * the moment the user asks for the analysis, and nowhere else.
  */
-async function triggerAnalysis() {
-  if (!currentTranscriptTimestamped || isAnalysisLoading || currentAnalysis)
-    return;
-
-  // Bind this run to the video on screen. The analysis takes seconds, and the
-  // user can open another video in the meantime. A response for the old
-  // video must never be rendered for - or cached under - the new one.
-  const videoId = currentVideoId;
-  const generation = digestGeneration;
-
-  isAnalysisLoading = true;
-
-  // Show loading indicators in the Overview tab
+function renderAnalysisPending() {
   const chapterList = document.getElementById("chapterList");
   const quotesList = document.getElementById("quotesList");
 
@@ -2396,38 +2542,90 @@ async function triggerAnalysis() {
 
   // The Overview tab loads in front of the user, so say that it is working.
   announceStatus(panelCopy("generatingOverview"));
+}
+
+/**
+ * Puts a finished analysis on screen.
+ *
+ * The analysis belongs to the video it was requested for. A response for a
+ * video the user already left must never be rendered for - or cached under -
+ * the new one.
+ */
+async function applyAnalysisResult(videoId, ticket, analysisResult) {
+  if (videoId !== currentVideoId || ticket !== videoTicket) return;
 
   try {
-    const analysisResult = await chrome.runtime.sendMessage({
-      action: "analyzeTranscript",
-      transcriptText: currentTranscriptTimestamped,
-      videoTitle: currentVideoTitle,
-      channelName: currentChannelName,
-      videoDescription: currentVideoDescription,
-      videoDuration: currentVideoDuration,
-    });
-
-    if (videoId !== currentVideoId || generation !== digestGeneration) return;
-
-    if (!analysisResult.success) {
+    if (!analysisResult?.success) {
       renderAnalysisFailure(analysisResult);
       return;
     }
+    if (!analysisResult.analysis) {
+      renderAnalysisFailure({
+        error: analysisResult.error || "EMPTY_ANALYSIS",
+        message: panelCopy("errorMessage"),
+      });
+      return;
+    }
 
-    currentAnalysis = analysisResult.analysis;
+    const analysis = analysisResult.analysis;
+    if (currentAnalysis === analysis) return;
+
+    currentAnalysis = analysis;
     renderAnalysisResults(currentAnalysis);
 
     // Save to cache now that we have analysis
     await saveToCache(videoId);
   } catch (error) {
     console.error("[YouTube Digest Panel] Analysis error:", error);
-    if (videoId !== currentVideoId || generation !== digestGeneration) return;
+    if (videoId !== currentVideoId || ticket !== videoTicket) return;
     renderAnalysisFailure({ error: error.message });
-  } finally {
-    // The flag must always be released. Leaving it set would disable the
-    // Overview tab for the rest of the panel's life.
-    if (generation === digestGeneration) isAnalysisLoading = false;
   }
+}
+
+/**
+ * Triggers the LLM analysis (lazy-loaded when user clicks Overview or Quotes tab).
+ * This saves tokens by not running analysis until needed.
+ */
+async function triggerAnalysis() {
+  if (!currentTranscriptTimestamped || currentAnalysis) return;
+
+  // Bind this run to the video on screen. The analysis takes seconds, and the
+  // user can open another video in the meantime. A response for the old
+  // video must never be rendered for - or cached under - the new one.
+  const videoId = currentVideoId;
+  if (!videoId) return;
+  // The ticket of the video on screen. It only changes when the video
+  // changes, so a re-run for the same video never invalidates the work.
+  const ticket = videoTicket;
+
+  // An analysis for this video is already paid for. Wait for the request
+  // that is on the wire - or reuse the result it produced - instead of
+  // paying for a second one.
+  const running = analysisLedger.get(videoId);
+  if (running) {
+    const analysisResult = await running.promise;
+    await applyAnalysisResult(videoId, ticket, analysisResult);
+    return;
+  }
+
+  // Show loading indicators in the Overview tab
+  renderAnalysisPending();
+
+  // An analysis costs the user's own provider balance. The ledger makes
+  // sure the panel pays for it once, no matter how many times it is asked.
+  const analysisRequest = startPaidRequest(analysisLedger, videoId, () =>
+    chrome.runtime.sendMessage({
+      action: "analyzeTranscript",
+      transcriptText: currentTranscriptTimestamped,
+      videoTitle: currentVideoTitle,
+      channelName: currentChannelName,
+      videoDescription: currentVideoDescription,
+      videoDuration: currentVideoDuration,
+    }),
+  );
+
+  const analysisResult = await analysisRequest.promise;
+  await applyAnalysisResult(videoId, ticket, analysisResult);
 }
 
 /**
@@ -3678,8 +3876,8 @@ function getActiveTranscriptSegments() {
   return groupTranscriptEntries(currentTranscript || []);
 }
 
-function transcriptTranslationCacheKey(segment) {
-  return `${currentVideoId}:zh:semantic:${segment.id}`;
+function transcriptTranslationCacheKey(segment, videoId = currentVideoId) {
+  return `${videoId}:zh:semantic:${segment.id}`;
 }
 
 function setTranscriptModeButtons(mode) {
@@ -3895,12 +4093,27 @@ async function requestTranscriptTranslationBatch(
       generation !== translationGeneration ||
       videoId !== currentVideoId ||
       mode !== currentTranscriptMode;
-    if (isStale) return;
 
     const responseSegments = result?.success
       ? result.translatedContent?.segments
       : [];
     const aligned = alignTranslatedSegmentBatch(sourceBatch, responseSegments);
+
+    if (isStale) {
+      // The translation was paid for, so it is kept for the video it belongs
+      // to. The cache key holds the video id, so it can never be shown for
+      // another one. Switching back to this language is then free.
+      aligned.forEach((item, batchIndex) => {
+        if (!item.text) return;
+        transcriptParagraphCache.set(
+          transcriptTranslationCacheKey(sourceBatch[batchIndex], videoId),
+          item.text,
+        );
+      });
+      void updateCache();
+      return;
+    }
+
     aligned.forEach((item, batchIndex) => {
       if (!result?.success) {
         item.error = result?.error || "Translation failed.";
@@ -4057,6 +4270,8 @@ globalThis.__YTD_TRANSCRIPT_TESTING__ = {
 globalThis.__YTD_PANEL_TESTING__ = {
   startDigest,
   triggerAnalysis,
+  checkCurrentTab,
+  scheduleDigestRefresh,
   bootPanel,
   handleSettingsChanged,
   loadPanelContent,
@@ -4098,9 +4313,10 @@ globalThis.__YTD_PANEL_TESTING__ = {
     currentTranscriptText,
     currentTranscriptTimestamped,
     currentTranscriptMode,
-    isAnalysisLoading,
+    isAnalysisLoading: isAnalysisInFlight(),
     notesFilterShowAll,
-    digestGeneration,
+    videoTicket,
+    digestRunCount,
     interfaceTranslationFailures,
     interfaceTranslationInFlight,
     interfaceTranslationCache,

@@ -436,14 +436,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.action === "saveNote") {
-    // Save a note at the current timestamp, or save exact selected transcript
-    // text when the side panel supplies it.
+    // Save a note at the current timestamp, or save the exact text the side
+    // panel already has - selected transcript text or a key quote.
     handleSaveNote(
       message.videoId,
       message.timestamp,
       message.videoTitle,
       message.channelName,
       message.selectedText,
+      message.quote,
     )
       .then(sendResponse)
       .catch((err) => sendResponse({ success: false, error: err.message }));
@@ -1321,8 +1322,11 @@ function createNoteId() {
 }
 
 /**
- * Saves a note at a timestamp. Exact selected text is stored directly.
- * Other note requests find the relevant transcript line and clean it up.
+ * Saves a note at a timestamp. Exact text is stored directly.
+ *
+ * The side panel hands over the words it already has: the selected
+ * transcript text or a key quote. Other note requests find the relevant
+ * transcript line and clean it up.
  */
 async function handleSaveNote(
   videoId,
@@ -1330,18 +1334,21 @@ async function handleSaveNote(
   videoTitle,
   channelName,
   selectedText,
+  quoteText,
 ) {
   try {
     const canonicalVideoUrl = YTD_SETTINGS.canonicalYouTubeUrl(videoId);
     const safeTimestamp = Math.max(0, Math.floor(Number(timestamp) || 0));
-    const exactSelectedText =
-      typeof selectedText === "string"
-        ? selectedText.replace(/\s+/g, " ").trim().slice(0, 3000)
-        : "";
+    const exactText = [selectedText, quoteText]
+      .filter((value) => typeof value === "string")
+      .map((value) => value.replace(/\s+/g, " ").trim().slice(0, 3000))
+      .find((value) => value.length > 0);
 
-    // A selected transcript note is already the exact text the user wants.
-    // Save it directly without a transcript fetch or an AI cleanup request.
-    if (exactSelectedText) {
+    // The panel already holds the exact text the user wants. Save it
+    // directly, without a transcript fetch and without an AI cleanup
+    // request: the quote the user picked must survive, and the user must
+    // not pay for a second lookup or a second model call.
+    if (exactText) {
       const minutes = Math.floor(safeTimestamp / 60);
       const seconds = safeTimestamp % 60;
       const note = {
@@ -1356,8 +1363,8 @@ async function handleSaveNote(
         timestamp: `${minutes}:${String(seconds).padStart(2, "0")}`,
         timestampSeconds: safeTimestamp,
         timestampedUrl: `${canonicalVideoUrl}&t=${safeTimestamp}s`,
-        text: exactSelectedText,
-        rawText: exactSelectedText,
+        text: exactText,
+        rawText: exactText,
         createdAt: Date.now(),
       };
 
