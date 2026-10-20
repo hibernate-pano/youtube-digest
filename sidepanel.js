@@ -259,6 +259,10 @@ const PANEL_COPY = {
     addAiKey: "Add your AI provider key in YouTube Digest Settings.",
     noCaptionsNoKey:
       "This video has no subtitles that could be read, and no Supadata key is set as a fallback. Add the key in YouTube Digest Settings to try the paid service.",
+    // The boot notice is shown before a single subtitle has been read, so it
+    // cannot claim the video has none. It says what the key is for and stops.
+    noFallbackKey:
+      "No Supadata key is set. Subtitles are read straight out of the page, so they cost nothing. Add a key only if a video's subtitles cannot be read that way.",
     invalidApiKeyTitle: "Invalid API key",
     invalidSupadataKey:
       "Your Supadata API key is invalid. Open YouTube Digest Settings.",
@@ -486,6 +490,10 @@ const PANEL_COPY = {
     addAiKey: "请在 YouTube Digest 设置中填写你的 AI 服务商密钥。",
     noCaptionsNoKey:
       "这个视频没有能读到的字幕，也没有设置 Supadata 密钥作为兜底。请在 YouTube Digest 设置里填入密钥，改用付费服务再试。",
+    // 开机提示出现在读到第一条字幕之前，所以不能说"没有字幕"。
+    // 它只说这个密钥是干什么用的，说完就消失。
+    noFallbackKey:
+      "没有设置 Supadata 密钥。字幕直接从页面里读，不花钱；只有页面读不到字幕的视频，才需要补一个密钥兜底。",
     invalidApiKeyTitle: "API 密钥无效",
     invalidSupadataKey: "Supadata API 密钥无效，请在 YouTube Digest 设置中修改。",
     rateLimitedTitle: "请求过于频繁",
@@ -1371,9 +1379,10 @@ async function bootPanel() {
 
   // Only the fallback key is missing. The panel still works, so it says so
   // once and then gets out of the way: a notice that stays on screen would
-  // read like something is broken.
+  // read like something is broken. It is a note, not a failure, so it is not
+  // red and it does not wait for a dismissal.
   if (!configStatus?.hasSupadataKey) {
-    announceAlert(panelCopy("noCaptionsNoKey"), { notice: true });
+    announceStatus(panelCopy("noFallbackKey"), { notice: true });
   }
 
   await loadPanelContent();

@@ -641,6 +641,23 @@ test("the panel works without a Supadata key and says so once", async () => {
   // And the user knows the fallback is gone.
   const notice = panel.el("panelToastText").textContent;
   assert.match(notice, /Supadata/i, "the missing fallback is not mentioned");
+
+  // The notice is shown before a single subtitle has been read, so it must
+  // not claim the video has none. That claim belongs to the dead end, where
+  // the page really had nothing to give.
+  assert.doesNotMatch(
+    notice,
+    /no subtitles|no captions/i,
+    "the boot notice claims the video has no subtitles before reading any",
+  );
+
+  // It is a note, not a failure: a red bar that waits for a dismissal reads
+  // like the product is broken.
+  assert.equal(
+    panel.el("panelToast").dataset.kind,
+    "status",
+    "the missing fallback is shown as a failure",
+  );
 });
 
 test("the panel stops when both keys are missing", async () => {
