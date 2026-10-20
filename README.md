@@ -225,7 +225,7 @@ YouTube Digest makes provider requests directly from the extension:
 
 The one exception is the optional GitHub sync described above. If you sign in, your saved notes are also mirrored to this project's own sync service at `https://ytd.panbo.space`, which runs on Cloudflare Workers with a Neon PostgreSQL database. Sign-in uses GitHub's OAuth flow, and the service only ever serves the rows belonging to the account you signed in with. If you never sign in, no note data leaves your device.
 
-There is no YouTube Digest account system, advertising, analytics, or telemetry. Supadata and your chosen AI provider still receive data under their own terms and privacy policies. [PRIVACY.md](PRIVACY.md) is the authoritative description of every data flow, including the sync service.
+There is no YouTube Digest account system, advertising, analytics, or telemetry. Supadata and your chosen AI provider still receive data under their own terms and privacy policies. [PRIVACY.md](PRIVACY.md) is the authoritative description of every data flow, including the sync service. A convenience translation is available in [PRIVACY.zh-CN.md](PRIVACY.zh-CN.md).
 
 ## Troubleshooting
 

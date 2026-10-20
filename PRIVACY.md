@@ -2,6 +2,8 @@
 
 Effective: October 20, 2026
 
+> A convenience translation is available in [PRIVACY.zh-CN.md](PRIVACY.zh-CN.md). The English file below is the authoritative version.
+
 YouTube Digest is a GitHub-only, bring-your-own-key Chrome extension. It has no YouTube Digest account, analytics, advertising, or telemetry. It does run an optional sync service, described in "GitHub sync (optional)" below, that stores your saved notes, vocabulary, and review progress when you choose to sign in.
 
 ## Data the extension handles

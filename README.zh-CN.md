@@ -227,7 +227,7 @@ YouTube Digest 会直接从扩展向服务商发送请求：
 
 唯一的例外是上面介绍的可选 GitHub 同步。登录后，已保存的笔记会同时镜像到本项目自建的同步服务 `https://ytd.panbo.space`，该服务运行在 Cloudflare Workers 上，数据库使用 Neon PostgreSQL。登录使用 GitHub 的 OAuth 流程，服务只会返回你登录账户对应的数据。如果从不登录，笔记数据就不会离开你的设备。
 
-YouTube Digest 没有账号系统、广告、分析统计或行为追踪。Supadata 和你选择的 AI 服务仍会按照各自的条款和隐私政策处理数据。所有数据流向（包括同步服务）的完整说明以 [PRIVACY.md](PRIVACY.md) 为准。
+YouTube Digest 没有账号系统、广告、分析统计或行为追踪。Supadata 和你选择的 AI 服务仍会按照各自的条款和隐私政策处理数据。所有数据流向（包括同步服务）的完整说明以 [PRIVACY.md](PRIVACY.md) 为准，另有一份便利译本 [PRIVACY.zh-CN.md](PRIVACY.zh-CN.md)。
 
 ## 常见问题
 
