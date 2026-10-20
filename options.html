@@ -39,8 +39,10 @@
         <h1 data-i18n="heading">Bring your own API keys</h1>
         <p class="lede" data-i18n="lede">
           Keys stay in this Chrome profile and are sent only to Supadata and
-          your chosen AI provider. This open-source extension has no developer
-          server or analytics.
+          your chosen AI provider. There is no analytics or telemetry. If you
+          sign in with GitHub below, your saved notes are mirrored to this
+          project's own sync service at ytd.panbo.space; without signing in,
+          nothing leaves this device.
         </p>
       </header>
 
@@ -233,9 +235,10 @@
         <section class="card">
           <h2 data-i18n="githubSync">GitHub sync</h2>
           <p class="help" data-i18n="githubSyncIntro">
-            Sign in with GitHub to back up your notes, vocabulary, and review
-            progress. Every GitHub account has its own isolated data. Sign in
-            with a different account to switch learner profiles.
+            Sign in with GitHub to back up your saved notes to this project's
+            sync service at ytd.panbo.space. Every GitHub account has its own
+            isolated data. Sign in with a different account to switch learner
+            profiles.
           </p>
           <div id="githubAccount" hidden>
             <span id="githubLoginName" class="github-login"></span>
