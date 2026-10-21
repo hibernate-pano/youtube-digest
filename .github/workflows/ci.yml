@@ -85,6 +85,14 @@ jobs:
         with:
           node-version: "22"
 
+      # The release check runs the extension test suite, and that suite
+      # drives the real panel in a real DOM, so it needs jsdom. Without
+      # this step the job failed on "Cannot find module 'jsdom'" instead
+      # of on anything about the release. A gate that cannot reach its
+      # own subject is not a gate.
+      - name: Install extension test dependencies
+        run: npm ci
+
       # The release check has its own step, so a broken prompt file or a
       # drifted manifest fails the build with its own message instead of
       # surfacing as a confusing packaging error.

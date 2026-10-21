@@ -354,5 +354,13 @@ test("the real-Postgres migration suite is wired to a database", () => {
     );
     return;
   }
-  assert.match(DATABASE_URL, /^postgresql(ql)?:\/\//);
+  // The scheme has to be a Postgres one. It is written either way in the
+  // wild: the container image is postgres, and the pooled
+  // Neon URL in .dev.vars says postgresql://.
+  //
+  // The check used to read /^postgresql(ql)?:\/\//, which let
+  // "postgresqlql://" through and turned away the postgres://
+  // that the CI service container actually answers to. A test that
+  // rejects the URL the project uses is not a test, it is a wall.
+  assert.match(DATABASE_URL, /^postgres(ql)?:\/\//i);
 });
