@@ -345,6 +345,22 @@ MUTATIONS = [
             )
         ],
     },
+    {
+        "name": "M14 clearing the cache leaves the list of the cached digests behind",
+        "file": "options.js",
+        "hunks": [
+            (
+                """      await storage.remove(settingsApi.DIGEST_CACHE_INDEX_KEY);\n""",
+                """""",
+            )
+        ],
+        "expect": [
+            (
+                OPTIONS_TEST,
+                "clearing the cached digests takes the list of them with it",
+            )
+        ],
+    },
 ]
 
 

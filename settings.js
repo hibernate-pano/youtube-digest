@@ -13,12 +13,12 @@ var YTD_SETTINGS = (() => {
    * review progress). This is the Cloudflare Worker URL; the extension never
    * holds OAuth secrets — it only stores the bearer token issued after login.
    *
-   * Local development: run "npm run dev" inside server/ (wrangler dev, which
-   * listens on port 8787), point this at "http://localhost:8787", and add
-   * "http://localhost:8787/*" to the host permissions in manifest.json.
-   * Both changes are for your machine only. A build that points at
-   * localhost cannot reach the account service at all, and the extension
-   * would quietly keep every note on the device.
+   * The steps for pointing the extension at a worker on your own machine are
+   * in the repository's server setup notes (server/SETUP.md), not here: this
+   * file is published, and a reader of it is a user of the product, not
+   * someone setting it up. A build that points at localhost cannot reach the
+   * account service at all, and the extension would quietly keep every note
+   * on the device.
    */
   const SERVER_BASE_URL = "https://ytd.panbo.space";
   const GITHUB_SESSION_KEY = "ytd_github_session";
@@ -530,6 +530,20 @@ var YTD_SETTINGS = (() => {
   const IMPORT_REPORT_STORAGE_KEY = "ytd_import_report";
 
   /**
+   * Where the list of the cached digests on this device is kept.
+   *
+   * The panel keeps a digest of every video it has read, and that list can
+   * grow: a digest of a three hour talk is a megabyte or two. The index is
+   * what the panel reads to know how many there are and how much room they
+   * take, without reading every one of them.
+   *
+   * It lives here, and not only in the panel, because the settings page
+   * clears the cache too. A cache that is cleared but still counted is a
+   * cache the product believes in and the device does not have.
+   */
+  const DIGEST_CACHE_INDEX_KEY = "ytd_digest_cache_index";
+
+  /**
    * Copy for the GitHub sync chip in the panel header. The signed-in and
    * signed-out labels already ship in the markup; these strings cover the
    * tooltip, the accessible name, and the expired-session state.
@@ -907,6 +921,7 @@ var YTD_SETTINGS = (() => {
     accountScopedStorageKeys,
     clearAccountScopedStorage,
     IMPORT_REPORT_STORAGE_KEY,
+    DIGEST_CACHE_INDEX_KEY,
     SYNC_COPY,
     normalizeUiLanguage,
     translateSyncCopy,

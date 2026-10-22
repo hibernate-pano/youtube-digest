@@ -1073,6 +1073,11 @@ const YTD_OPTIONS = (() => {
       const all = await storage.get(null);
       const keys = Object.keys(all).filter((key) => key.startsWith("digest_"));
       if (keys.length) await storage.remove(keys);
+      // The list of what is cached goes with the cache. The panel reads
+      // that list to count the cached digests and to know how much room
+      // they take, so a list that outlives the cache makes the panel
+      // believe in videos the device no longer has.
+      await storage.remove(settingsApi.DIGEST_CACHE_INDEX_KEY);
       setStatus(dataStatus, "clearedDigests", { count: keys.length });
     }
 

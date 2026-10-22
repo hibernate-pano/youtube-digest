@@ -1510,3 +1510,38 @@ test("the warning names the items in the language the page is showing", () => {
   assert.doesNotMatch(english, /—/);
   assert.doesNotMatch(chinese, /—/);
 });
+
+test("clearing the cached digests takes the list of them with it", async () => {
+  // The panel keeps a list of the videos it has read, so it can count them
+  // and know how much room they take without reading every one of them. A
+  // list that outlives the cache makes the panel count videos the device
+  // no longer has.
+  const { api, storage } = createSettingsHarness({
+    digest_abc123: { transcript: "a transcript" },
+    digest_def456: { transcript: "another transcript" },
+    ytd_digest_cache_index: { version: 1, entries: { abc123: 1024 } },
+  });
+
+  await api.clearCachedDigests();
+
+  assert.equal(storage.digest_abc123, undefined, "the digest stayed");
+  assert.equal(
+    storage.ytd_digest_cache_index,
+    undefined,
+    "the list of the cached digests stayed behind",
+  );
+});
+
+test("the settings page and the panel name the cache list the same way", () => {
+  // Two names for one key means the settings page clears the cache and
+  // leaves the list behind, and nobody notices until the panel counts
+  // videos that are not there.
+  const panel = read("sidepanel.js");
+  const match = panel.match(/const DIGEST_CACHE_INDEX_KEY = "([^"]+)"/);
+  assert.ok(match, "the panel does not name the list of the cached digests");
+  assert.equal(
+    match[1],
+    require("../settings.js").DIGEST_CACHE_INDEX_KEY,
+    "the settings page and the panel use different names for the same key",
+  );
+});
