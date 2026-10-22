@@ -17,7 +17,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+from mutation_harness import workspace
+
+# The check works on a copy of the project. A mutation that an interrupted
+# run leaves behind, and an edit made while the check runs, both stay out of
+# the working tree.
+ROOT = workspace()
 SERVER_TEST = "server/tests/server.test.js"
 
 
@@ -52,10 +57,11 @@ def replace(path, hunks):
     return text != original
 
 
-def run_test(name):
+def run_test(name, test_file=SERVER_TEST):
     """Runs one named server test and says whether it went red.
 
-    @param {str} name the name of the test.
+    @param {str} name the test name pattern.
+    @param {str} test_file the test file that holds the test.
     @returns {tuple[bool, str]} whether it failed, and what it said.
     """
     result = subprocess.run(
@@ -64,7 +70,7 @@ def run_test(name):
             "--test",
             "--test-name-pattern",
             name,
-            SERVER_TEST,
+            test_file,
         ],
         cwd=ROOT,
         capture_output=True,
@@ -166,12 +172,31 @@ MUTATIONS = [
         "file": "server/src/db.js",
         "hunks": [
             (
-                """    if (part === "notes") return bytes;""",
-                """    if (false) return bytes;""",
+                """    const wantsWords = part !== "notes";
+    let bytes = 0;
+    if (wantsNotes) {
+      for (const row of this.notes.values()) {""",
+                """    const wantsWords = true;
+    let bytes = 0;
+    if (wantsNotes) {
+      for (const row of this.notes.values()) {""",
             )
         ],
         "expect": [
             "the export can be asked for one part at a time",
+        ],
+    },
+    {
+        "name": "M9 a capped delta does not say it was capped",
+        "file": "server/src/db.js",
+        "hunks": [
+            (
+                """  const truncated = rows.length > MAX_LIST_ROWS;""",
+                """  const truncated = false;""",
+            )
+        ],
+        "expect": [
+            "a capped delta says so, so the device does not keep what was deleted",
         ],
     },
     {
@@ -191,6 +216,162 @@ MUTATIONS = [
             "the account limit carries the number the limit is",
         ],
     },
+    # --- POST /api/sync: a batch of notes and words in one request ---
+    {
+        "name": "M10 the batch writes a note the user deleted again",
+        "file": "server/src/db.js",
+        "hunks": [
+            (
+                """    const storedWords = new Map();
+    for (const row of this.vocabulary.values()) {
+      if (row.userId === userId) {
+        storedWords.set(vocabularyKey(row.term, row.sentence), row);
+      }
+    }
+
+    const notePlan = planBatch(
+      storedNotes,
+      notes,
+      (note) => note.clientId,
+      true,
+    );""",
+                """    const storedWords = new Map();
+    for (const row of this.vocabulary.values()) {
+      if (row.userId === userId) {
+        storedWords.set(vocabularyKey(row.term, row.sentence), row);
+      }
+    }
+
+    const notePlan = planBatch(
+      storedNotes,
+      notes,
+      (note) => note.clientId,
+      false,
+    );""",
+            ),
+            (
+                """        Object.assign(stored, noteFields(note), { updatedAt: now });""",
+                """        Object.assign(stored, noteFields(note), { updatedAt: now, deletedAt: null });""",
+            ),
+        ],
+        "expect": [
+            "a batch does not bring a deleted note back",
+        ],
+    },
+    {
+        "name": "M11 the batch cap is checked one row at a time",
+        "file": "server/src/db.js",
+        "hunks": [
+            (
+                """    const used = this.countLiveRows(userId);
+    if (used + added > MAX_ACCOUNT_ROWS) {""",
+                """    const used = this.countLiveRows(userId);
+    if (used > MAX_ACCOUNT_ROWS) {""",
+            )
+        ],
+        "expect": [
+            "a batch that would pass the account cap writes nothing",
+        ],
+    },
+    {
+        "name": "M12 a batch larger than the limit is accepted",
+        "file": "server/src/routes/sync.js",
+        "hunks": [
+            (
+                """  if (total > MAX_BATCH_ITEMS) {""",
+                """  if (total > MAX_BATCH_ITEMS * 100) {""",
+            )
+        ],
+        "expect": [
+            "a batch larger than the limit is refused with a message to act on",
+        ],
+    },
+    {
+        "name": "M13 a batch accepts an id from another account",
+        "file": "server/src/routes/sync.js",
+        "hunks": [
+            (
+                """    if (error instanceof ForeignRowError) {""",
+                """    if (error instanceof ForeignRowError && false) {""",
+            )
+        ],
+        "expect": [
+            "a batch may not name another account's row",
+        ],
+    },
+    {
+        "name": "M14 one bad item does not refuse the batch",
+        "file": "server/src/routes/sync.js",
+        "hunks": [
+            (
+                """  const notes = readNotes(rawNotes);""",
+                """  const notes = [];""",
+            )
+        ],
+        "expect": [
+            "one bad item refuses the whole batch and names its position",
+        ],
+    },
+    {
+        "name": "M15 the batch writes notes but forgets the words",
+        "file": "server/src/routes/sync.js",
+        "hunks": [
+            (
+                """  const vocabulary = readVocabulary(rawVocabulary);""",
+                """  const vocabulary = [];""",
+            )
+        ],
+        "expect": [
+            "a batch pushes notes and words in one request",
+        ],
+    },
+    {
+        "name": "M16 an older edit wins over the stored row",
+        "file": "server/src/db.js",
+        "hunks": [
+            (
+                """      if (Number.isFinite(storedAt) && item.updatedAt <= storedAt) {""",
+                """      if (Number.isFinite(storedAt) && item.updatedAt < -1) {""",
+            )
+        ],
+        "expect": [
+            "a batch item older than the stored row does not overwrite it",
+        ],
+    },
+    {
+        "name": "M17 a batch does not bring a deleted word back",
+        "file": "server/src/db.js",
+        "test_file": "server/tests/store-contract.test.js",
+        "hunks": [
+            (
+                """      deleted_at = null,
+      updated_at = now()
+    returning id, term, sentence, updated_at as "updatedAt\"""",
+                """      deleted_at = vocabulary.deleted_at,
+      updated_at = now()
+    returning id, term, sentence, updated_at as "updatedAt\"""",
+            )
+        ],
+        "expect": [
+            "a batch brings a deleted word back with the schedule it had",
+        ],
+    },
+    {
+        "name": "M18 a word brought back from deletion takes no slot",
+        "file": "server/src/db.js",
+        "test_file": "server/tests/store-contract.test.js",
+        "hunks": [
+            (
+                """    const row = stored.get(key);
+    if (step.action === "insert" || (row && row.deletedAt)) count += 1;""",
+                """    const row = stored.get(key);
+    if (step.action === "insert") count += 1;""",
+            )
+        ],
+        "expect": [
+            "a word brought back from deletion takes a slot too",
+        ],
+    },
 ]
 
 
@@ -204,7 +385,9 @@ def main():
             if not changed:
                 raise SystemExit(f"mutation did not change the file: {mutation['name']}")
             for test_name in mutation["expect"]:
-                failed, output = run_test(test_name)
+                failed, output = run_test(
+                    test_name, mutation.get("test_file", SERVER_TEST)
+                )
                 status = "RED" if failed else "GREEN"
                 print(f"{status:5} {mutation['name']} -> {test_name}")
                 if not failed:

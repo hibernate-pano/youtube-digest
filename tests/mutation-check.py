@@ -12,7 +12,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+from mutation_harness import workspace
+
+# The check works on a copy of the project. A mutation that an interrupted
+# run leaves behind, and an edit made while the check runs, both stay out of
+# the working tree.
+ROOT = workspace()
 
 
 def _stop_on_signal(signum, frame):
@@ -384,6 +389,45 @@ MUTATIONS = [
             (
                 "translation.test.js",
                 "the OpenCode Go gateway is asked with the session it routes on",
+            ),
+        ],
+    },
+    {
+        "name": "M15 a refused key is reported as a broken request",
+        "file": "background.js",
+        "hunks": [
+            (
+                """      if (response.status === 401 || response.status === 403) {""",
+                """      if (false) {""",
+            )
+        ],
+        "expect": [
+            (
+                "background-vocabulary.test.js",
+                "a provider that refuses the key is reported as a missing key",
+            ),
+        ],
+    },
+    {
+        "name": "M16 the refusal does not reach the surface",
+        "file": "background.js",
+        "hunks": [
+            (
+                """    return {
+      success: false,
+      error: error.message || "Vocabulary extraction failed",
+      code: error.code,
+    };""",
+                """    return {
+      success: false,
+      error: error.message || "Vocabulary extraction failed",
+    };""",
+            )
+        ],
+        "expect": [
+            (
+                "background-vocabulary.test.js",
+                "a provider that refuses the key is reported as a missing key",
             ),
         ],
     },

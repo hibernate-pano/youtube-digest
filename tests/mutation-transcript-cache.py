@@ -12,7 +12,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+from mutation_harness import workspace
+
+# The check works on a copy of the project. A mutation that an interrupted
+# run leaves behind, and an edit made while the check runs, both stay out of
+# the working tree.
+ROOT = workspace()
 
 
 def _stop_on_signal(signum, frame):

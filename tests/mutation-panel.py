@@ -8,7 +8,11 @@ guard the fixes.
 
 The mutations here cover the five-tab panel, the summary gate, the
 vocabulary tab, the notes tab and the library - the surfaces a user meets
-in one sitting.
+in one sitting. The last eight cover the scale of the panel: the drawn
+window, the search that waits for the typing, the caret that reads one row
+at a time, the cache that is kept under a byte budget, the count that is
+read from the index, and the sign-out that asks before it takes the last
+copy of the user's notes away.
 """
 
 import signal
@@ -16,7 +20,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+from mutation_harness import workspace
+
+# The check works on a copy of the project. A mutation that an interrupted
+# run leaves behind, and an edit made while the check runs, both stay out of
+# the working tree.
+ROOT = workspace()
 
 
 def _stop_on_signal(signum, frame):
@@ -47,7 +56,26 @@ def replace(path, hunks):
             )
         text = text.replace(old, new)
     target.write_text(text)
-    return text != original
+    return text
+
+
+def restore(path, original, mutated):
+    """Puts the file back, unless somebody else changed it in the meantime.
+
+    The mutation is a broken version of a file other people are working on
+    at the same time. If the file is still the broken version, it is put
+    back the way it was. If it is not, somebody else has written to it
+    while the mutation was running, and putting the old text back would
+    throw their work away. The file is left as it is and the clash is
+    said out loud.
+    """
+    target = ROOT / path
+    current = target.read_text()
+    if current == mutated:
+        target.write_text(original)
+        return True
+    print(f"      WARNING {path} was written to while the mutation ran; left alone")
+    return False
 
 
 def run_test(file, name):
@@ -150,8 +178,8 @@ MUTATIONS = [
         "file": "sidepanel.js",
         "hunks": [
             (
-                """    const statusKey = WORD_STATUS_LABELS[item.status] || "wordStatusLearning";""",
-                """    const statusKey = item.status;""",
+                """  const statusKey = WORD_STATUS_LABELS[item.status] || "wordStatusLearning";""",
+                """  const statusKey = item.status;""",
             )
         ],
         "expect": [
@@ -714,6 +742,271 @@ MUTATIONS = [
             ),
         ],
     },
+    {
+        "name": "M28 the gate cannot fail",
+        "file": "sidepanel.js",
+        "hunks": [
+            # The gate asks the user when the work goes past the number they
+            # agreed to. Without the question the panel spends the user's
+            # balance on a summary that landed after the price was stated.
+            (
+                """  const missing = budget.spent + wanted - budget.confirmed;
+  const agreed = await confirmTranslationCost(missing);
+  if (!agreed) {
+    translationBudgetLedger.set(key, budget);
+    return false;
+  }
+  budget.confirmed = budget.spent + wanted;""",
+                """  budget.confirmed = budget.spent + wanted;""",
+            )
+        ],
+        "expect": [
+            (
+                "panel-feedback.test.js",
+                "a summary that lands after the price was agreed to asks again",
+            ),
+        ],
+    },
+    {
+        "name": "M29 the vocabulary path swallows the missing key",
+        "file": "sidepanel.js",
+        "hunks": [
+            # The worker answers NO_AI_KEY when there is no key. Without
+            # this branch the panel says the extraction failed, and the user
+            # goes looking for a broken sentence instead of a missing key.
+            (
+                """        if (isMissingAiKey(result)) {
+          showAiKeyNeededDialog(panelFailureMessage(result), button);
+          tooltip.style.display = "none";
+          return;
+        }
+""",
+                "",
+            )
+        ],
+        "expect": [
+            (
+                "panel-feedback.test.js",
+                "a word extraction without a provider key says the key is missing",
+            ),
+        ],
+    },
+    {
+        "name": "M30 the transcript is drawn in full again",
+        "file": "sidepanel.js",
+        "hunks": [
+            # The transcript is drawn a window at a time, so the page a reader
+            # waits for does not grow with the length of the talk. Drawing
+            # every row is what a three hour talk used to cost.
+            (
+                """function windowedListRange(state) {
+  const band = windowedListVisibleBand(state);
+""",
+                """function windowedListRange(state) {
+  if (state.listId === "transcriptList") {
+    return { start: 0, end: state.rows.length };
+  }
+  const band = windowedListVisibleBand(state);
+""",
+            )
+        ],
+        "expect": [
+            (
+                "panel-scale.test.js",
+                "a transcript of three thousand rows does not build a page of three thousand rows",
+            ),
+        ],
+    },
+    {
+        "name": "M31 the search runs on every key press",
+        "file": "sidepanel.js",
+        "hunks": [
+            # The search waits for the typing to settle. Searching on every
+            # key press means searching a transcript of three thousand rows
+            # again for the letter the reader has just typed over.
+            (
+                """function scheduleTranscriptSearch() {
+  cancelTranscriptSearch();
+  transcriptSearchTimer = setTimeout(() => {
+    transcriptSearchTimer = null;
+    refreshTranscriptSearch();
+  }, TRANSCRIPT_SEARCH_DELAY_MS);
+}
+""",
+                """function scheduleTranscriptSearch() {
+  cancelTranscriptSearch();
+  refreshTranscriptSearch();
+}
+""",
+            )
+        ],
+        "expect": [
+            (
+                "panel-scale.test.js",
+                "the transcript is searched once the typing has settled",
+            ),
+        ],
+    },
+    {
+        "name": "M32 the same word is searched again",
+        "file": "sidepanel.js",
+        "hunks": [
+            # The answer to the last search is kept. The transcript is drawn
+            # again whenever the language changes, and the words have not
+            # changed with the drawing.
+            (
+                """    transcriptSearchQuery = query;
+    transcriptSearchScanned = true;
+""",
+                """    transcriptSearchQuery = query;
+    transcriptSearchScanned = false;
+""",
+            )
+        ],
+        "expect": [
+            (
+                "panel-scale.test.js",
+                "the same word is not looked for twice",
+            ),
+        ],
+    },
+    {
+        "name": "M33 the row list is built again on every key press",
+        "file": "sidepanel.js",
+        "hunks": [
+            # The caret walks one row at a time, and the list of rows is
+            # built once per drawing. Building it again for every key press
+            # is the walk over three thousand rows that the caret used to
+            # do.
+            (
+                """function collectTranscriptRows() {
+  if (
+    transcriptRowsCache &&
+    transcriptRowsCacheVersion === transcriptWindow.version
+  ) {
+    return transcriptRowsCache;
+  }
+
+  const rows = createTranscriptRowList();
+""",
+                """function collectTranscriptRows() {
+  const rows = createTranscriptRowList();
+""",
+            )
+        ],
+        "expect": [
+            (
+                "panel-scale.test.js",
+                "the caret reads the rows it walks and not the whole transcript",
+            ),
+        ],
+    },
+    {
+        "name": "M34 the word notebook is drawn in full again",
+        "file": "sidepanel.js",
+        "hunks": [
+            # The notebook is drawn a window at a time. Five hundred cards
+            # at once is the page the reader used to wait for.
+            (
+                """function windowedListRange(state) {
+  const band = windowedListVisibleBand(state);
+""",
+                """function windowedListRange(state) {
+  if (state.listId === "wordsList") {
+    return { start: 0, end: state.rows.length };
+  }
+  const band = windowedListVisibleBand(state);
+""",
+            )
+        ],
+        "expect": [
+            (
+                "panel-scale.test.js",
+                "five hundred word cards do not build a page of five hundred cards",
+            ),
+        ],
+    },
+    {
+        "name": "M35 the cache is dropped by its age and its count only",
+        "file": "sidepanel.js",
+        "hunks": [
+            # The cache is kept under a byte budget. Twenty digests of a
+            # three hour talk are twenty-two megabytes of store, and a store
+            # that size is read into memory every time it is counted.
+            (
+                """    // The ones that are too big. The oldest goes first.
+    let bytes = survivors().reduce((sum, entry) => sum + entry.bytes, 0);
+    for (const entry of survivors()) {
+      if (bytes <= DIGEST_CACHE_MAX_BYTES) break;
+      drop(entry);
+      bytes -= entry.bytes;
+    }
+""",
+                "",
+            )
+        ],
+        "expect": [
+            (
+                "panel-scale.test.js",
+                "the cache is dropped by its size and not only by its age",
+            ),
+        ],
+    },
+    {
+        "name": "M36 the count reads every cached digest",
+        "file": "sidepanel.js",
+        "hunks": [
+            # The count is read from the index the panel keeps. Reading the
+            # whole store to count two numbers reads every cached
+            # transcript as well.
+            (
+                """      const index = await readDigestCacheIndex();
+      const count = index ? Object.keys(index).length : 0;
+      libraryCount.textContent = `(${count})`;
+""",
+                """      const all = await chrome.storage.local.get(null);
+      const count = Object.keys(all).filter((key) =>
+        key.startsWith("digest_"),
+      ).length;
+      libraryCount.textContent = `(${count})`;
+""",
+            )
+        ],
+        "expect": [
+            (
+                "panel-scale.test.js",
+                "the welcome count reads the index and not every cached digest",
+            ),
+        ],
+    },
+    {
+        "name": "M37 the sign-out takes the account's items away without asking",
+        "file": "sidepanel.js",
+        "hunks": [
+            # The sign-out asks about the notes, words and queued deletes
+            # that only exist on this device. Without the question the last
+            # copy of them goes with the account.
+            (
+                """async function signOutGithubAccount() {
+  const unsynced = await unsyncedAccountItems();
+  if (unsynced.notes + unsynced.words > 0) {
+    const agreed = await confirmSignOutWithUnsyncedItems(unsynced);
+    if (!agreed) return false;
+  }
+  await chrome.runtime.sendMessage({ action: "logoutGithub" });
+""",
+                """async function signOutGithubAccount() {
+  await chrome.runtime.sendMessage({ action: "logoutGithub" });
+""",
+            )
+        ],
+        "expect": [
+            (
+                "panel-scale.test.js",
+                "the sign-out asks about the items that only exist on this device",
+            ),
+        ],
+    },
 ]
 
 
@@ -722,9 +1015,10 @@ def main():
     for mutation in MUTATIONS:
         path = ROOT / mutation["file"]
         original = path.read_text()
+        mutated = None
         try:
-            changed = replace(mutation["file"], mutation["hunks"])
-            if not changed:
+            mutated = replace(mutation["file"], mutation["hunks"])
+            if mutated == original:
                 raise SystemExit(f"mutation did not change the file: {mutation['name']}")
             for test_file, test_name in mutation["expect"]:
                 failed, output = run_test(test_file, test_name)
@@ -733,8 +1027,10 @@ def main():
                 if not failed:
                     failures.append((mutation["name"], test_name, output))
         finally:
-            path.write_text(original)
-        print(f"      restored {mutation['file']}")
+            # The file was never written when the mutation itself failed, so
+            # there is nothing to put back.
+            if mutated is None or restore(mutation["file"], original, mutated):
+                print(f"      restored {mutation['file']}")
 
     if failures:
         print("\nMUTATIONS THAT SURVIVED (the test did not catch them):")
