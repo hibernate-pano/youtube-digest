@@ -627,6 +627,90 @@ const READ_LAYOUT = () => {
   return problems;
 };
 
+/**
+ * Reads the text that cannot be read.
+ *
+ * The panel has a dark theme, and a colour that works on cream can be
+ * invisible on charcoal. The browser does not complain about either: it
+ * paints the text and moves on. The only honest check is the one the eye
+ * makes, and the eye measures contrast.
+ *
+ * The threshold is the one the web accessibility guidelines use: 4.5 to 1
+ * for body text, 3 to 1 for large text.
+ */
+const READ_CONTRAST = () => {
+  const problems = [];
+  const parse = (value) => {
+    const match = String(value || "").match(/rgba?\(([^)]+)\)/);
+    if (!match) return null;
+    const parts = match[1].split(",").map((part) => parseFloat(part.trim()));
+    if (parts.length < 3 || parts.some((part) => Number.isNaN(part))) return null;
+    return {
+      r: parts[0],
+      g: parts[1],
+      b: parts[2],
+      a: parts.length > 3 ? parts[3] : 1,
+    };
+  };
+  const over = (top, bottom) => ({
+    r: top.r * top.a + bottom.r * (1 - top.a),
+    g: top.g * top.a + bottom.g * (1 - top.a),
+    b: top.b * top.a + bottom.b * (1 - top.a),
+    a: 1,
+  });
+  const luminance = ({ r, g, b }) => {
+    const channel = (value) => {
+      const scaled = value / 255;
+      return scaled <= 0.03928 ? scaled / 12.92 : ((scaled + 0.055) / 1.055) ** 2.4;
+    };
+    return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+  };
+  const backgroundOf = (element) => {
+    let node = element;
+    while (node && node !== document.documentElement) {
+      const background = parse(window.getComputedStyle(node).backgroundColor);
+      if (background && background.a > 0.95) return background;
+      node = node.parentElement;
+    }
+    const page = parse(window.getComputedStyle(document.body).backgroundColor);
+    return page && page.a > 0.95 ? page : { r: 255, g: 255, b: 255, a: 1 };
+  };
+
+  for (const element of document.querySelectorAll("body *")) {
+    const style = window.getComputedStyle(element);
+    if (style.display === "none" || style.visibility === "hidden") continue;
+    if (element.offsetParent === null && style.position !== "fixed") continue;
+    // Only the element that holds the text is measured: a parent inherits
+    // the colour but the child is what is painted.
+    const text = [...element.childNodes]
+      .filter((node) => node.nodeType === 3)
+      .map((node) => node.textContent.trim())
+      .join(" ")
+      .trim();
+    if (!text) continue;
+
+    const color = parse(style.color);
+    if (!color) continue;
+    const background = backgroundOf(element);
+    const painted = over(color, background);
+    const lighter = Math.max(luminance(painted), luminance(background));
+    const darker = Math.min(luminance(painted), luminance(background));
+    const ratio = (lighter + 0.05) / (darker + 0.05);
+
+    const size = parseFloat(style.fontSize) || 0;
+    const weight = Number(style.fontWeight) || 400;
+    const large = size >= 24 || (size >= 18.66 && weight >= 700);
+    const floor = large ? 3 : 4.5;
+    if (ratio < floor) {
+      problems.push(
+        `The text "${text.slice(0, 40)}" has ${ratio.toFixed(2)} to 1 ` +
+          `contrast on its background; ${floor} to 1 is the floor.`,
+      );
+    }
+  }
+  return problems;
+};
+
 async function main() {
   fs.mkdirSync(outDir, { recursive: true });
   const browser = await chromium.launch();
@@ -777,6 +861,34 @@ async function main() {
         errors.map((error) => `    ${error}`).join("\n"),
     );
   }
+
+  // The text has to be readable in the theme the reader is actually using.
+  // The dark theme is not a variation of the light one: it is a different
+  // set of colours, and each one has to be read on its own.
+  for (const scheme of ["light", "dark"]) {
+    await page.emulateMedia({ colorScheme: scheme });
+    for (const tab of Object.keys(TAB_EXPECTATIONS)) {
+      await page.evaluate((name) => {
+        document.querySelector(`[data-tab="${name}"]`)?.click();
+      }, tab);
+      await page.waitForTimeout(220);
+      const problems = await page.evaluate(READ_CONTRAST);
+      for (const problem of problems) {
+        failures.push(`In the ${scheme} theme, on the ${tab} tab: ${problem}`);
+      }
+    }
+    if (scheme === "dark") {
+      await page.evaluate(() => {
+        document.querySelector('[data-tab="notes"]')?.click();
+      });
+      await page.waitForTimeout(220);
+      await page.screenshot({
+        path: path.join(outDir, "dark-notes.png"),
+        fullPage: true,
+      });
+    }
+  }
+  await page.emulateMedia({ colorScheme: "light" });
 
   // The panel has to fit the column it is given. The pictures above are
   // taken at one width; this walks the tabs again at every width a user can
