@@ -17,12 +17,52 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { MemoryStore, NeonStore, MAX_ACCOUNT_ROWS } = require("../src/db");
+const {
+  MemoryStore,
+  NeonStore,
+  MAX_ACCOUNT_ROWS,
+  StorageLimitError,
+  ForeignRowError,
+} = require("../src/db");
 const { createFakeSql } = require("./helpers/fake-sql");
 
 const ALICE = 1;
 const BOB = 2;
 const DUE_NOW = "2000-01-01T00:00:00.000Z"; // unambiguously in the past
+const VICTIM_NOTE_ID = "11111111-1111-4111-8111-111111111111";
+
+/** A note as the batch route hands it to the store. */
+function batchNote(clientId, text, extra) {
+  return Object.assign(
+    {
+      clientId,
+      note: text,
+      videoId: "abc123xyz",
+      videoTitle: "Video",
+      channelName: "Channel",
+      timestampSeconds: 0,
+      quote: "",
+    },
+    extra || {},
+  );
+}
+
+/** A word as the batch route hands it to the store. */
+function batchWord(term, sentence, extra) {
+  return Object.assign(
+    {
+      term,
+      translation: "",
+      sentence,
+      sentenceTranslation: "",
+      videoId: "abc123xyz",
+      videoTitle: "Video",
+      timestampSeconds: 0,
+      status: "learning",
+    },
+    extra || {},
+  );
+}
 
 /**
  * One fixture per store implementation, exposing the same operations so the
@@ -53,6 +93,29 @@ function createFixture(name) {
       },
       addUser(userId) {
         return store.upsertUser({ githubId: userId, login: "u" + userId, avatarUrl: "" });
+      },
+      seedNotes(userId, count) {
+        // The cap is a number of rows, and a test that reaches it cannot
+        // write every row through the public API: it would take a minute.
+        const now = "2026-01-01T00:00:00.000Z";
+        for (let index = 0; index < count; index += 1) {
+          const id = "seed-" + index;
+          store.notes.set(id, {
+            id,
+            userId,
+            clientId: "seed-c-" + index,
+            videoId: "abc123xyz",
+            videoTitle: "",
+            channelName: "",
+            timestampSeconds: 0,
+            quote: "",
+            note: "seed",
+            starred: false,
+            createdAt: now,
+            updatedAt: now,
+            deletedAt: null,
+          });
+        }
       },
     };
   }
@@ -98,6 +161,20 @@ function createFixture(name) {
     addUser(userId) {
       const row = sql.__fake.seedUser(userId);
       return Promise.resolve(row);
+    },
+    seedNotes(userId, count) {
+      // The fake owns the tables, so the rows go straight in. The public API
+      // would issue one statement per row.
+      const now = "2026-01-01T00:00:00.000Z";
+      for (let index = 0; index < count; index += 1) {
+        sql.__fake.seedNote(userId, {
+          id: "seed-" + index,
+          client_id: "seed-c-" + index,
+          note: "seed",
+          created_at: now,
+          updated_at: now,
+        });
+      }
     },
   };
 }
@@ -635,7 +712,292 @@ for (const name of ["MemoryStore", "NeonStore"]) {
       "the token version must either be gone or bumped past the pre-deletion value",
     );
   });
+
+  test(`[${name}] a batch writes notes and words and answers every item`, async () => {
+    const f = createFixture(name);
+    const pushed = await f.store.batchUpsert(ALICE, {
+      notes: [batchNote("batch-1", "first"), batchNote("batch-2", "second")],
+      vocabulary: [batchWord("serendipity", "A happy accident.")],
+    });
+
+    assert.deepEqual(
+      pushed.notes.map((note) => note.clientId),
+      ["batch-1", "batch-2"],
+      "the answer has to name every note of the batch, in order",
+    );
+    assert.deepEqual(
+      pushed.vocabulary.map((word) => [word.term, word.sentence]),
+      [["serendipity", "A happy accident."]],
+    );
+    for (const entry of pushed.notes.concat(pushed.vocabulary)) {
+      assert.equal(typeof entry.id, "string");
+      assert.ok(entry.id.length > 0, "the answer has to name the row");
+      assert.ok(
+        Number.isFinite(Date.parse(entry.updatedAt)),
+        "the answer has to say when the row changed",
+      );
+    }
+
+    assert.deepEqual(
+      (await f.store.listNotes(ALICE)).map((note) => note.note).sort(),
+      ["first", "second"],
+    );
+    assert.equal((await f.store.listVocabulary(ALICE)).length, 1);
+    assert.equal(
+      (await f.store.listDueReviews(ALICE)).length,
+      1,
+      "a word of the batch must be reviewable",
+    );
+  });
+
+  test(`[${name}] a batch does not bring a deleted note back`, async () => {
+    const f = createFixture(name);
+    const created = await f.addNote(ALICE, {
+      clientId: "gone-1",
+      note: "the user deleted this",
+    });
+    await f.store.deleteNote(ALICE, created.id);
+
+    // The device that still holds the note pushes it again, with a moment
+    // after the delete. A tombstone is not a row a push can win.
+    const pushed = await f.store.batchUpsert(ALICE, {
+      notes: [batchNote("gone-1", "the user deleted this", { updatedAt: Date.now() + 60_000 })],
+      vocabulary: [],
+    });
+
+    assert.equal(pushed.notes[0].id, created.id, "the answer has to name the stored row");
+    assert.equal((await f.store.listNotes(ALICE)).length, 0, "the deleted note came back");
+  });
+
+  test(`[${name}] a batch keeps the newer of two edits`, async () => {
+    const f = createFixture(name);
+    const created = await f.addNote(ALICE, {
+      clientId: "clock-1",
+      note: "the newer text",
+    });
+
+    const stale = await f.store.batchUpsert(ALICE, {
+      notes: [batchNote("clock-1", "the older text", { updatedAt: Date.now() - 60_000 })],
+      vocabulary: [],
+    });
+    assert.equal(stale.notes[0].id, created.id);
+    assert.equal(
+      (await f.store.listNotes(ALICE))[0].note,
+      "the newer text",
+      "an older edit overwrote the stored row",
+    );
+
+    await f.store.batchUpsert(ALICE, {
+      notes: [batchNote("clock-1", "the newest text", { updatedAt: Date.now() + 60_000 })],
+      vocabulary: [],
+    });
+    assert.equal(
+      (await f.store.listNotes(ALICE))[0].note,
+      "the newest text",
+      "a newer edit lost to the stored row",
+    );
+  });
+
+  test(`[${name}] a batch brings a deleted word back with the schedule it had`, async () => {
+    // A word is not a note. The note rule is "what the user deleted stays
+    // deleted"; a word that is captured again is the user saying they want
+    // it after all, and POST /api/vocabulary brings it back. The batch has
+    // to do the same, or a word captured on a second device is lost from the
+    // cloud for good.
+    const f = createFixture(name);
+    const word = await f.addVocabulary(ALICE, {
+      term: "persistence",
+      sentence: "Persistence pays off.",
+    });
+    await f.store.submitReview(ALICE, word.id, 4);
+    await f.store.deleteVocabulary(ALICE, word.id);
+    assert.equal((await f.store.listVocabulary(ALICE)).length, 0);
+
+    const pushed = await f.store.batchUpsert(ALICE, {
+      notes: [],
+      vocabulary: [batchWord("persistence", "Persistence pays off.")],
+    });
+
+    assert.equal(pushed.vocabulary[0].id, word.id, "the word must come back as the same row");
+    assert.equal((await f.store.listVocabulary(ALICE)).length, 1, "the word did not come back");
+    assert.equal(
+      (await f.store.listDueReviews(ALICE)).length,
+      0,
+      "the review schedule the user had must survive the re-capture",
+    );
+  });
+
+  test(`[${name}] a batch that repeats an item writes one row`, async () => {
+    // Two chunks of the same push may overlap. An item repeated inside one
+    // batch is one row, the way two requests with the same client id are.
+    const f = createFixture(name);
+    const pushed = await f.store.batchUpsert(ALICE, {
+      notes: [batchNote("repeat-1", "first"), batchNote("repeat-1", "second")],
+      vocabulary: [batchWord("repeat", "Once."), batchWord("repeat", "Once.")],
+    });
+
+    assert.equal(pushed.notes[0].id, pushed.notes[1].id, "the repeated note got two rows");
+    assert.equal(pushed.vocabulary[0].id, pushed.vocabulary[1].id);
+    assert.equal(await f.store.countNotes(ALICE), 1);
+    assert.equal(await f.store.countVocabulary(ALICE), 1);
+    assert.equal((await f.store.listDueReviews(ALICE)).length, 1);
+  });
+
+  test(`[${name}] a batch that would pass the cap writes nothing`, async () => {
+    const f = createFixture(name);
+    f.seedNotes(ALICE, MAX_ACCOUNT_ROWS - 1);
+
+    // One of the two would fit, the other would not: the batch is all or
+    // nothing, so neither is written.
+    await assert.rejects(
+      () =>
+        f.store.batchUpsert(ALICE, {
+          notes: [batchNote("cap-1", "one"), batchNote("cap-2", "two")],
+          vocabulary: [],
+        }),
+      (error) => {
+        assert.ok(error instanceof StorageLimitError, "the batch must be refused as full");
+        assert.equal(error.limit, MAX_ACCOUNT_ROWS, "the answer has to carry the limit");
+        return true;
+      },
+    );
+    assert.equal(
+      await f.store.countNotes(ALICE),
+      MAX_ACCOUNT_ROWS - 1,
+      "a refused batch wrote a row",
+    );
+
+    await f.store.batchUpsert(ALICE, {
+      notes: [batchNote("cap-1", "one")],
+      vocabulary: [],
+    });
+    assert.equal(await f.store.countNotes(ALICE), MAX_ACCOUNT_ROWS);
+
+    await assert.rejects(
+      () =>
+        f.store.batchUpsert(ALICE, {
+          notes: [batchNote("cap-2", "two")],
+          vocabulary: [],
+        }),
+      (error) => error instanceof StorageLimitError,
+      "an account at the cap accepted another row",
+    );
+  });
+
+  test(`[${name}] a word brought back from deletion takes a slot too`, async () => {
+    // A tombstone is not a live row, so bringing one back is as expensive as
+    // inserting one. Checking only the inserts would let a batch pass the
+    // cap without inserting anything.
+    const f = createFixture(name);
+    const word = await f.addVocabulary(ALICE, { term: "revive", sentence: "Revive me." });
+    await f.store.deleteVocabulary(ALICE, word.id);
+    f.seedNotes(ALICE, MAX_ACCOUNT_ROWS - 1);
+
+    await assert.rejects(
+      () =>
+        f.store.batchUpsert(ALICE, {
+          notes: [batchNote("revive-note", "one more")],
+          vocabulary: [batchWord("revive", "Revive me.")],
+        }),
+      (error) => error instanceof StorageLimitError,
+      "a batch that brings a word back past the cap must be refused",
+    );
+    assert.equal(
+      await f.store.countVocabulary(ALICE),
+      0,
+      "the refused batch brought the word back",
+    );
+    assert.equal(
+      await f.store.countNotes(ALICE),
+      MAX_ACCOUNT_ROWS - 1,
+      "the refused batch wrote a note",
+    );
+
+    // The word alone fits exactly.
+    await f.store.batchUpsert(ALICE, {
+      notes: [],
+      vocabulary: [batchWord("revive", "Revive me.")],
+    });
+    assert.equal(await f.store.countVocabulary(ALICE), 1);
+  });
+
+  test(`[${name}] a batch may not name another account's row`, async () => {
+    const f = createFixture(name);
+    // The id the batch carries belongs to another account. The two fixtures
+    // seed it differently: the memory store mints a uuid, the fake takes one.
+    let victimId;
+    if (f.calls) {
+      victimId = f.calls.seedNote(ALICE, {
+        id: VICTIM_NOTE_ID,
+        client_id: "victim-1",
+        note: "alice's note",
+      }).id;
+    } else {
+      victimId = (
+        await f.store.createNote(ALICE, batchNote("victim-1", "alice's note"))
+      ).id;
+    }
+
+    await assert.rejects(
+      () =>
+        f.store.batchUpsert(BOB, {
+          notes: [batchNote("bob-1", "written over alice", { id: victimId })],
+          vocabulary: [],
+        }),
+      (error) => error instanceof ForeignRowError,
+      "a batch must refuse an id that belongs to another account",
+    );
+    assert.equal(await f.store.countNotes(BOB), 0, "a refused batch wrote a row");
+  });
 }
+
+test("the two stores answer the same batch the same way", async () => {
+  // The contract suite above runs every rule against both stores, one rule
+  // at a time. This runs one whole sequence through both and compares what
+  // they then report, which is the property the API actually depends on: a
+  // device cannot tell which store answered it.
+  const memory = new MemoryStore();
+  const neon = createFixture("NeonStore").store;
+  const batch = () => ({
+    notes: [batchNote("same-1", "one"), batchNote("same-2", "two")],
+    vocabulary: [batchWord("same", "Same sentence.")],
+  });
+  const pushedShape = (pushed) => ({
+    notes: pushed.notes.map((note) => note.clientId),
+    vocabulary: pushed.vocabulary.map((word) => [word.term, word.sentence]),
+  });
+
+  assert.deepEqual(
+    pushedShape(await memory.batchUpsert(ALICE, batch())),
+    pushedShape(await neon.batchUpsert(ALICE, batch())),
+    "the two stores answered the first push differently",
+  );
+
+  // The retry, and then an edit older than the stored row: both stores must
+  // keep the stored text and write no second row.
+  await memory.batchUpsert(ALICE, batch());
+  await neon.batchUpsert(ALICE, batch());
+  await memory.batchUpsert(ALICE, {
+    notes: [batchNote("same-1", "older", { updatedAt: Date.now() - 60_000 })],
+    vocabulary: [],
+  });
+  await neon.batchUpsert(ALICE, {
+    notes: [batchNote("same-1", "older", { updatedAt: Date.now() - 60_000 })],
+    vocabulary: [],
+  });
+
+  const readable = async (store) => ({
+    notes: (await store.listNotes(ALICE)).map((note) => [note.clientId, note.note]).sort(),
+    vocabulary: (await store.listVocabulary(ALICE)).map((word) => [word.term, word.sentence]),
+    reviews: (await store.listDueReviews(ALICE)).length,
+    noteCount: await store.countNotes(ALICE),
+  });
+  assert.deepEqual(
+    await readable(memory),
+    await readable(neon),
+    "the two stores hold different rows after the same batch sequence",
+  );
+});
 
 test("[NeonStore] the sparse note update keeps the tri-state starred rule", async () => {
   const { store, calls } = createFixture("NeonStore");

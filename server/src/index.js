@@ -7,6 +7,7 @@
  *   GET  /auth/complete               tiny landing page shown after login
  *   GET  /api/me                      current user
  *   GET  /api/sync?since=...          notes+vocabulary changed since an ISO timestamp
+ *   POST /api/sync                    push a batch of notes and vocabulary in one request
  *   GET  /api/notes | POST /api/notes | PATCH/DELETE /api/notes/:id
  *   GET  /api/vocabulary | POST /api/vocabulary | PATCH/DELETE /api/vocabulary/:id
  *   GET  /api/reviews/due | POST /api/reviews/:vocabId
@@ -36,6 +37,7 @@ const notes = require("./routes/notes");
 const vocabulary = require("./routes/vocabulary");
 const reviews = require("./routes/reviews");
 const meRoutes = require("./routes/me");
+const syncRoutes = require("./routes/sync");
 
 const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days
 // The `__Host-` prefix makes the browser refuse a cookie that carries a
@@ -487,6 +489,7 @@ const ROUTES = [
   { method: "GET", pattern: "/auth/complete", handler: handleComplete, public: true },
   { method: "GET", pattern: "/api/me", handler: meRoutes.me },
   { method: "GET", pattern: "/api/sync", handler: meRoutes.syncDelta },
+  { method: "POST", pattern: "/api/sync", handler: syncRoutes.pushBatch },
   { method: "GET", pattern: "/api/export", handler: meRoutes.exportData },
   { method: "DELETE", pattern: "/api/account", handler: meRoutes.deleteAccount },
   { method: "GET", pattern: "/api/status", handler: handleStatus, public: true },

@@ -22,12 +22,18 @@ const { Pool } = require("pg");
  * Builds a tagged-template function with Neon's binding semantics on top of
  * a `pg` pool.
  *
+ * The statements are lazy, exactly like the Neon driver's: the request is
+ * only sent when the statement is awaited. That is what makes a transaction
+ * possible here: the statements of a batch are handed to `transaction()`
+ * first and are then run on one connection, inside one transaction, so a
+ * batch that fails leaves nothing behind.
+ *
  * @param {import("pg").Pool} pool the connection pool.
  * @returns {(strings: TemplateStringsArray, ...values: unknown[]) => Promise<object[]>}
  *   a function that behaves like `neon(connectionString)`.
  */
 function createPgSql(pool) {
-  return async function pgSql(strings, ...values) {
+  function build(strings, values) {
     // The Neon driver joins the literal chunks with numbered placeholders:
     // `A[0] $1 A[1] $2 A[2] ...`. `pg` speaks the same placeholders, so the
     // text is assembled here and the values stay bound.
@@ -36,9 +42,59 @@ function createPgSql(pool) {
       text += strings[index];
       if (index < values.length) text += `$${index + 1}`;
     }
-    const result = await pool.query(text, values);
-    return result.rows;
+    return { text, values };
+  }
+
+  const sql = (strings, ...values) => {
+    const query = build(strings, values);
+    const run = () => pool.query(query.text, query.values).then((result) => result.rows);
+    return {
+      then(onFulfilled, onRejected) {
+        return run().then(onFulfilled, onRejected);
+      },
+      catch(onRejected) {
+        return run().catch(onRejected);
+      },
+      finally(onFinally) {
+        return run().finally(onFinally);
+      },
+      /** Runs the statement on a connection of the transaction. */
+      runOn(client) {
+        return client.query(query.text, query.values).then((result) => result.rows);
+      },
+    };
   };
+
+  /**
+   * Runs the statements of a batch in one transaction.
+   *
+   * The Neon driver submits the statements of a transaction as one request,
+   * so they all land or none of them does. Here the same promise is kept
+   * with `BEGIN` and `COMMIT`: a statement that fails rolls the whole
+   * transaction back.
+   *
+   * @param {object[]} statements the statements of the batch.
+   * @returns {Promise<object[][]>} the rows of every statement.
+   */
+  sql.transaction = async (statements) => {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const results = [];
+      for (const statement of statements) {
+        results.push(await statement.runOn(client));
+      }
+      await client.query("COMMIT");
+      return results;
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  };
+
+  return sql;
 }
 
 /**

@@ -27,6 +27,10 @@ const schemaSql = fs.readFileSync(
 
 let pool = null;
 let NeonStore = null;
+let MemoryStore = null;
+let StorageLimitError = null;
+let ForeignRowError = null;
+let MAX_ACCOUNT_ROWS = null;
 let createPgSql = null;
 let createSchema = null;
 let resetTables = null;
@@ -37,8 +41,46 @@ if (DATABASE_URL) {
   createPgSql = helpers.createPgSql;
   createSchema = helpers.createSchema;
   resetTables = helpers.resetTables;
-  NeonStore = require("../src/db.js").NeonStore;
+  const db = require("../src/db.js");
+  NeonStore = db.NeonStore;
+  MemoryStore = db.MemoryStore;
+  StorageLimitError = db.StorageLimitError;
+  ForeignRowError = db.ForeignRowError;
+  MAX_ACCOUNT_ROWS = db.MAX_ACCOUNT_ROWS;
   pool = new Pool({ connectionString: DATABASE_URL });
+}
+
+/** A note as the batch route hands it to the store. */
+function batchNote(clientId, text, extra) {
+  return Object.assign(
+    {
+      clientId,
+      note: text,
+      videoId: "abc123xyz",
+      videoTitle: "Video",
+      channelName: "Channel",
+      timestampSeconds: 0,
+      quote: "",
+    },
+    extra || {},
+  );
+}
+
+/** A word as the batch route hands it to the store. */
+function batchWord(term, sentence, extra) {
+  return Object.assign(
+    {
+      term,
+      translation: "",
+      sentence,
+      sentenceTranslation: "",
+      videoId: "abc123xyz",
+      videoTitle: "Video",
+      timestampSeconds: 0,
+      status: "learning",
+    },
+    extra || {},
+  );
 }
 
 /** A store wired to the real server through the Neon-like client. */
@@ -387,6 +429,36 @@ describe("the store's SQL is executable by a real PostgreSQL", async (t) => {
     assert.equal(data.truncated.notes, 0, "the export says it left rows out");
   });
 
+  await t.test("a capped delta says so, so the device does not keep what was deleted", async () => {
+    // "Delete all notes" stamps every tombstone with one timestamp, so no
+    // later `since` can fetch the rows the cap left behind. If the delta
+    // does not say it was capped, the device keeps notes the user deleted.
+    await resetTables(pool);
+    const store = realStore();
+    const user = await store.upsertUser({ githubId: 1014, login: "delta" });
+    await pool.query(
+      `insert into notes (user_id, client_id, video_id, video_title, channel_name,
+        timestamp_seconds, quote, note)
+       select $1, 'c' || g, 'vid1', 'Title', 'Channel', 10, '', 'note ' || g
+       from generate_series(1, 5001) as g`,
+      [user.id],
+    );
+
+    const changed = await store.getSyncDelta(user.id, "2000-01-01T00:00:00Z");
+    assert.equal(changed.notes.length, 5_000, "the changed list is capped");
+    assert.equal(changed.truncated.notes, true, "the changed list does not say it was capped");
+    assert.equal(changed.truncated.deletedNotes, false, "nothing was deleted");
+
+    assert.equal(await store.deleteAllNotes(user.id), 5_001);
+    const after = await store.getSyncDelta(user.id, "2000-01-01T00:00:00Z");
+    assert.equal(after.deleted.notes.length, 5_000, "the deletion list is capped");
+    assert.equal(
+      after.truncated.deletedNotes,
+      true,
+      "the deletion list does not say it was capped",
+    );
+  });
+
   await t.test("deleting an account removes the account and everything in it", async () => {
     await resetTables(pool);
     const store = realStore();
@@ -611,6 +683,247 @@ describe("the store's SQL is executable by a real PostgreSQL", async (t) => {
     assert.equal(rows.length, 1, "the review row has to survive the delete");
     assert.equal(rows[0].reps, 1, "the review history must not start over");
     assert.equal(rows[0].interval_days, 2);
+  });
+
+  // ============================================================
+  // POST /api/sync: the batch is one transaction
+  // ============================================================
+
+  await t.test("a batch writes notes and words in one transaction", async () => {
+    await resetTables(pool);
+    const store = realStore();
+    const user = await store.upsertUser({ githubId: 1101, login: "batch" });
+
+    const pushed = await store.batchUpsert(user.id, {
+      notes: [
+        batchNote("batch-1", "first"),
+        batchNote("batch-2", "second"),
+      ],
+      vocabulary: [batchWord("serendipity", "A happy accident.", { translation: "意外之喜" })],
+    });
+
+    assert.deepEqual(
+      pushed.notes.map((note) => note.clientId),
+      ["batch-1", "batch-2"],
+      "the answer has to name every note of the batch, in order",
+    );
+    assert.deepEqual(
+      pushed.vocabulary.map((word) => [word.term, word.sentence]),
+      [["serendipity", "A happy accident."]],
+    );
+    for (const entry of pushed.notes.concat(pushed.vocabulary)) {
+      assert.equal(typeof entry.id, "string");
+      assert.ok(entry.id.length > 0, "the answer has to name the row");
+      assert.ok(Number.isFinite(Date.parse(entry.updatedAt)));
+    }
+
+    const listed = await store.listNotes(user.id);
+    assert.deepEqual(listed.map((note) => note.note).sort(), ["first", "second"]);
+    assert.equal((await store.listVocabulary(user.id)).length, 1);
+    assert.equal((await store.listDueReviews(user.id)).length, 1);
+
+    // A word that was new in the batch got its review row in the same
+    // transaction: there is no window where the word exists unreviewable.
+    const { rows } = await pool.query(
+      "select count(*)::int as count from review_items where user_id = $1",
+      [user.id],
+    );
+    assert.equal(rows[0].count, 1);
+  });
+
+  await t.test("a batch does not bring a deleted note back", async () => {
+    await resetTables(pool);
+    const store = realStore();
+    const user = await store.upsertUser({ githubId: 1102, login: "batch-tombstone" });
+    const created = await store.createNote(user.id, batchNote("gone-1", "deleted by the user"));
+    await store.deleteNote(user.id, created.id);
+
+    const pushed = await store.batchUpsert(user.id, {
+      notes: [batchNote("gone-1", "deleted by the user", { updatedAt: Date.now() + 60_000 })],
+      vocabulary: [],
+    });
+
+    assert.equal(pushed.notes[0].id, created.id, "the answer has to name the stored row");
+    assert.equal((await store.listNotes(user.id)).length, 0, "the deleted note came back");
+  });
+
+  await t.test("a batch keeps the newer of two edits", async () => {
+    await resetTables(pool);
+    const store = realStore();
+    const user = await store.upsertUser({ githubId: 1103, login: "batch-clock" });
+    const created = await store.createNote(user.id, batchNote("clock-1", "the newer text"));
+
+    // The moment is measured on the server, so a client that sends an older
+    // moment than the stored row loses even after the network delay.
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    const stale = await store.batchUpsert(user.id, {
+      notes: [batchNote("clock-1", "the older text", { updatedAt: Date.now() - 60_000 })],
+      vocabulary: [],
+    });
+    assert.equal(stale.notes[0].id, created.id);
+    assert.equal(
+      (await store.listNotes(user.id))[0].note,
+      "the newer text",
+      "an older edit overwrote the stored row",
+    );
+
+    await store.batchUpsert(user.id, {
+      notes: [batchNote("clock-1", "the newest text", { updatedAt: Date.now() + 60_000 })],
+      vocabulary: [],
+    });
+    assert.equal((await store.listNotes(user.id))[0].note, "the newest text");
+  });
+
+  await t.test("a batch that would pass the cap writes nothing", async () => {
+    await resetTables(pool);
+    const store = realStore();
+    const user = await store.upsertUser({ githubId: 1104, login: "batch-cap" });
+    // The account is one row short of the cap. Filling it through the store
+    // would issue 20 000 requests; generate_series writes the rows at once.
+    await pool.query(
+      `insert into notes (user_id, client_id, video_id, timestamp_seconds, note)
+       select $1, 'seed-c-' || g, 'abc123xyz', 0, 'seed'
+       from generate_series(1, 19999) as g`,
+      [user.id],
+    );
+
+    await assert.rejects(
+      () =>
+        store.batchUpsert(user.id, {
+          notes: [batchNote("cap-1", "one"), batchNote("cap-2", "two")],
+          vocabulary: [],
+        }),
+      (error) => {
+        assert.ok(error instanceof StorageLimitError, "the batch must be refused as full");
+        assert.equal(error.limit, MAX_ACCOUNT_ROWS, "the answer has to carry the limit");
+        return true;
+      },
+    );
+    // The whole batch rolled back: one of the two would have fit.
+    const afterRefusal = await pool.query(
+      "select client_id from notes where user_id = $1 and client_id in ('cap-1', 'cap-2')",
+      [user.id],
+    );
+    assert.equal(afterRefusal.rows.length, 0, "a refused batch wrote a row");
+
+    // The same batch with one item fits exactly, and the next is refused.
+    await store.batchUpsert(user.id, { notes: [batchNote("cap-1", "one")], vocabulary: [] });
+    assert.equal(await store.countNotes(user.id), MAX_ACCOUNT_ROWS);
+    await assert.rejects(
+      () =>
+        store.batchUpsert(user.id, {
+          notes: [batchNote("cap-2", "two")],
+          vocabulary: [],
+        }),
+      (error) => error instanceof StorageLimitError,
+      "an account at the cap accepted another row",
+    );
+  });
+
+  await t.test("a batch may not name another account's row", async () => {
+    await resetTables(pool);
+    const store = realStore();
+    const alice = await store.upsertUser({ githubId: 1105, login: "batch-alice" });
+    const bob = await store.upsertUser({ githubId: 1106, login: "batch-bob" });
+    const aliceNote = await store.createNote(alice.id, batchNote("alice-1", "alice's note"));
+    const aliceWord = await store.upsertVocabulary(
+      alice.id,
+      batchWord("alice-word", "Alice's sentence."),
+    );
+
+    await assert.rejects(
+      () =>
+        store.batchUpsert(bob.id, {
+          notes: [batchNote("bob-1", "written over alice", { id: aliceNote.id })],
+          vocabulary: [],
+        }),
+      (error) => error instanceof ForeignRowError,
+      "a batch must refuse a note id that belongs to another account",
+    );
+    await assert.rejects(
+      () =>
+        store.batchUpsert(bob.id, {
+          notes: [],
+          vocabulary: [batchWord("bob-word", "Bob's sentence.", { id: aliceWord.id })],
+        }),
+      (error) => error instanceof ForeignRowError,
+      "a batch must refuse a word id that belongs to another account",
+    );
+    assert.equal(await store.countNotes(bob.id), 0, "a refused batch wrote a note");
+    assert.equal(await store.countVocabulary(bob.id), 0, "a refused batch wrote a word");
+  });
+
+  await t.test("a batch brings a deleted word back with the schedule it had", async () => {
+    await resetTables(pool);
+    const store = realStore();
+    const user = await store.upsertUser({ githubId: 1108, login: "batch-word-back" });
+    const word = await store.upsertVocabulary(
+      user.id,
+      batchWord("persistence", "Persistence pays off."),
+    );
+    await store.submitReview(user.id, word.id, 4);
+    await store.deleteVocabulary(user.id, word.id);
+
+    const pushed = await store.batchUpsert(user.id, {
+      notes: [],
+      vocabulary: [batchWord("persistence", "Persistence pays off.")],
+    });
+
+    assert.equal(pushed.vocabulary[0].id, word.id, "the word must come back as the same row");
+    assert.equal((await store.listVocabulary(user.id)).length, 1, "the word did not come back");
+    const { rows } = await pool.query(
+      "select reps from review_items where vocabulary_id = $1",
+      [word.id],
+    );
+    assert.equal(rows.length, 1, "the review row must survive the re-capture");
+    assert.equal(rows[0].reps, 1, "the review history must not start over");
+  });
+
+  await t.test("the two stores answer the same batch the same way", async () => {
+    await resetTables(pool);
+    const neon = realStore();
+    const memory = new MemoryStore();
+    const batch = () => ({
+      notes: [batchNote("same-1", "one"), batchNote("same-2", "two")],
+      vocabulary: [batchWord("same", "Same sentence.")],
+    });
+
+    const neonUser = await neon.upsertUser({ githubId: 1107, login: "same-neon" });
+    const memoryUser = await memory.upsertUser({ githubId: 1107, login: "same-neon" });
+    const pushedShape = (pushed) => ({
+      notes: pushed.notes.map((note) => note.clientId),
+      vocabulary: pushed.vocabulary.map((word) => [word.term, word.sentence]),
+    });
+
+    assert.deepEqual(
+      pushedShape(await neon.batchUpsert(neonUser.id, batch())),
+      pushedShape(await memory.batchUpsert(memoryUser.id, batch())),
+      "the two stores answered the first push differently",
+    );
+    // A retry and then a stale edit: both stores must keep what they had and
+    // write no second row.
+    await neon.batchUpsert(neonUser.id, batch());
+    await memory.batchUpsert(memoryUser.id, batch());
+    await neon.batchUpsert(neonUser.id, {
+      notes: [batchNote("same-1", "older", { updatedAt: Date.now() - 60_000 })],
+      vocabulary: [],
+    });
+    await memory.batchUpsert(memoryUser.id, {
+      notes: [batchNote("same-1", "older", { updatedAt: Date.now() - 60_000 })],
+      vocabulary: [],
+    });
+
+    const readable = async (store, userId) => ({
+      notes: (await store.listNotes(userId)).map((note) => [note.clientId, note.note]).sort(),
+      vocabulary: (await store.listVocabulary(userId)).map((word) => [word.term, word.sentence]),
+      reviews: (await store.listDueReviews(userId)).length,
+      noteCount: await store.countNotes(userId),
+    });
+    assert.deepEqual(
+      await readable(neon, neonUser.id),
+      await readable(memory, memoryUser.id),
+      "the two stores hold different rows after the same batch sequence",
+    );
   });
 });
 

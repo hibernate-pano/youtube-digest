@@ -460,6 +460,63 @@ class FakeSql {
     this.record(sql, values);
     const { lowered } = this.calls[this.calls.length - 1];
 
+    // The guard that refuses a batch the account has no room for. It comes
+    // first: the statement mentions both content tables, so every other
+    // branch would claim it.
+    if (/as guard/.test(lowered)) return this.handleGuard(lowered, values);
+    // The review rows of a batch: the words of the batch are named by their
+    // text, so the row is found through the vocabulary table.
+    if (
+      lowered.includes("insert into review_items") &&
+      lowered.includes("select ")
+    ) {
+      return this.handleReviewItems(lowered, values);
+    }
+    // The ownership probe of a batch: who owns the rows the body names.
+    if (/select id, user_id/.test(lowered)) {
+      if (lowered.includes("from notes")) {
+        const ids = values.slice();
+        return [...this.notes.values()]
+          .filter((row) => ids.includes(row.id))
+          .map((row) => ({ id: row.id, userId: row.user_id }));
+      }
+      const ids = values.slice();
+      return [...this.vocabulary.values()]
+        .filter((row) => ids.includes(row.id))
+        .map((row) => ({ id: row.id, userId: row.user_id }));
+    }
+    // The lookup of a batch: the notes the account already has for the
+    // client ids of the batch. The tombstones are part of the answer: the
+    // plan has to see them.
+    if (lowered.includes("client_id in (")) {
+      const userId = values[0];
+      const clientIds = values.slice(1);
+      return [...this.notes.values()]
+        .filter(
+          (row) => sameId(row.user_id, userId) && clientIds.includes(row.client_id),
+        )
+        .map((row) => ({
+          id: row.id,
+          clientId: row.client_id,
+          updatedAt: row.updated_at,
+          deletedAt: row.deleted_at || null,
+        }));
+    }
+    // The same lookup for the words of a batch.
+    if (lowered.includes("term in (")) {
+      const userId = values[0];
+      const terms = values.slice(1);
+      return [...this.vocabulary.values()]
+        .filter((row) => sameId(row.user_id, userId) && terms.includes(row.term))
+        .map((row) => ({
+          id: row.id,
+          term: row.term,
+          sentence: row.sentence,
+          updatedAt: row.updated_at,
+          deletedAt: row.deleted_at || null,
+        }));
+    }
+
     // Dispatch on the statement kind rather than the target table: INSERTs
     // carry no `from <table>` clause at all.
     if (/count\(\*\)/.test(lowered) && /as notes/.test(lowered) && /as vocabulary/.test(lowered)) {
@@ -544,6 +601,57 @@ class FakeSql {
       }
     }
     return count;
+  }
+
+  /**
+   * The guard that refuses a batch the account has no room for.
+   *
+   * The real statement divides by zero when the account holds more rows
+   * than the limit allows, which aborts the transaction. The fake raises
+   * the same SQLSTATE, so the store turns it into the same answer.
+   *
+   * @param {string} lowered the statement.
+   * @param {unknown[]} values the bound parameters.
+   * @returns {object[]} the row of the statement.
+   */
+  handleGuard(lowered, values) {
+    const userId = values[0];
+    const cap = Number(values[values.length - 1]);
+    const used =
+      this.countFor("notes", userId) + this.countFor("vocabulary", userId);
+    if (used > cap) {
+      const error = new Error("division by zero");
+      error.code = "22012";
+      throw error;
+    }
+    return [{ guard: 1 }];
+  }
+
+  /**
+   * A copy of the tables, so a transaction that fails can be rolled back.
+   *
+   * @returns {object} the snapshot.
+   */
+  snapshot() {
+    const copy = (map) => new Map([...map.entries()].map(([key, row]) => [key, { ...row }]));
+    return {
+      users: copy(this.users),
+      vocabulary: copy(this.vocabulary),
+      reviewItems: copy(this.reviewItems),
+      notes: copy(this.notes),
+    };
+  }
+
+  /**
+   * Puts the tables back the way the snapshot found them.
+   *
+   * @param {object} snapshot the snapshot to restore.
+   */
+  restore(snapshot) {
+    this.users = new Map(snapshot.users);
+    this.vocabulary = new Map(snapshot.vocabulary);
+    this.reviewItems = new Map(snapshot.reviewItems);
+    this.notes = new Map(snapshot.notes);
   }
 
   /**
@@ -712,6 +820,44 @@ class FakeSql {
     const joinsVocabulary = /join\s+vocabulary/.test(lowered);
 
     if (lowered.includes("insert into review_items")) {
+      if (/select .*from vocabulary/.test(lowered)) {
+        // The batch: the review rows of the words that were just written.
+        // The words are named by their text, so the row is found through the
+        // vocabulary table.
+        const userId = values[0];
+        const pairs = [];
+        for (let index = 2; index < values.length; index += 2) {
+          pairs.push([values[index], values[index + 1]]);
+        }
+        const created = [];
+        for (const [term, sentence] of pairs) {
+          const row = [...this.vocabulary.values()].find(
+            (candidate) =>
+              sameId(candidate.user_id, userId) &&
+              candidate.term === term &&
+              candidate.sentence === sentence,
+          );
+          if (!row) continue;
+          const key = userId + ":" + row.id;
+          // `on conflict (user_id, vocabulary_id) do nothing`: a word that
+          // was there before keeps the schedule it had.
+          if (this.reviewItems.has(key)) continue;
+          const review = {
+            id: "r" + this.nextRowId++,
+            user_id: userId,
+            vocabulary_id: row.id,
+            due_at: new Date().toISOString(),
+            interval_days: 0,
+            ease: 2.5,
+            reps: 0,
+            lapses: 0,
+            updated_at: new Date().toISOString(),
+          };
+          this.reviewItems.set(key, review);
+          created.push(projectReview(review));
+        }
+        return created;
+      }
       const [userId, vocabularyId] = values;
       const key = userId + ":" + vocabularyId;
       // Columns the statement omits fall back to the schema defaults
@@ -1006,11 +1152,50 @@ function noteRow(row) {
 /**
  * Build a tagged-template `sql` function backed by a FakeSql, matching the
  * `neon(connectionString)` call signature NeonStore expects.
+ *
+ * The statements are lazy, exactly like the Neon driver's: a statement is
+ * only run when it is awaited. That is what lets `transaction()` take the
+ * statements of a batch and run them as one unit, rolling the tables back
+ * when one of them fails.
  */
 function createFakeSql() {
   const fake = new FakeSql();
-  const sql = (strings, ...values) => fake.run(strings, ...values);
+  const sql = (strings, ...values) => {
+    const run = () => fake.run(strings, ...values);
+    return {
+      then(onFulfilled, onRejected) {
+        return run().then(onFulfilled, onRejected);
+      },
+      catch(onRejected) {
+        return run().catch(onRejected);
+      },
+      finally(onFinally) {
+        return run().finally(onFinally);
+      },
+    };
+  };
   sql.__fake = fake;
+
+  /**
+   * Runs the statements of a batch as one unit.
+   *
+   * @param {object[]} statements the statements of the batch.
+   * @returns {Promise<object[][]>} the rows of every statement.
+   */
+  sql.transaction = async (statements) => {
+    const snapshot = fake.snapshot();
+    try {
+      const results = [];
+      for (const statement of statements) {
+        results.push(await statement);
+      }
+      return results;
+    } catch (error) {
+      fake.restore(snapshot);
+      throw error;
+    }
+  };
+
   return sql;
 }
 

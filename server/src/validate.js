@@ -118,6 +118,23 @@ function parseVocabulary(input) {
 
 const REVIEW_GRADES = new Set([0, 1, 2, 3, 4, 5]);
 
+/** A canonical UUID, as used by the notes and vocabulary primary keys. */
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * True when the value is a row id of the database.
+ *
+ * A row id that is not a UUID cannot name a row, so it is never worth
+ * asking the database about it: a value like that is either a client's own
+ * local id or a mistake, and in both cases the row it names is not there.
+ *
+ * @param {unknown} value the value to check.
+ * @returns {boolean} whether the value is a UUID.
+ */
+function isUuid(value) {
+  return typeof value === "string" && UUID_PATTERN.test(value);
+}
+
 /**
  * Parses a review grade (0-5).
  *
@@ -143,6 +160,7 @@ function parseReviewGrade(value) {
 module.exports = {
   cleanString,
   cleanVideoId,
+  isUuid,
   parseNote,
   parseNotePatch,
   parseVocabulary,

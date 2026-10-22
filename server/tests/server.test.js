@@ -310,6 +310,65 @@ test("sync delta returns only changed rows for the caller", async () => {
   assert.equal(bobDelta.data.notes[0].note, "bob note");
 });
 
+test("a capped delta says so, so the device does not keep what was deleted", async () => {
+  // A delta that stops at the cap without saying so is a lie the device
+  // believes. The deletion list is the dangerous half: "delete all notes"
+  // stamps every tombstone with one timestamp, so no later `since` can fetch
+  // the rows the cap left behind. The device would keep notes the user
+  // deleted, and the truth would never reach it.
+  const env = makeEnv();
+  const token = await signIn(env, 1001, "alice");
+  const user = [...env.store.users.values()][0];
+  for (let index = 0; index < 5_001; index += 1) {
+    env.store.notes.set("n" + index, {
+      id: "n" + index,
+      userId: String(user.id),
+      clientId: "c" + index,
+      videoId: "abc123xyz",
+      videoTitle: "Video",
+      channelName: "Channel",
+      timestampSeconds: 0,
+      quote: "",
+      note: "note " + index,
+      starred: false,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      deletedAt: null,
+    });
+  }
+
+  const changed = await api(env, "GET", "/api/sync?since=2000-01-01T00:00:00Z", { token });
+  assert.equal(changed.data.notes.length, 5_000, "the changed list is capped");
+  assert.equal(changed.data.truncated.notes, true, "the changed list does not say it was capped");
+  assert.equal(changed.data.truncated.deletedNotes, false, "nothing was deleted");
+
+  await api(env, "DELETE", "/api/notes", { token });
+  const after = await api(env, "GET", "/api/sync?since=2000-01-01T00:00:00Z", { token });
+  assert.equal(after.data.deleted.notes.length, 5_000, "the deletion list is capped");
+  assert.equal(
+    after.data.truncated.deletedNotes,
+    true,
+    "the deletion list does not say it was capped",
+  );
+
+  // An account under the cap is not cut short, and says so on every list.
+  const small = makeEnv();
+  const smallToken = await signIn(small, 1002, "bob");
+  await api(small, "POST", "/api/notes", {
+    token: smallToken,
+    body: { note: "one note", videoId: "abc123xyz", clientId: "small_1" },
+  });
+  const smallDelta = await api(small, "GET", "/api/sync?since=2000-01-01T00:00:00Z", {
+    token: smallToken,
+  });
+  assert.deepEqual(smallDelta.data.truncated, {
+    notes: false,
+    vocabulary: false,
+    deletedNotes: false,
+    deletedVocabulary: false,
+  });
+});
+
 test("sync responses carry the server's own clock", async () => {
   const env = makeEnv();
   const token = await signIn(env, 1001, "alice");
@@ -2004,4 +2063,404 @@ test("the sign-in state is spent even when the exchange fails", async () => {
   } finally {
     require("../src/auth").exchangeCode = originalExchange;
   }
+});
+
+// ============================================================
+// POST /api/sync: a batch of notes and words in one request
+//
+// A device that holds a hundred notes and five hundred words used to push
+// them one request at a time, and the write limiter refused everything past
+// the first 120. The batch is the same rows over one request, so it is
+// charged as one write and lands whole or not at all.
+// ============================================================
+
+/** A note body as a client sends it. */
+function batchNote(clientId, text, extra) {
+  return Object.assign(
+    {
+      clientId,
+      note: text,
+      videoId: "abc123xyz",
+      videoTitle: "Video",
+      channelName: "Channel",
+      timestampSeconds: 0,
+      quote: "",
+    },
+    extra || {},
+  );
+}
+
+/** A word body as a client sends it. */
+function batchWord(term, sentence, extra) {
+  return Object.assign(
+    {
+      term,
+      translation: "",
+      sentence,
+      sentenceTranslation: "",
+      videoId: "abc123xyz",
+      videoTitle: "Video",
+      timestampSeconds: 0,
+      status: "learning",
+    },
+    extra || {},
+  );
+}
+
+test("a batch pushes notes and words in one request", async () => {
+  const env = makeEnv();
+  const token = await signIn(env, 1001, "alice");
+
+  const result = await api(env, "POST", "/api/sync", {
+    token,
+    body: {
+      notes: [
+        batchNote("batch_n1", "the first note", { timestampSeconds: 3 }),
+        batchNote("batch_n2", "the second note"),
+      ],
+      vocabulary: [batchWord("serendipity", "A happy accident.", { translation: "意外之喜" })],
+    },
+  });
+
+  assert.equal(result.status, 200);
+  // The answer names every item of the batch, in the order it was sent: the
+  // client matches the answer to its own rows by that identity.
+  assert.deepEqual(
+    result.data.pushed.notes.map((note) => note.clientId),
+    ["batch_n1", "batch_n2"],
+  );
+  assert.deepEqual(
+    result.data.pushed.vocabulary.map((word) => [word.term, word.sentence]),
+    [["serendipity", "A happy accident."]],
+  );
+  for (const entry of result.data.pushed.notes.concat(result.data.pushed.vocabulary)) {
+    assert.equal(typeof entry.id, "string");
+    assert.ok(entry.id.length > 0, "the server has to name the row it holds");
+    assert.ok(
+      Number.isFinite(Date.parse(entry.updatedAt)),
+      "the server has to say when it changed the row",
+    );
+  }
+  assert.ok(Number.isFinite(Date.parse(result.data.serverTime)), "the answer carries the server clock");
+
+  // Both kinds really landed.
+  const notes = await api(env, "GET", "/api/notes", { token });
+  assert.deepEqual(
+    notes.data.notes.map((note) => note.note).sort(),
+    ["the first note", "the second note"],
+  );
+  const words = await api(env, "GET", "/api/vocabulary", { token });
+  assert.equal(words.data.vocabulary.length, 1);
+  assert.equal(words.data.vocabulary[0].translation, "意外之喜");
+
+  // A word pushed in a batch is the same word the single route creates: due
+  // for its first review immediately.
+  const due = await api(env, "GET", "/api/reviews/due", { token });
+  assert.equal(due.data.reviews.length, 1, "a new word of the batch is not reviewable");
+});
+
+test("a batch pushed twice writes each row once", async () => {
+  // The whole point of the client id is that a retried push is harmless.
+  const env = makeEnv();
+  const token = await signIn(env, 1001, "alice");
+  const body = {
+    notes: [batchNote("once_n1", "only one row")],
+    vocabulary: [batchWord("once", "Only one row.")],
+  };
+
+  const first = await api(env, "POST", "/api/sync", { token, body });
+  const second = await api(env, "POST", "/api/sync", { token, body });
+  assert.equal(first.status, 200);
+  assert.equal(second.status, 200);
+
+  assert.equal(
+    second.data.pushed.notes[0].id,
+    first.data.pushed.notes[0].id,
+    "the retry must name the row the first push wrote",
+  );
+  const notes = await api(env, "GET", "/api/notes", { token });
+  assert.equal(notes.data.notes.length, 1, "the retry wrote a second row");
+  const words = await api(env, "GET", "/api/vocabulary", { token });
+  assert.equal(words.data.vocabulary.length, 1, "the retry wrote a second word");
+  const due = await api(env, "GET", "/api/reviews/due", { token });
+  assert.equal(due.data.reviews.length, 1, "the retry created a second review row");
+});
+
+test("a batch item older than the stored row does not overwrite it", async () => {
+  const env = makeEnv();
+  const token = await signIn(env, 1001, "alice");
+  const created = await api(env, "POST", "/api/notes", {
+    token,
+    body: batchNote("stale_n1", "the newer text"),
+  });
+  assert.equal(created.status, 201);
+
+  // A second device pushes an edit it made before the first one landed.
+  const pushed = await api(env, "POST", "/api/sync", {
+    token,
+    body: {
+      notes: [
+        batchNote("stale_n1", "the older text", {
+          updatedAt: Date.now() - 60_000,
+        }),
+      ],
+    },
+  });
+  assert.equal(pushed.status, 200);
+  assert.equal(
+    pushed.data.pushed.notes[0].id,
+    created.data.note.id,
+    "the answer has to name the row the server holds",
+  );
+
+  const listed = await api(env, "GET", "/api/notes", { token });
+  assert.equal(listed.data.notes[0].note, "the newer text", "the older edit won");
+
+  // The other direction: a newer edit wins, and the answer carries the new
+  // timestamp the client should keep.
+  const newer = await api(env, "POST", "/api/sync", {
+    token,
+    body: {
+      notes: [
+        batchNote("stale_n1", "the newest text", {
+          updatedAt: Date.now() + 60_000,
+        }),
+      ],
+    },
+  });
+  assert.equal(newer.status, 200);
+  assert.ok(
+    Date.parse(newer.data.pushed.notes[0].updatedAt) >
+      Date.parse(created.data.note.updatedAt),
+    "the answer has to carry the moment the row changed",
+  );
+  const after = await api(env, "GET", "/api/notes", { token });
+  assert.equal(after.data.notes[0].note, "the newest text", "the newer edit lost");
+});
+
+test("a batch does not bring a deleted note back", async () => {
+  const env = makeEnv();
+  const token = await signIn(env, 1001, "alice");
+  const created = await api(env, "POST", "/api/notes", {
+    token,
+    body: batchNote("gone_n1", "the user deleted this"),
+  });
+  const deleted = await api(env, "DELETE", "/api/notes/client/gone_n1", { token });
+  assert.equal(deleted.status, 200);
+
+  // The device that still holds the note pushes it again, with a moment that
+  // is newer than the delete. A tombstone is not a row a push can win.
+  const pushed = await api(env, "POST", "/api/sync", {
+    token,
+    body: {
+      notes: [
+        batchNote("gone_n1", "the user deleted this", {
+          updatedAt: Date.now() + 60_000,
+        }),
+      ],
+    },
+  });
+  assert.equal(pushed.status, 200);
+  assert.equal(
+    pushed.data.pushed.notes[0].id,
+    created.data.note.id,
+    "the answer has to name the row, so the client can drop its copy",
+  );
+
+  const listed = await api(env, "GET", "/api/notes", { token });
+  assert.equal(listed.data.notes.length, 0, "a deleted note came back");
+});
+
+test("a batch that would pass the account cap writes nothing", async () => {
+  const env = makeEnv();
+  const token = await signIn(env, 1001, "alice");
+  const user = [...env.store.users.values()][0];
+  const fullAt = MAX_ACCOUNT_ROWS - 1;
+  for (let index = 0; index < fullAt; index += 1) {
+    env.store.notes.set("seed" + index, {
+      id: "seed" + index,
+      // The account id the token carries is a string; the rows an API
+      // request writes use the same form.
+      userId: String(user.id),
+      clientId: "seed_c" + index,
+      note: "seed",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+  }
+
+  // One of the two would fit, the other would not. The batch is all or
+  // nothing, so neither is written.
+  const refused = await api(env, "POST", "/api/sync", {
+    token,
+    body: {
+      notes: [batchNote("cap_n1", "one"), batchNote("cap_n2", "two")],
+    },
+  });
+  assert.equal(refused.status, 409);
+  assert.equal(refused.data.limit, MAX_ACCOUNT_ROWS, "the answer does not carry the cap");
+  assert.match(refused.data.error, new RegExp(String(MAX_ACCOUNT_ROWS)));
+  const rows = [...env.store.notes.values()];
+  assert.equal(rows.length, fullAt, "a refused batch wrote a row");
+  assert.ok(
+    !rows.some((row) => row.clientId === "cap_n1" || row.clientId === "cap_n2"),
+    "a refused batch wrote one of its items",
+  );
+
+  // The very same batch with one item fits, and one more is refused again.
+  const fitted = await api(env, "POST", "/api/sync", {
+    token,
+    body: { notes: [batchNote("cap_n1", "one")] },
+  });
+  assert.equal(fitted.status, 200);
+  const again = await api(env, "POST", "/api/sync", {
+    token,
+    body: { notes: [batchNote("cap_n2", "two")] },
+  });
+  assert.equal(again.status, 409, "an account at the cap accepted another row");
+});
+
+test("a batch larger than the limit is refused with a message to act on", async () => {
+  const env = makeEnv();
+  const token = await signIn(env, 1001, "alice");
+  const tooMany = [];
+  for (let index = 0; index <= 200; index += 1) {
+    tooMany.push(batchNote("big_" + index, "note " + index));
+  }
+
+  const refused = await api(env, "POST", "/api/sync", { token, body: { notes: tooMany } });
+  assert.equal(refused.status, 400);
+  assert.match(refused.data.error, /201/);
+  assert.match(refused.data.error, /200/);
+  assert.equal(
+    [...env.store.notes.values()].length,
+    0,
+    "an oversized batch wrote a row before being refused",
+  );
+
+  // The boundary itself is accepted: the client chunks by this number.
+  const boundary = tooMany.slice(0, 200);
+  const accepted = await api(env, "POST", "/api/sync", { token, body: { notes: boundary } });
+  assert.equal(accepted.status, 200);
+  assert.equal(accepted.data.pushed.notes.length, 200);
+});
+
+test("a batch may not name another account's row", async () => {
+  const env = makeEnv();
+  const aliceToken = await signIn(env, 1001, "alice");
+  const bobToken = await signIn(env, 1002, "bob");
+  const aliceNote = await api(env, "POST", "/api/notes", {
+    token: aliceToken,
+    body: batchNote("alice_n1", "alice's note"),
+  });
+  const aliceWord = await api(env, "POST", "/api/vocabulary", {
+    token: aliceToken,
+    body: batchWord("alice-word", "Alice's sentence."),
+  });
+
+  // The token decides the account. An id in the body that names somebody
+  // else's row is a client bug the answer points at, not a way to write it.
+  const noteAttack = await api(env, "POST", "/api/sync", {
+    token: bobToken,
+    body: {
+      notes: [batchNote("bob_n1", "written over alice", { id: aliceNote.data.note.id })],
+    },
+  });
+  assert.equal(noteAttack.status, 400);
+  assert.match(noteAttack.data.error, /notes\[0\]: this id belongs to another account/);
+
+  const wordAttack = await api(env, "POST", "/api/sync", {
+    token: bobToken,
+    body: {
+      vocabulary: [
+        batchWord("bob-word", "Bob's sentence.", { id: aliceWord.data.vocabulary.id }),
+      ],
+    },
+  });
+  assert.equal(wordAttack.status, 400);
+  assert.match(wordAttack.data.error, /vocabulary\[0\]: this id belongs to another account/);
+
+  const bobNotes = await api(env, "GET", "/api/notes", { token: bobToken });
+  assert.equal(bobNotes.data.notes.length, 0, "a refused batch wrote bob a note");
+  const bobWords = await api(env, "GET", "/api/vocabulary", { token: bobToken });
+  assert.equal(bobWords.data.vocabulary.length, 0, "a refused batch wrote bob a word");
+});
+
+test("one bad item refuses the whole batch and names its position", async () => {
+  const env = makeEnv();
+  const token = await signIn(env, 1001, "alice");
+
+  const empty = await api(env, "POST", "/api/sync", {
+    token,
+    body: {
+      notes: [
+        batchNote("bad_n1", "fine"),
+        batchNote("bad_n2", ""),
+        batchNote("bad_n3", "also fine"),
+      ],
+    },
+  });
+  assert.equal(empty.status, 400);
+  assert.match(empty.data.error, /notes\[1\]: a non-empty note is required/);
+
+  const noClient = await api(env, "POST", "/api/sync", {
+    token,
+    body: { notes: [{ note: "text without a client id" }] },
+  });
+  assert.equal(noClient.status, 400);
+  assert.match(noClient.data.error, /notes\[0\]: clientId is required/);
+
+  const badMoment = await api(env, "POST", "/api/sync", {
+    token,
+    body: { notes: [batchNote("bad_n4", "text", { updatedAt: "whenever" })] },
+  });
+  assert.equal(badMoment.status, 400);
+  assert.match(badMoment.data.error, /notes\[0\]: updatedAt must be/);
+
+  const badWord = await api(env, "POST", "/api/sync", {
+    token,
+    body: { vocabulary: [batchWord("ok", "fine"), { term: "  ", sentence: "" }] },
+  });
+  assert.equal(badWord.status, 400);
+  assert.match(badWord.data.error, /vocabulary\[1\]: a non-empty term is required/);
+
+  const nothing = await api(env, "GET", "/api/notes", { token });
+  assert.equal(nothing.data.notes.length, 0, "a refused batch wrote one of its items");
+  const noWords = await api(env, "GET", "/api/vocabulary", { token });
+  assert.equal(noWords.data.vocabulary.length, 0);
+});
+
+test("the batch route spends one write of the rate limit, not one per row", async () => {
+  // A batch of 150 notes plus 119 more requests is 269 rows over 120
+  // requests. If the limiter charged rows, the device would be refused after
+  // 120 rows; the first sync of a new device must not take five minutes.
+  const env = makeEnv();
+  const token = await signIn(env, 9101, "limiter");
+
+  const many = [];
+  for (let index = 0; index < 150; index += 1) {
+    many.push(batchNote("rate_" + index, "note " + index));
+  }
+  const first = await api(env, "POST", "/api/sync", { token, body: { notes: many } });
+  assert.equal(first.status, 200);
+
+  for (let index = 0; index < 119; index += 1) {
+    const result = await api(env, "POST", "/api/sync", {
+      token,
+      body: { notes: [batchNote("rate_single_" + index, "one " + index)] },
+    });
+    assert.equal(result.status, 200, "request " + (index + 2) + " was refused too early");
+  }
+  assert.equal(
+    [...env.store.notes.values()].length,
+    269,
+    "the rows the batch wrote are not all there",
+  );
+
+  // The 121st request of the window is the one that is refused.
+  const refused = await api(env, "POST", "/api/sync", {
+    token,
+    body: { notes: [batchNote("rate_over", "over the limit")] },
+  });
+  assert.equal(refused.status, 429);
 });

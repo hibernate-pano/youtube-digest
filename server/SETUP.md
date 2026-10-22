@@ -170,8 +170,10 @@ address and user agent of every request to the sync service.
 | GET | /api/auth/callback | exchange code for a JWT (no auth) |
 | GET | /auth/complete | landing page shown after login (no auth) |
 | GET | /api/me | current user |
-| GET | /api/sync?since=ISO | notes/vocabulary changed since a timestamp, plus the deletions (`deleted.notes`, `deleted.vocabulary`) |
-| GET/POST | /api/notes | list / create notes (idempotent by clientId) |
+| GET | /api/sync?since=ISO | notes/vocabulary changed since a timestamp, plus the deletions (`deleted.notes`, `deleted.vocabulary`). Each of the four lists is capped; `truncated` says which one was, and a capped list means the client must reconcile rather than assume it has seen everything |
+| POST | /api/sync | push a batch of notes and words in one request (at most 200 items; see below) |
+| GET/POST | /api/notes | list / create notes (idempotent by clientId). The list is capped at 5 000 rows and reports `total` and `truncated` |
+| DELETE | /api/notes | delete every note in the account (tombstones, so no device can push them back) |
 | PATCH/DELETE | /api/notes/:id | update / delete a note |
 | PATCH | /api/notes/:id/star | set starred (favorite) flag |
 | DELETE | /api/notes/client/:clientId | delete by client id |
@@ -179,6 +181,59 @@ address and user agent of every request to the sync service.
 | PATCH/DELETE | /api/vocabulary/:id | update status / delete entry |
 | GET | /api/reviews/due | due review items with their vocabulary |
 | POST | /api/reviews/:vocabId | submit a review grade (0-5, SM-2 schedule) |
+| GET | /api/export | the whole account as one JSON file; `?type=notes` or `?type=vocabulary` fetches one half, for an account too big for one file |
+| DELETE | /api/account | delete the account and everything in it |
+
+### POST /api/sync: pushing a batch
+
+A new device that holds a hundred notes and five hundred words used to push
+them one request at a time. The write limiter allows 120 writes a minute, so
+the first sync of a new device spent five minutes being refused. `POST
+/api/sync` carries the same rows in one request, and the limiter counts the
+request, not the rows.
+
+```json
+{
+  "notes": [{ "clientId": "device-note-1", "note": "...", "videoId": "...",
+              "updatedAt": "2026-10-22T10:00:00.000Z" }],
+  "vocabulary": [{ "term": "serendipity", "sentence": "...",
+                   "updatedAt": 1761136800000 }]
+}
+```
+
+Every item takes the fields of `POST /api/notes` or `POST /api/vocabulary`.
+The answer names what the server holds for every item, in the order it was
+sent, plus the server's own clock:
+
+```json
+{
+  "pushed": {
+    "notes": [{ "clientId": "device-note-1", "id": "...", "updatedAt": "..." }],
+    "vocabulary": [{ "term": "serendipity", "sentence": "...", "id": "...", "updatedAt": "..." }]
+  },
+  "serverTime": "2026-10-22T10:00:02.000Z"
+}
+```
+
+The rules are the rules of the single routes:
+
+- a note is matched by `clientId`, a word by `(term, sentence)`;
+- the later edit wins: an item whose `updatedAt` is not after the stored row
+  is dropped and the stored row is reported back. Send `updatedAt` on the
+  same timeline the server keeps (the extension already measures the clock
+  offset against `serverTime`); omit it and the push always wins;
+- a deleted note is not written again (a tombstone is never resurrected). A
+  deleted word is a different case, on purpose: capturing it again brings it
+  back with the review schedule it had, the way `POST /api/vocabulary` does;
+- the account cap (20 000 notes and words) is checked against the whole
+  batch in one transaction: a batch that does not fit writes nothing and
+  answers 409 with `limit`;
+- an item that carries another account's row `id` is refused with 400
+  `notes[i]: this id belongs to another account.`;
+- one invalid item is a 400 naming its index, and nothing of the batch is
+  written;
+- more than 200 items is a 400 with a message that says how many to send.
+  The client chunks its queue at that number.
 
 ## Security notes
 
@@ -186,10 +241,14 @@ address and user agent of every request to the sync service.
   token for account A returns 404 for account B's rows.
 - Inputs are validated server-side (length caps, status enums, grade range).
 - The OAuth state cookie is HttpOnly and SameSite=Lax, cleared after use.
-- A deleted note or word stays in the database as a tombstone for 30 days
-  (`TOMBSTONE_RETENTION_DAYS`), so a device that still holds the row cannot
-  bring it back. The scheduled run drops the tombstones that are older.
-- Each account is capped at 20 000 notes and words, and an export that would
-  exceed 8 MB is refused with a message instead of a download that dies.
+- A deleted note stays in the database as a tombstone for 30 days
+  (`TOMBSTONE_RETENTION_DAYS`), so a device that still holds the note cannot
+  push it back. A deleted word keeps its row (and its review schedule) too; a
+  word that is captured again deliberately comes back. The scheduled run
+  drops the tombstones that are older.
+- Each account is capped at 20 000 notes and words. The export holds the whole
+  account and refuses at 32 MB with a message instead of a download that dies;
+  an account near the byte cap can be exported in two halves with
+  `?type=notes` and `?type=vocabulary`.
 - Tokens appear in the URL fragment after login; the extension extracts and
   stores them in `chrome.storage.local` and closes the tab.

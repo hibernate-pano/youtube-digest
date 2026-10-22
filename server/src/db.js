@@ -9,6 +9,23 @@
 
 const DEFAULT_REVIEW_LIMIT = 50;
 
+const { isUuid } = require("./validate");
+
+/**
+ * True when the failure is the guard that refuses a batch the account has
+ * no room for.
+ *
+ * The guard divides by zero on purpose: it is the only division in the
+ * store, so the SQLSTATE that comes back says exactly one thing - the batch
+ * did not fit.
+ *
+ * @param {unknown} error the failure.
+ * @returns {boolean} whether it is the guard.
+ */
+function isDivisionByZero(error) {
+  return Boolean(error) && error.code === "22012";
+}
+
 /** Hard cap on the rows a list endpoint returns. */
 const MAX_LIST_ROWS = 5_000;
 
@@ -112,6 +129,51 @@ class StorageLimitError extends Error {
     if (Number.isFinite(limit)) this.limit = limit;
   }
 }
+
+/**
+ * Thrown when a batch carries an id that belongs to another account.
+ *
+ * The token decides the account: a row id in the request body may never
+ * select a row somebody else owns. The route turns this into a 400 that
+ * names the item, so the client can drop the id and try again.
+ */
+class ForeignRowError extends Error {
+  /**
+   * @param {"notes"|"vocabulary"} kind which half of the batch the item is in.
+   * @param {number} index the position of the item in that half.
+   * @param {string} id the row id the item carried.
+   */
+  constructor(kind, index, id) {
+    super(`The ${kind === "notes" ? "note" : "word"} at position ${index} carries an id that belongs to another account.`);
+    this.name = "ForeignRowError";
+    this.code = "foreign_row_id";
+    this.kind = kind;
+    this.index = index;
+    this.id = id;
+  }
+}
+
+/**
+ * The maximum number of items one batch may carry.
+ *
+ * A device that holds a hundred notes and five hundred words used to push
+ * them one request at a time, and the write limiter allows 120 writes a
+ * minute: the first sync of a new device spent five minutes being refused.
+ * The batch carries many items in one request, and this is the bound on how
+ * many. The client chunks its pushes: a request with more items than this
+ * is refused with a message the client can act on.
+ */
+const MAX_BATCH_ITEMS = 200;
+
+/**
+ * The largest body one batch may have, in bytes.
+ *
+ * The single-note cap (128 KB) is sized for one note and its quote. A batch
+ * of 200 items is bigger, so the batch route reads its body with its own
+ * bound: big enough for any batch of ordinary notes, small enough that a
+ * Worker never buffers more than that.
+ */
+const MAX_BATCH_BODY_BYTES = 8 * 1024 * 1024;
 
 /**
  * Checks a connection string before it reaches the driver.
@@ -253,6 +315,186 @@ function buildUpdateStatement(prefix, assignments, whereClauses, returning) {
   return { strings, values };
 }
 
+/**
+ * Marks a value that has to be bound instead of written into the statement.
+ *
+ * A batch has as many keys as it has items, and every one of them is text
+ * the client sent. Text is written into the statement as a fragment only
+ * when the code says so; a value the client sent is always bound.
+ *
+ * @param {unknown} value the value to bind.
+ * @returns {object} the marked value.
+ */
+function bound(value) {
+  return { bound: value };
+}
+
+/**
+ * Builds a statement from text fragments and bound values.
+ *
+ * A tagged template can only bind a fixed number of parameters, but a
+ * batch has as many keys as it has items. The builder takes the parts in
+ * order - a plain string is text, a marked value is bound - and returns the
+ * `strings` array and the `values` array every driver here understands: the
+ * Neon driver, the `pg` adapter of the tests and the fake all read the same
+ * shape.
+ *
+ * @param {Array<string|object>} parts the text and the bound values.
+ * @returns {{strings: string[], values: unknown[]}} the statement.
+ */
+function buildBoundStatement(parts) {
+  const strings = [];
+  const values = [];
+  let pending = "";
+  for (const part of parts) {
+    if (part && typeof part === "object" && "bound" in part) {
+      strings.push(pending);
+      pending = "";
+      values.push(part.bound);
+      continue;
+    }
+    pending += String(part);
+  }
+  strings.push(pending);
+  return { strings, values };
+}
+
+/**
+ * The identity of a word: its text and the sentence it was seen in.
+ *
+ * The same pair the single route matches on, so a word pushed in a batch is
+ * the same row a word pushed on its own would be.
+ *
+ * @param {string} term the word.
+ * @param {string} sentence the sentence it was seen in.
+ * @returns {string} the key.
+ */
+function vocabularyKey(term, sentence) {
+  return JSON.stringify([term, sentence]);
+}
+
+/**
+ * The fields of a note that the store writes.
+ *
+ * The identity of a note and the moment the client changed it are not
+ * fields of the row: the client id is the sync key and the timestamp is the
+ * client's own, not the server's.
+ *
+ * @param {object} note the parsed note.
+ * @returns {object} the fields to write.
+ */
+function noteFields(note) {
+  const fields = {
+    note: note.note,
+    clientId: note.clientId,
+    videoId: note.videoId,
+    videoTitle: note.videoTitle,
+    channelName: note.channelName,
+    timestampSeconds: note.timestampSeconds,
+    quote: note.quote,
+  };
+  // `starred` is tri-state: a client that did not mention the flag leaves
+  // the stored one alone.
+  if (typeof note.starred === "boolean") fields.starred = note.starred;
+  return fields;
+}
+
+/**
+ * The fields of a word that the store writes.
+ *
+ * @param {object} word the parsed word.
+ * @returns {object} the fields to write.
+ */
+function vocabularyFields(word) {
+  return {
+    term: word.term,
+    translation: word.translation,
+    sentence: word.sentence,
+    sentenceTranslation: word.sentenceTranslation,
+    videoId: word.videoId,
+    videoTitle: word.videoTitle,
+    timestampSeconds: word.timestampSeconds,
+    status: word.status,
+  };
+}
+
+/**
+ * Decides what a batch does with every one of its items.
+ *
+ * The rules are the ones the single routes use, and they live in one place
+ * so that the two stores answer a batch the same way:
+ * - a note is matched by its client id, a word by its text,
+ * - a note that was deleted stays deleted: the device that still holds it
+ *   cannot bring it back,
+ * - a word that was deleted comes back with the review schedule it had,
+ *   the way POST /api/vocabulary brings it back,
+ * - the later edit wins: an item that carries a moment older than the
+ *   stored row is dropped, and the stored row is reported back.
+ *
+ * @param {Map<string, object>} stored the rows the account already has,
+ *   keyed by the identity of the item.
+ * @param {object[]} items the items of one half of the batch.
+ * @param {string} keyOf the function that reads the identity of an item.
+ * @param {boolean} keepTombstones true when a deleted row may not be
+ *   written again.
+ * @returns {Array<{action: string, reason: string|null}>} one decision per
+ *   item, in the order of the items.
+ */
+function planBatch(stored, items, keyOf, keepTombstones) {
+  return items.map((item) => {
+    const row = stored.get(keyOf(item));
+    if (!row) return { action: "insert", reason: null };
+    if (keepTombstones && row.deletedAt) {
+      return { action: "skip", reason: "deleted" };
+    }
+    if (item.updatedAt !== null && item.updatedAt !== undefined) {
+      const storedAt = Date.parse(row.updatedAt);
+      if (Number.isFinite(storedAt) && item.updatedAt <= storedAt) {
+        // The stored row is the newer one, so it wins and the push is
+        // dropped. The client is told which row the server holds.
+        return { action: "skip", reason: "stale" };
+      }
+    }
+    return { action: "update", reason: null };
+  });
+}
+
+/**
+ * How many live rows a batch adds, counting two items with the same identity
+ * as one row.
+ *
+ * A batch may repeat an item - two chunks of the same push can overlap - and
+ * both writes land on the same row: the note is matched by its client id and
+ * the word by its text. Counting the repeats as new rows would refuse a
+ * batch the account has room for, so the cap is checked against distinct
+ * identities.
+ *
+ * A row that is written is not always a new row: a deleted word that is
+ * captured again comes back, and it takes a slot in the account like an
+ * insert does. A tombstone is not a live row, so bringing one back has to be
+ * counted here as well, or the cap could be passed without the batch ever
+ * inserting anything.
+ *
+ * @param {object[]} items the items of one half of the batch.
+ * @param {Array<{action: string, reason: string|null}>} plan the decisions.
+ * @param {(item: object) => string} keyOf the identity of an item.
+ * @param {Map<string, object>} stored the rows the account already has.
+ * @returns {number} the number of live rows the batch adds.
+ */
+function countAddedRows(items, plan, keyOf, stored) {
+  const seen = new Set();
+  let count = 0;
+  plan.forEach((step, index) => {
+    if (step.action === "skip") return;
+    const key = keyOf(items[index]);
+    if (seen.has(key)) return;
+    seen.add(key);
+    const row = stored.get(key);
+    if (step.action === "insert" || (row && row.deletedAt)) count += 1;
+  });
+  return count;
+}
+
 /** Review rows are keyed by owner as well as vocabulary, like the database. */
 function reviewKey(userId, vocabularyId) {
   return userId + ":" + vocabularyId;
@@ -326,6 +568,23 @@ function byteLength(value) {
   // `Buffer` does not exist in a Worker, so the length comes from the
   // platform's own text encoder.
   return new TextEncoder().encode(value).length;
+}
+
+/**
+ * Caps one list of the delta and says whether it was capped.
+ *
+ * A delta that quietly stops at the cap is a lie the device believes: after
+ * "delete all notes" every tombstone shares one timestamp, so there is no
+ * later `since` that would fetch the rows the cap left behind. The device
+ * would keep notes the user deleted, forever.
+ *
+ * The caller asks for one row past the cap, so the answer costs no second
+ * query: if the extra row is there, the list was capped.
+ */
+function takeDelta(rows, mapRow = (row) => row) {
+  const truncated = rows.length > MAX_LIST_ROWS;
+  const kept = truncated ? rows.slice(0, MAX_LIST_ROWS) : rows;
+  return { rows: kept.map(mapRow), truncated };
 }
 
 /**
@@ -555,6 +814,218 @@ class MemoryStore {
     return rowToVocabulary(row);
   }
 
+  /**
+   * Writes a batch of notes and words in one go.
+   *
+   * The batch is all or nothing: every item of the batch is written, or
+   * none of them is. The account cap is checked against the whole batch
+   * before the first row is written, so a batch that does not fit leaves the
+   * account exactly as it was.
+   *
+   * @param {string|number} userId the account that owns the rows.
+   * @param {{notes?: object[], vocabulary?: object[]}} batch the items.
+   * @returns {Promise<{notes: object[], vocabulary: object[]}>} what the
+   *   server holds for every item of the batch.
+   */
+  async batchUpsert(userId, batch) {
+    const notes = (batch && batch.notes) || [];
+    const vocabulary = (batch && batch.vocabulary) || [];
+
+    // The token decides the account: an id in the body may not name a row
+    // somebody else owns.
+    this.assertNoForeignIds(userId, notes, vocabulary);
+
+    // The rows the account already has, so the plan can be made.
+    const storedNotes = new Map();
+    for (const row of this.notes.values()) {
+      if (row.userId === userId) storedNotes.set(row.clientId, row);
+    }
+    const storedWords = new Map();
+    for (const row of this.vocabulary.values()) {
+      if (row.userId === userId) {
+        storedWords.set(vocabularyKey(row.term, row.sentence), row);
+      }
+    }
+
+    const notePlan = planBatch(
+      storedNotes,
+      notes,
+      (note) => note.clientId,
+      true,
+    );
+    const wordPlan = planBatch(
+      storedWords,
+      vocabulary,
+      (word) => vocabularyKey(word.term, word.sentence),
+      false,
+    );
+
+    // The cap, checked against the whole batch. A batch that would push the
+    // account past the limit writes nothing at all. Two items with the same
+    // identity are one row, so they are one new row here too.
+    const added =
+      countAddedRows(notes, notePlan, (note) => note.clientId, storedNotes) +
+      countAddedRows(
+        vocabulary,
+        wordPlan,
+        (word) => vocabularyKey(word.term, word.sentence),
+        storedWords,
+      );
+    const used = this.countLiveRows(userId);
+    if (used + added > MAX_ACCOUNT_ROWS) {
+      throw new StorageLimitError(
+        `This account already holds ${used} notes and words, which is the limit of ${MAX_ACCOUNT_ROWS}.`,
+        MAX_ACCOUNT_ROWS,
+      );
+    }
+
+    // The writes. Nothing is awaited from here on: the batch is applied in
+    // one go, so no other request can see half of it.
+    const now = this.clock().toISOString();
+    const pushedNotes = [];
+    notes.forEach((note, index) => {
+      const step = notePlan[index];
+      // A batch may carry the same note twice. The second item lands on the
+      // row the first one wrote, exactly as the database's upsert does.
+      const stored = storedNotes.get(note.clientId);
+      if (step.action === "skip") {
+        pushedNotes.push({
+          clientId: note.clientId,
+          id: stored.id,
+          updatedAt: stored.updatedAt,
+        });
+        return;
+      }
+      if (step.action === "update" || stored) {
+        Object.assign(stored, noteFields(note), { updatedAt: now });
+        pushedNotes.push({
+          clientId: stored.clientId,
+          id: stored.id,
+          updatedAt: stored.updatedAt,
+        });
+        return;
+      }
+      const row = Object.assign({}, noteFields(note), {
+        id: crypto.randomUUID(),
+        userId,
+        createdAt: now,
+        updatedAt: now,
+      });
+      this.notes.set(row.id, row);
+      // A later item of this batch with the same identity finds the row.
+      storedNotes.set(row.clientId, row);
+      pushedNotes.push({ clientId: row.clientId, id: row.id, updatedAt: row.updatedAt });
+    });
+
+    const pushedWords = [];
+    vocabulary.forEach((word, index) => {
+      const step = wordPlan[index];
+      const key = vocabularyKey(word.term, word.sentence);
+      // The row the account already had, or the row an earlier item of this
+      // same batch wrote: both are the row this item lands on.
+      const stored = storedWords.get(key);
+      if (step.action === "skip") {
+        pushedWords.push({
+          term: word.term,
+          sentence: word.sentence,
+          id: stored.id,
+          updatedAt: stored.updatedAt,
+        });
+        return;
+      }
+      if (step.action === "update" || stored) {
+        // The same merge the single route does: a device that knows less
+        // about a word does not wipe what the first device knew.
+        const merged = mergeVocabularyFields(stored, vocabularyFields(word));
+        Object.assign(stored, merged, { updatedAt: now, deletedAt: null });
+        pushedWords.push({
+          term: stored.term,
+          sentence: stored.sentence,
+          id: stored.id,
+          updatedAt: stored.updatedAt,
+        });
+        return;
+      }
+      const row = Object.assign({}, vocabularyFields(word), {
+        id: crypto.randomUUID(),
+        userId,
+        createdAt: now,
+        updatedAt: now,
+      });
+      this.vocabulary.set(row.id, row);
+      // A later item of this batch with the same text finds the row.
+      storedWords.set(key, row);
+      // A brand-new word is due for its first review immediately.
+      this.reviews.set(reviewKey(userId, row.id), {
+        userId,
+        vocabularyId: row.id,
+        intervalDays: 0,
+        ease: 2.5,
+        reps: 0,
+        lapses: 0,
+        dueAt: now,
+      });
+      pushedWords.push({
+        term: row.term,
+        sentence: row.sentence,
+        id: row.id,
+        updatedAt: row.updatedAt,
+      });
+    });
+
+    return { notes: pushedNotes, vocabulary: pushedWords };
+  }
+
+  /**
+   * Throws when an item of a batch carries the id of another account's row.
+   *
+   * The batch matches a note by its client id and a word by its text, so an
+   * id in the body is never used to pick a row. It is still refused when it
+   * names somebody else's row: a client that sends such an id has a bug, and
+   * the answer says so instead of quietly doing something else.
+   *
+   * @param {string|number} userId the account that is pushing.
+   * @param {object[]} notes the notes of the batch.
+   * @param {object[]} vocabulary the words of the batch.
+   */
+  assertNoForeignIds(userId, notes, vocabulary) {
+    const foreignNotes = new Set();
+    for (const [id, row] of this.notes) {
+      if (row.userId !== userId) foreignNotes.add(id);
+    }
+    const foreignWords = new Set();
+    for (const [id, row] of this.vocabulary) {
+      if (row.userId !== userId) foreignWords.add(id);
+    }
+    notes.forEach((note, index) => {
+      if (note.id && foreignNotes.has(note.id)) {
+        throw new ForeignRowError("notes", index, note.id);
+      }
+    });
+    vocabulary.forEach((word, index) => {
+      if (word.id && foreignWords.has(word.id)) {
+        throw new ForeignRowError("vocabulary", index, word.id);
+      }
+    });
+  }
+
+  /**
+   * How many live rows the account holds, in both content tables.
+   *
+   * @param {string|number} userId the account.
+   * @returns {number} the number of rows.
+   */
+  countLiveRows(userId) {
+    let count = 0;
+    for (const row of this.notes.values()) {
+      if (row.userId === userId && !row.deletedAt) count += 1;
+    }
+    for (const row of this.vocabulary.values()) {
+      if (row.userId === userId && !row.deletedAt) count += 1;
+    }
+    return count;
+  }
+
   async updateVocabularyStatus(userId, vocabId, status) {
     const row = this.vocabulary.get(vocabId);
     // A deleted word is not graded and not returned: the answer carries the
@@ -633,31 +1104,45 @@ class MemoryStore {
   async getSyncDelta(userId, sinceIso) {
     const since = parseSince(sinceIso);
     const mine = (row) => row.userId === userId;
-    const notes = [...this.notes.values()]
-      .filter((row) => mine(row) && !row.deletedAt && new Date(row.updatedAt) > since)
-      .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
-      .slice(0, MAX_LIST_ROWS)
-      .map(rowToNote);
-    const vocabulary = [...this.vocabulary.values()]
-      .filter((row) => mine(row) && !row.deletedAt && new Date(row.updatedAt) > since)
-      .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
-      .slice(0, MAX_LIST_ROWS)
-      .map(rowToVocabulary);
+    const notes = takeDelta(
+      [...this.notes.values()]
+        .filter((row) => mine(row) && !row.deletedAt && new Date(row.updatedAt) > since)
+        .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1)),
+      rowToNote,
+    );
+    const vocabulary = takeDelta(
+      [...this.vocabulary.values()]
+        .filter((row) => mine(row) && !row.deletedAt && new Date(row.updatedAt) > since)
+        .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1)),
+      rowToVocabulary,
+    );
     // The deletions travel with the delta. A delta that only carries the
     // rows that still exist cannot say that a note is gone, so the device
     // that still holds it would keep it and push it back.
-    const deletedNotes = [...this.notes.values()]
-      .filter((row) => mine(row) && row.deletedAt && new Date(row.deletedAt) > since)
-      .slice(0, MAX_LIST_ROWS)
-      .map((row) => ({ clientId: row.clientId }));
-    const deletedVocabulary = [...this.vocabulary.values()]
-      .filter((row) => mine(row) && row.deletedAt && new Date(row.deletedAt) > since)
-      .slice(0, MAX_LIST_ROWS)
-      .map((row) => ({ term: row.term, sentence: row.sentence }));
+    const deletedNotes = takeDelta(
+      [...this.notes.values()].filter(
+        (row) => mine(row) && row.deletedAt && new Date(row.deletedAt) > since,
+      ),
+      (row) => ({ clientId: row.clientId }),
+    );
+    const deletedVocabulary = takeDelta(
+      [...this.vocabulary.values()].filter(
+        (row) => mine(row) && row.deletedAt && new Date(row.deletedAt) > since,
+      ),
+      (row) => ({ term: row.term, sentence: row.sentence }),
+    );
     return {
-      notes,
-      vocabulary,
-      deleted: { notes: deletedNotes, vocabulary: deletedVocabulary },
+      notes: notes.rows,
+      vocabulary: vocabulary.rows,
+      deleted: { notes: deletedNotes.rows, vocabulary: deletedVocabulary.rows },
+      // A capped list says so, so the device can reconcile instead of
+      // believing it has seen every deletion.
+      truncated: {
+        notes: notes.truncated,
+        vocabulary: vocabulary.truncated,
+        deletedNotes: deletedNotes.truncated,
+        deletedVocabulary: deletedVocabulary.truncated,
+      },
     };
   }
 
@@ -753,24 +1238,30 @@ class MemoryStore {
    * arrive, the download simply dies.
    */
   async estimateExportBytes(userId, part) {
+    // One rule, one shape, in both stores: ask which halves the part wants,
+    // then answer for exactly those halves. The words bring their reviews
+    // with them, because the route keeps the reviews in the words half.
+    const wantsNotes = part !== "vocabulary";
+    const wantsWords = part !== "notes";
     let bytes = 0;
-    if (part !== "vocabulary") {
+    if (wantsNotes) {
       for (const row of this.notes.values()) {
         if (row.userId !== userId || row.deletedAt) continue;
         bytes += noteBytes(row) + NOTE_ROW_OVERHEAD_BYTES;
       }
     }
-    if (part === "notes") return bytes;
-    for (const row of this.vocabulary.values()) {
-      if (row.userId !== userId || row.deletedAt) continue;
-      bytes += vocabularyBytes(row) + WORD_ROW_OVERHEAD_BYTES;
-    }
-    // The review of a word travels with it in the export.
-    for (const review of this.reviews.values()) {
-      if (review.userId !== userId) continue;
-      const vocabulary = this.vocabulary.get(review.vocabularyId);
-      if (!vocabulary || vocabulary.deletedAt) continue;
-      bytes += REVIEW_ROW_OVERHEAD_BYTES;
+    if (wantsWords) {
+      for (const row of this.vocabulary.values()) {
+        if (row.userId !== userId || row.deletedAt) continue;
+        bytes += vocabularyBytes(row) + WORD_ROW_OVERHEAD_BYTES;
+      }
+      // The review of a word travels with it in the export.
+      for (const review of this.reviews.values()) {
+        if (review.userId !== userId) continue;
+        const vocabulary = this.vocabulary.get(review.vocabularyId);
+        if (!vocabulary || vocabulary.deletedAt) continue;
+        bytes += REVIEW_ROW_OVERHEAD_BYTES;
+      }
     }
     return bytes;
   }
@@ -896,6 +1387,233 @@ function applyGrade(review, grade, now) {
   next.ease = Math.min(2.8, next.ease + (grade >= 4 ? 0.1 : 0));
   next.dueAt = new Date(now.getTime() + next.intervalDays * 86_400_000).toISOString();
   return next;
+}
+
+/**
+ * The statement that writes one note of a batch.
+ *
+ * The same upsert the single route uses: a note is matched by its client
+ * id, and a note that was deleted is not written again.
+ *
+ * @param {string|number} userId the account that owns the row.
+ * @param {object} note the parsed note.
+ * @returns {object} the statement.
+ */
+function noteUpsertStatement(sql, userId, note) {
+  const starred = typeof note.starred === "boolean" ? note.starred : null;
+  return sql`
+    insert into notes (user_id, client_id, video_id, video_title, channel_name, timestamp_seconds, quote, note, starred)
+    values (${userId}, ${note.clientId}, ${note.videoId}, ${note.videoTitle}, ${note.channelName},
+      ${note.timestampSeconds}, ${note.quote}, ${note.note}, coalesce(${starred}, false))
+    on conflict (user_id, client_id) do update set
+      video_id = excluded.video_id, video_title = excluded.video_title,
+      channel_name = excluded.channel_name, timestamp_seconds = excluded.timestamp_seconds,
+      quote = excluded.quote, note = excluded.note, updated_at = now(),
+      starred = coalesce(${starred}, notes.starred)
+    where notes.deleted_at is null
+    returning id, client_id as "clientId", updated_at as "updatedAt"
+  `;
+}
+
+/**
+ * The statement that writes one word of a batch.
+ *
+ * The same upsert the single route uses: a word is matched by its text,
+ * a device that knows less about a word does not wipe what the first
+ * device knew, and a word that was deleted comes back with the review
+ * schedule it had.
+ *
+ * @param {string|number} userId the account that owns the row.
+ * @param {object} word the parsed word.
+ * @returns {object} the statement.
+ */
+function wordUpsertStatement(sql, userId, word) {
+  return sql`
+    insert into vocabulary (user_id, term, translation, sentence, sentence_translation,
+      video_id, video_title, timestamp_seconds, status)
+    values (${userId}, ${word.term}, ${word.translation}, ${word.sentence}, ${word.sentenceTranslation},
+      ${word.videoId}, ${word.videoTitle}, ${word.timestampSeconds}, ${word.status})
+    on conflict (user_id, sync_key) do update set
+      translation = case when excluded.translation <> '' then excluded.translation else vocabulary.translation end,
+      sentence_translation = case when excluded.sentence_translation <> '' then excluded.sentence_translation else vocabulary.sentence_translation end,
+      video_id = case when excluded.video_id <> '' then excluded.video_id else vocabulary.video_id end,
+      video_title = case when excluded.video_title <> '' then excluded.video_title else vocabulary.video_title end,
+      timestamp_seconds = excluded.timestamp_seconds,
+      status = case
+        when vocabulary.status = 'mastered' or excluded.status = 'mastered' then 'mastered'
+        when vocabulary.status = 'reviewing' or excluded.status = 'reviewing' then 'reviewing'
+        else 'learning' end,
+      deleted_at = null,
+      updated_at = now()
+    returning id, term, sentence, updated_at as "updatedAt"
+  `;
+}
+
+/**
+ * The statement that gives every word of the batch its review row.
+ *
+ * A word that is new is due for its first review immediately. The review
+ * row is written in the same transaction as the words, so a batch never
+ * leaves a word behind that the user cannot review.
+ *
+ * @param {string|number} userId the account that owns the rows.
+ * @param {object[]} vocabulary the words of the batch.
+ * @param {number[]} slots the positions of the words that were written.
+ * @returns {object} the statement.
+ */
+function reviewItemsStatement(sql, userId, vocabulary, slots) {
+  const parts = [
+    "insert into review_items (user_id, vocabulary_id) select ",
+    bound(userId),
+    ", v.id from vocabulary v where v.user_id = ",
+    bound(userId),
+    " and (v.term, v.sentence) in ((",
+  ];
+  slots.forEach((slot, index) => {
+    // The casts are required: Postgres cannot infer the type of a bound
+    // value inside a row constructor, and refuses the statement outright.
+    if (index > 0) parts.push("), (");
+    parts.push(bound(vocabulary[slot].term));
+    parts.push("::text, ");
+    parts.push(bound(vocabulary[slot].sentence));
+    parts.push("::text");
+  });
+  parts.push(")) on conflict (user_id, vocabulary_id) do nothing");
+  const statement = buildBoundStatement(parts);
+  return sql(statement.strings, ...statement.values);
+}
+
+/**
+ * The statement that refuses a batch the account has no room for.
+ *
+ * The count runs inside the transaction and after the writes, so it sees
+ * the rows the batch just wrote. A batch that would push the account past
+ * the limit divides by zero, which aborts the transaction: nothing of the
+ * batch is written.
+ *
+ * @param {string|number} userId the account.
+ * @returns {object} the statement.
+ */
+function accountRoomGuardStatement(sql, userId) {
+  return sql`
+    select 1 / case when
+      (select count(*) from notes where user_id = ${userId} and deleted_at is null)
+      + (select count(*) from vocabulary where user_id = ${userId} and deleted_at is null)
+      <= ${MAX_ACCOUNT_ROWS}
+    then 1 else 0 end as guard
+  `;
+}
+
+/**
+ * The rows of the account that the notes of the batch are matched with.
+ *
+ * @param {string|number} userId the account.
+ * @param {object[]} notes the notes of the batch.
+ * @returns {Promise<Map<string, object>>} the rows, keyed by client id.
+ */
+async function lookupNotes(sql, userId, notes) {
+  const rows = new Map();
+  const clientIds = [];
+  for (const note of notes) {
+    if (note.clientId && !clientIds.includes(note.clientId)) {
+      clientIds.push(note.clientId);
+    }
+  }
+  if (!clientIds.length) return rows;
+  const parts = [
+    'select id, client_id as "clientId", updated_at as "updatedAt", deleted_at as "deletedAt" from notes where user_id = ',
+    bound(userId),
+    " and client_id in (",
+  ];
+  clientIds.forEach((clientId, index) => {
+    if (index > 0) parts.push(", ");
+    parts.push(bound(clientId));
+  });
+  parts.push(")");
+  const statement = buildBoundStatement(parts);
+  const found = await sql(statement.strings, ...statement.values);
+  for (const row of found) {
+    rows.set(row.clientId, {
+      id: row.id,
+      clientId: row.clientId,
+      updatedAt: toIso(row.updatedAt),
+      deletedAt: row.deletedAt ? toIso(row.deletedAt) : null,
+    });
+  }
+  return rows;
+}
+
+/**
+ * The rows of the account that the words of the batch are matched with.
+ *
+ * A word is matched by its text and the sentence it was seen in. The
+ * sentence is checked here, so the words that only share a term with the
+ * batch are not part of the answer.
+ *
+ * @param {string|number} userId the account.
+ * @param {object[]} vocabulary the words of the batch.
+ * @returns {Promise<Map<string, object>>} the rows, keyed by term and
+ *   sentence.
+ */
+async function lookupVocabulary(sql, userId, vocabulary) {
+  const rows = new Map();
+  const terms = [];
+  for (const word of vocabulary) {
+    if (word.term && !terms.includes(word.term)) terms.push(word.term);
+  }
+  if (!terms.length) return rows;
+  const parts = [
+    'select id, term, sentence, updated_at as "updatedAt", deleted_at as "deletedAt" from vocabulary where user_id = ',
+    bound(userId),
+    " and term in (",
+  ];
+  terms.forEach((term, index) => {
+    if (index > 0) parts.push(", ");
+    parts.push(bound(term));
+  });
+  parts.push(")");
+  const statement = buildBoundStatement(parts);
+  const found = await sql(statement.strings, ...statement.values);
+  for (const row of found) {
+    if (!vocabulary.some((word) => word.sentence === row.sentence)) continue;
+    rows.set(vocabularyKey(row.term, row.sentence), {
+      id: row.id,
+      term: row.term,
+      sentence: row.sentence,
+      updatedAt: toIso(row.updatedAt),
+      deletedAt: row.deletedAt ? toIso(row.deletedAt) : null,
+    });
+  }
+  return rows;
+}
+
+/**
+ * Who owns the given rows.
+ *
+ * @param {"notes"|"vocabulary"} table the table the ids are in.
+ * @param {string[]} ids the row ids.
+ * @returns {Promise<Map<string, string>>} the owner of every id that
+ *   exists.
+ */
+async function lookupRowOwners(sql, table, ids) {
+  const owners = new Map();
+  if (!COUNTABLE_TABLES.has(table)) {
+    throw new Error(`lookupRowOwners: unsupported table ${table}`);
+  }
+  const parts = [
+    'select id, user_id as "userId" from ',
+    table,
+    " where id in (",
+  ];
+  ids.forEach((id, index) => {
+    if (index > 0) parts.push(", ");
+    parts.push(bound(id));
+  });
+  parts.push(")");
+  const statement = buildBoundStatement(parts);
+  const rows = await sql(statement.strings, ...statement.values);
+  for (const row of rows) owners.set(row.id, String(row.userId));
+  return owners;
 }
 
 class NeonStore {
@@ -1101,6 +1819,217 @@ class NeonStore {
     return rows.length > 0;
   }
 
+  /**
+   * Writes a batch of notes and words in one transaction.
+   *
+   * The batch is all or nothing. Every statement of the batch runs in one
+   * transaction, so a batch that cannot be written whole - because the
+   * account has no room left, or because a statement fails - leaves the
+   * account exactly as it was. The account cap is therefore checked against
+   * the whole batch, not row by row.
+   *
+   * @param {string|number} userId the account that owns the rows.
+   * @param {{notes?: object[], vocabulary?: object[]}} batch the items.
+   * @returns {Promise<{notes: object[], vocabulary: object[]}>} what the
+   *   server holds for every item of the batch.
+   */
+  async batchUpsert(userId, batch) {
+    const notes = (batch && batch.notes) || [];
+    const vocabulary = (batch && batch.vocabulary) || [];
+
+    // The token decides the account: an id in the body may not name a row
+    // somebody else owns. Nothing is written when one does.
+    await this.assertNoForeignIds(userId, notes, vocabulary);
+
+    // The rows the account already has, so the plan can be made.
+    const storedNotes = await lookupNotes(this.sql, userId, notes);
+    const storedWords = await lookupVocabulary(this.sql, userId, vocabulary);
+
+    const notePlan = planBatch(
+      storedNotes,
+      notes,
+      (note) => note.clientId,
+      true,
+    );
+    const wordPlan = planBatch(
+      storedWords,
+      vocabulary,
+      (word) => vocabularyKey(word.term, word.sentence),
+      false,
+    );
+
+    // The cap, checked against the whole batch before anything is written.
+    // Two items with the same identity are one row, so they are one new row
+    // here too.
+    const added =
+      countAddedRows(notes, notePlan, (note) => note.clientId, storedNotes) +
+      countAddedRows(
+        vocabulary,
+        wordPlan,
+        (word) => vocabularyKey(word.term, word.sentence),
+        storedWords,
+      );
+    const used = await this.countLiveRows(userId);
+    if (used + added > MAX_ACCOUNT_ROWS) {
+      throw new StorageLimitError(
+        `This account already holds ${used} notes and words, and this batch would add ${added} more, which is past the limit of ${MAX_ACCOUNT_ROWS}.`,
+        MAX_ACCOUNT_ROWS,
+      );
+    }
+
+    // The writes. Every statement of the batch is one statement of one
+    // transaction, so the batch lands whole or not at all.
+    const statements = [];
+    const noteSlots = [];
+    const wordSlots = [];
+    notes.forEach((note, index) => {
+      if (notePlan[index].action === "skip") return;
+      statements.push(noteUpsertStatement(this.sql, userId, note));
+      noteSlots.push(index);
+    });
+    vocabulary.forEach((word, index) => {
+      if (wordPlan[index].action === "skip") return;
+      statements.push(wordUpsertStatement(this.sql, userId, word));
+      wordSlots.push(index);
+    });
+    if (wordSlots.length) {
+      statements.push(reviewItemsStatement(this.sql, userId, vocabulary, wordSlots));
+    }
+    // The guard runs after the writes and inside the same transaction: it
+    // counts the rows the account holds now and refuses the whole batch when
+    // that is more than the limit allows.
+    statements.push(accountRoomGuardStatement(this.sql, userId));
+
+    let results;
+    try {
+      results = await this.sql.transaction(statements);
+    } catch (error) {
+      if (isDivisionByZero(error)) {
+        throw new StorageLimitError(
+          `This account cannot hold more than ${MAX_ACCOUNT_ROWS} notes and words, which is the limit of ${MAX_ACCOUNT_ROWS}.`,
+          MAX_ACCOUNT_ROWS,
+        );
+      }
+      throw error;
+    }
+
+    // The answer: what the server holds for every item of the batch, in the
+    // order of the request.
+    const writtenNotes = new Map();
+    noteSlots.forEach((itemIndex, slot) => {
+      const rows = results[slot] || [];
+      if (rows.length) writtenNotes.set(notes[itemIndex].clientId, rows[0]);
+    });
+    const writtenWords = new Map();
+    wordSlots.forEach((itemIndex, slot) => {
+      const rows = results[noteSlots.length + slot] || [];
+      if (rows.length) {
+        const word = vocabulary[itemIndex];
+        writtenWords.set(vocabularyKey(word.term, word.sentence), rows[0]);
+      }
+    });
+    const pushedNotes = notes.map((note) => {
+      const written = writtenNotes.get(note.clientId);
+      if (written) {
+        return {
+          clientId: note.clientId,
+          id: written.id,
+          updatedAt: toIso(written.updatedAt),
+        };
+      }
+      // The item was not written: the stored row wins, or the row was
+      // deleted between the plan and the write. Either way the stored row is
+      // what the client has to know about.
+      const stored = storedNotes.get(note.clientId);
+      return {
+        clientId: note.clientId,
+        id: stored.id,
+        updatedAt: toIso(stored.updatedAt),
+      };
+    });
+
+    const pushedWords = vocabulary.map((word) => {
+      const key = vocabularyKey(word.term, word.sentence);
+      const written = writtenWords.get(key);
+      if (written) {
+        return {
+          term: word.term,
+          sentence: word.sentence,
+          id: written.id,
+          updatedAt: toIso(written.updatedAt),
+        };
+      }
+      const stored = storedWords.get(key);
+      return {
+        term: word.term,
+        sentence: word.sentence,
+        id: stored.id,
+        updatedAt: toIso(stored.updatedAt),
+      };
+    });
+
+    return { notes: pushedNotes, vocabulary: pushedWords };
+  }
+
+
+
+
+
+
+
+  /**
+   * Throws when an item of a batch carries the id of another account's row.
+   *
+   * The batch matches a note by its client id and a word by its text, so an
+   * id in the body is never used to pick a row. It is still refused when it
+   * names somebody else's row: the token decides the account, and a client
+   * that sends such an id has a bug the answer points at.
+   *
+   * @param {string|number} userId the account that is pushing.
+   * @param {object[]} notes the notes of the batch.
+   * @param {object[]} vocabulary the words of the batch.
+   */
+  async assertNoForeignIds(userId, notes, vocabulary) {
+    const noteIds = notes.map((note) => note.id).filter(isUuid);
+    if (noteIds.length) {
+      const owners = await lookupRowOwners(this.sql, "notes", noteIds);
+      notes.forEach((note, index) => {
+        if (!note.id || !owners.has(note.id)) return;
+        if (String(owners.get(note.id)) !== String(userId)) {
+          throw new ForeignRowError("notes", index, note.id);
+        }
+      });
+    }
+    const wordIds = vocabulary.map((word) => word.id).filter(isUuid);
+    if (wordIds.length) {
+      const owners = await lookupRowOwners(this.sql, "vocabulary", wordIds);
+      vocabulary.forEach((word, index) => {
+        if (!word.id || !owners.has(word.id)) return;
+        if (String(owners.get(word.id)) !== String(userId)) {
+          throw new ForeignRowError("vocabulary", index, word.id);
+        }
+      });
+    }
+  }
+
+
+  /**
+   * How many live rows the account holds, in both content tables.
+   *
+   * @param {string|number} userId the account.
+   * @returns {Promise<number>} the number of rows.
+   */
+  async countLiveRows(userId) {
+    const rows = await this.sql`
+      select
+        (select count(*) from notes where user_id = ${userId} and deleted_at is null) as notes,
+        (select count(*) from vocabulary where user_id = ${userId} and deleted_at is null) as vocabulary
+    `;
+    const notes = rows.length ? Number(rows[0].notes) || 0 : 0;
+    const vocabulary = rows.length ? Number(rows[0].vocabulary) || 0 : 0;
+    return notes + vocabulary;
+  }
+
   async listVocabulary(userId, limit = MAX_LIST_ROWS) {
     const rows = await this.sql`
       select id, term, translation, sentence, sentence_translation as "sentenceTranslation",
@@ -1240,39 +2169,57 @@ class NeonStore {
     // The rows are limited: a delta without a limit is a request for
     // everything the account ever wrote, which is what takes the Worker
     // down when one account holds a lot.
-    const notes = await this.sql`
+    const notes = takeDelta(
+      await this.sql`
       select id, client_id as "clientId", starred, video_id as "videoId", video_title as "videoTitle",
         channel_name as "channelName", timestamp_seconds as "timestampSeconds", quote, note,
         created_at as "createdAt", updated_at as "updatedAt"
       from notes where user_id = ${userId} and updated_at > ${sinceIsoText} and deleted_at is null
-      order by updated_at desc limit ${MAX_LIST_ROWS}
-    `;
-    const vocabulary = await this.sql`
+      order by updated_at desc limit ${MAX_LIST_ROWS + 1}
+    `,
+      rowToNote,
+    );
+    const vocabulary = takeDelta(
+      await this.sql`
       select id, term, translation, sentence, sentence_translation as "sentenceTranslation",
         video_id as "videoId", video_title as "videoTitle", timestamp_seconds as "timestampSeconds", status,
         created_at as "createdAt", updated_at as "updatedAt"
       from vocabulary where user_id = ${userId} and updated_at > ${sinceIsoText} and deleted_at is null
-      order by updated_at desc limit ${MAX_LIST_ROWS}
-    `;
+      order by updated_at desc limit ${MAX_LIST_ROWS + 1}
+    `,
+      rowToVocabulary,
+    );
     // The deletions travel with the delta. A delta that only carries the
     // rows that still exist cannot say that a note is gone, so the device
     // that still holds it would keep it and push it back.
-    const deletedNotes = await this.sql`
+    const deletedNotes = takeDelta(
+      await this.sql`
       select client_id as "clientId" from notes
       where user_id = ${userId} and deleted_at is not null and deleted_at > ${sinceIsoText}
-      order by deleted_at desc limit ${MAX_LIST_ROWS}
-    `;
-    const deletedVocabulary = await this.sql`
+      order by deleted_at desc limit ${MAX_LIST_ROWS + 1}
+    `,
+      (row) => ({ clientId: row.clientId }),
+    );
+    const deletedVocabulary = takeDelta(
+      await this.sql`
       select term, sentence from vocabulary
       where user_id = ${userId} and deleted_at is not null and deleted_at > ${sinceIsoText}
-      order by deleted_at desc limit ${MAX_LIST_ROWS}
-    `;
+      order by deleted_at desc limit ${MAX_LIST_ROWS + 1}
+    `,
+      (row) => ({ term: row.term, sentence: row.sentence }),
+    );
     return {
-      notes: notes.map(rowToNote),
-      vocabulary: vocabulary.map(rowToVocabulary),
+      notes: notes.rows,
+      vocabulary: vocabulary.rows,
       deleted: {
-        notes: deletedNotes.map((row) => ({ clientId: row.clientId })),
-        vocabulary: deletedVocabulary.map((row) => ({ term: row.term, sentence: row.sentence })),
+        notes: deletedNotes.rows,
+        vocabulary: deletedVocabulary.rows,
+      },
+      truncated: {
+        notes: notes.truncated,
+        vocabulary: vocabulary.truncated,
+        deletedNotes: deletedNotes.truncated,
+        deletedVocabulary: deletedVocabulary.truncated,
       },
     };
   }
@@ -1506,11 +2453,14 @@ module.exports = {
   applyGrade,
   parseSince,
   DatabaseNotConfiguredError,
+  ForeignRowError,
   StorageLimitError,
   MAX_LIST_ROWS,
   MAX_EXPORT_ROWS,
   MAX_EXPORT_BYTES,
   MAX_ACCOUNT_ROWS,
+  MAX_BATCH_ITEMS,
+  MAX_BATCH_BODY_BYTES,
   TOMBSTONE_RETENTION_DAYS,
   MAX_INTERVAL_DAYS,
 };
