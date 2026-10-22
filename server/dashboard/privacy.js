@@ -66,6 +66,12 @@
       storeIdentity: " (id, login name) so your account can be recognised.",
       storeNotes:
         " that you write while watching a video, plus the words you keep for review and the review progress this service schedules for them. Words are collected in the extension; this service only stores them and schedules their reviews.",
+      deviceLabel: "The name of your browser.",
+      storeDevice:
+        " A random id the extension generates once and keeps, so a session can be tied to the browser that started it: a token copied to another browser is refused. It is not your identity, it is not a fingerprint, and it names nothing about you.",
+      tombstoneLabel: "What you deleted.",
+      storeTombstone:
+        " A deleted note or word is marked as deleted rather than erased at once, and the mark is kept for 30 days. Without it, a device that still holds the note would upload it again and it would come back. The marked row is never served to you or to anyone else, and the scheduled cleanup removes it after 30 days. Deleting your account removes it immediately.",
       storeIsolation:
         "Data is stored in a Neon (PostgreSQL) database and is isolated per GitHub account: the server only ever serves the rows belonging to the authenticated user.",
       edgeHeading: "The network in between",
@@ -146,6 +152,12 @@
       storeIdentity: "（id、登录名），用来识别你的账户。",
       storeNotes:
         "，以及你为复习保存的单词和本服务为它们排定的复习进度。单词在扩展里收集，本服务只负责保存它们并安排复习。",
+      deviceLabel: "你的浏览器叫什么。",
+      storeDevice:
+        " 一个由扩展生成一次、之后就留着不动的随机 ID：有了它，一次登录才能只在这个浏览器里生效，被复制到别的浏览器的令牌会被拒绝。它不是你的身份，不是浏览器指纹，也不指向你本人。",
+      tombstoneLabel: "你删掉的东西。",
+      storeTombstone:
+        " 被删除的笔记或单词会先标记为已删除，而不是立刻抹掉，这个标记保留 30 天。没有它，还留着那条笔记的设备会把它重新传上去，于是它又回来了。被标记的那一行既不会返回给你，也不会返回给任何人；定时清理会在 30 天后删掉它。删除账户会立刻删掉它。",
       storeIsolation:
         "数据保存在 Neon（PostgreSQL）数据库中，并按 GitHub 账户隔离：服务端只会返回已认证用户自己的数据。",
       edgeHeading: "中间的网络",

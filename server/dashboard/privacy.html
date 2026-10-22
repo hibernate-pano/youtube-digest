@@ -137,6 +137,17 @@
             words you keep for review and the review progress this service
             schedules for them. Words are collected in the extension; this service only stores
             them and schedules their reviews.</span></li>
+        <li><strong data-i18n="deviceLabel">The name of your browser.</strong><span data-i18n="storeDevice">
+            A random id the extension generates once and keeps, so a session can be
+            tied to the browser that started it: a token copied to another browser
+            is refused. It is not your identity, it is not a fingerprint, and it
+            names nothing about you.</span></li>
+        <li><strong data-i18n="tombstoneLabel">What you deleted.</strong><span data-i18n="storeTombstone">
+            A deleted note or word is marked as deleted rather than erased at once,
+            and the mark is kept for 30 days. Without it, a device that still holds
+            the note would upload it again and it would come back. The marked row
+            is never served to you or to anyone else, and the scheduled cleanup
+            removes it after 30 days. Deleting your account removes it immediately.</span></li>
       </ul>
       <p data-i18n="storeIsolation">
         Data is stored in a Neon (PostgreSQL) database and is isolated per GitHub account:

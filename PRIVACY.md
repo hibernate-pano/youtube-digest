@@ -49,6 +49,16 @@ The service stores the following per account:
   learning status.
 - **Review progress**: when each vocabulary item is next due, its repetition
   count, its current interval, and a difficulty score.
+- **The name of the browser**: a random id the extension generates once and
+  keeps in its own storage. Sign-in and every request that carries a session
+  send it, so a session is bound to the browser that started it and a token
+  copied to another browser is refused. It is not derived from anything about
+  you or your machine, and it is not used to recognise you anywhere else.
+- **A deletion mark**: a deleted note or word is marked as deleted rather than
+  erased at once, and the mark is kept for 30 days. Without it, a device that
+  still holds the note would upload it again and the note would come back. A
+  marked row is never served, and a scheduled cleanup removes it after 30 days.
+  Deleting your account removes it immediately.
 
 - Notes are stored under your GitHub account id and only your account's rows are
   ever served: the server scopes every query by the verified token, and the
