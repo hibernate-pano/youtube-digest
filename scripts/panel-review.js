@@ -27,7 +27,20 @@ const path = require("node:path");
 const { launchReviewBrowser } = require("./lib/review-browser.js");
 
 const root = path.resolve(__dirname, "..");
-const outDir = path.resolve(process.argv[2] || path.join(root, ".review"));
+
+/**
+ * `--store` writes the panel pictures the store listing is built from
+ * instead of the review set: the same tabs, at the size Chrome's listing
+ * reserves, with sample content that belongs to one video. The listing used
+ * to be assembled by hand and drifted a day behind the product every time
+ * the panel changed.
+ */
+const args = process.argv.slice(2);
+const storeMode = args.includes("--store");
+const outArg = args.find((argument) => !argument.startsWith("--"));
+const outDir = path.resolve(
+  outArg || path.join(root, storeMode ? ".review-store" : ".review"),
+);
 
 /**
  * The clock the sample data is written against.
@@ -396,6 +409,33 @@ function buildChromeStub(payload) {
             };
           case "analyzeTranscript":
             return { success: true, analysis: payload.analysis };
+          case "translateContent":
+            // The panel sends batches of segments to the provider and paints
+            // what comes back. The stub answers with the translation the
+            // segment already carries, so the bilingual view is the real
+            // view and not a picture of a pending request. Interface copy
+            // has no entry in the transcript and is answered with itself,
+            // which is what a translation of a label looks like when the
+            // provider returns the same words.
+            return {
+              success: true,
+              translatedContent: {
+                segments: (message?.content?.segments || []).map((segment) => {
+                  const transcript = payload.transcript || [];
+                  // The panel groups segments before it sends them, so the id
+                  // on the batch is not always the id in the transcript. The
+                  // text is, so the text is the second way of finding the
+                  // translation this segment already carries.
+                  const source =
+                    transcript.find((item) => item.id === segment.id) ||
+                    transcript.find((item) => item.text === segment.text);
+                  return {
+                    id: segment.id,
+                    text: (source && source.translation) || segment.text || "",
+                  };
+                }),
+              },
+            };
           case "getSettings":
             return { success: true, settings: {} };
           case "getVideoInfo":
@@ -773,6 +813,25 @@ const READ_CHIPS = () => {
           `${Math.round(fontSize * 2.4)}px here.`,
       );
     }
+    // A stamp is one size. The chip is wide enough for the longest stamp
+    // the panel writes - "1:30:00" - so a short one and a long one are the
+    // same width and the stamps of one video stay in a straight column.
+    // The promise was half a pixel short of seven characters, and the long
+    // stamp stepped out of the column, so the two labels are measured on
+    // the chip itself: the same element and the same font, only the text
+    // differs.
+    chip.textContent = "0:00";
+    const shortWidth = chip.getBoundingClientRect().width;
+    chip.textContent = "1:30:00";
+    const longWidth = chip.getBoundingClientRect().width;
+    chip.textContent = label;
+    if (Math.abs(longWidth - shortWidth) > 0.5) {
+      problems.push(
+        `The timestamp chip is ${Math.round(shortWidth)}px wide for "0:00" ` +
+          `and ${Math.round(longWidth)}px for "1:30:00". A stamp is one ` +
+          `size, or the column steps in and out with the length of each one.`,
+      );
+    }
   }
   return problems;
 };
@@ -784,13 +843,18 @@ const READ_CHIPS = () => {
  * is decided when the page loads: a user without a key is a different state
  * of the product, not a different click inside one state.
  */
-async function openPanel(browser, payloadOverrides = {}) {
+async function openPanel(
+  browser,
+  payloadOverrides = {},
+  viewport = { width: 420, height: 900 },
+) {
   const context = await browser.newContext({
-    viewport: { width: 420, height: 900 },
+    viewport,
     deviceScaleFactor: 2,
   });
 
   const chrome = makeChrome();
+  const { local: localOverride, ...rest } = payloadOverrides;
   await context.addInitScript(
     ({ buildSource, payload }) => {
       // The stub is rebuilt inside the page from its own source, because an
@@ -801,7 +865,7 @@ async function openPanel(browser, payloadOverrides = {}) {
     {
       buildSource: buildChromeStub.toString(),
       payload: {
-        local: chrome.local.values,
+        local: { ...chrome.local.values, ...(localOverride || {}) },
         words: WORDS,
         notes: NOTES,
         review: SAMPLE_REVIEW,
@@ -810,7 +874,7 @@ async function openPanel(browser, payloadOverrides = {}) {
         analysis: ANALYSIS,
         videoInfo: VIDEO_INFO,
         now: NOW,
-        ...payloadOverrides,
+        ...rest,
       },
     },
   );
@@ -844,9 +908,461 @@ const READ_KEY_NOTICE = () => {
   };
 };
 
+/**
+ * The video the store listing shows.
+ *
+ * Every picture on the listing is this one video. The panel is pasted into a
+ * photograph of its real watch page, so the title, the channel and the
+ * transcript have to be the ones on that page: a listing where the page says
+ * one video and the panel another reads as two sessions glued together.
+ */
+const STORE_VIDEO = {
+  videoId: "sam-altman-building-openai",
+  title: "Sam Altman on Building OpenAI & Betting on the Impossible",
+  channelName: "David Senra",
+  description:
+    "Sam Altman on the people he learns from, how he takes feedback, and what he expects from the next few years of AI.",
+  duration: 3600,
+};
+
+/**
+ * Lines of the interview as they were read out of the page.
+ *
+ * They are the video's own words and their translations, not filler written
+ * to fill a screenshot. The three segments are the ones a reader can check
+ * against the video.
+ */
+const STORE_TRANSCRIPT = [
+  {
+    id: "s1",
+    start: 98,
+    end: 107,
+    text: "A lot of people send product feedback. He is the only person at the intersection of like CEO of a large company and extremely accurate, detailed on the cutting edge feedback.",
+    translation:
+      "很多人都会给产品反馈。他是唯一一个既是大型公司的 CEO、又能给出极其准确、细致且处于前沿的反馈的人。",
+  },
+  {
+    id: "s2",
+    start: 107,
+    end: 114,
+    text: "Yeah, he told me I don't know if it was on the episode uh that we if it was in the episode or if it was after, but he said he was very um adamant.",
+    translation:
+      "是的，他告诉我，我不知道那是在录节目的时候，还是录完之后，但他非常坚持。",
+  },
+  {
+    id: "s3",
+    start: 114,
+    end: 121,
+    text: 'He\'s like, "We\'re going to look back in 2026."',
+    translation: "他说：“到 2026 年回头再看。”",
+  },
+];
+
+const STORE_ANALYSIS = {
+  title: STORE_VIDEO.title,
+  channelName: STORE_VIDEO.channelName,
+  summary:
+    "Sam Altman explains why Toby Lu stands out: he writes the software himself and gives exact feedback on what the models can really do. They disagree on when AI reshapes business, and agree it is a people problem, not a software problem.",
+  chapters: [
+    {
+      title: "Why Toby Lu stands out",
+      timestamp: "0:00",
+      timestampSeconds: 0,
+      summary:
+        "He builds the software himself and gives exact, unvarnished feedback on what the models can really do.",
+    },
+    {
+      title: "A year every business is up for grabs",
+      timestamp: "1:28",
+      timestampSeconds: 88,
+      summary:
+        "Toby's bet that 2026 belongs to whoever rebuilds a business AI-native.",
+    },
+    {
+      title: "Where the two timelines diverge",
+      timestamp: "3:36",
+      timestampSeconds: 216,
+      summary:
+        "Sam thinks the economy's inertia will make the shift slower than Toby expects.",
+    },
+  ],
+  keyPoints: [
+    "Exact, unvarnished feedback is rarer than good product ideas.",
+    "The disagreement is about when AI reshapes a business, not whether.",
+    "Both agree the hard part is people, not software.",
+  ],
+};
+
+const STORE_NOTES = [
+  {
+    id: "note_1",
+    clientId: "note_1",
+    videoId: STORE_VIDEO.videoId,
+    videoTitle: STORE_VIDEO.title,
+    channelName: STORE_VIDEO.channelName,
+    timestampSeconds: 98,
+    quote:
+      "the only person at the intersection of like CEO of a large company and extremely accurate, detailed on the cutting edge feedback",
+    text: "Most feedback is either directionally right or precisely right. This is the case for both.",
+    timestampedUrl:
+      "https://www.youtube.com/watch?v=sam-altman-building-openai&t=98",
+    starred: true,
+    createdAt: NOW - 3600000,
+    updatedAt: NOW - 3600000,
+  },
+  {
+    id: "note_2",
+    clientId: "note_2",
+    videoId: STORE_VIDEO.videoId,
+    videoTitle: STORE_VIDEO.title,
+    channelName: STORE_VIDEO.channelName,
+    timestampSeconds: 107,
+    quote: "he said he was very um adamant",
+    text: "Worth re-listening to this part in full.",
+    timestampedUrl:
+      "https://www.youtube.com/watch?v=sam-altman-building-openai&t=107",
+    starred: false,
+    createdAt: NOW - 7200000,
+    updatedAt: NOW - 7200000,
+  },
+];
+
+const STORE_WORDS = [
+  {
+    id: "vocab_1",
+    term: "adamant",
+    translation: "坚决的",
+    explanation: "refusing to be persuaded or to change one's mind",
+    sentence: "he said he was very um adamant",
+    videoId: STORE_VIDEO.videoId,
+    videoTitle: STORE_VIDEO.title,
+    timestampSeconds: 107,
+    status: "learning",
+    createdAt: NOW - 3600000,
+    updatedAt: NOW - 3600000,
+  },
+  {
+    id: "vocab_2",
+    term: "unvarnished",
+    translation: "不加修饰的",
+    explanation: "stated plainly, without softening anything",
+    sentence: "exact, unvarnished feedback",
+    videoId: STORE_VIDEO.videoId,
+    videoTitle: STORE_VIDEO.title,
+    timestampSeconds: 0,
+    status: "reviewing",
+    createdAt: NOW - 86400000,
+    updatedAt: NOW - 86400000,
+  },
+  {
+    id: "vocab_3",
+    term: "the cutting edge",
+    translation: "最前沿",
+    explanation: "the newest stage of development of something",
+    sentence: "detailed on the cutting edge feedback",
+    videoId: STORE_VIDEO.videoId,
+    videoTitle: STORE_VIDEO.title,
+    timestampSeconds: 98,
+    status: "mastered",
+    createdAt: NOW - 172800000,
+    updatedAt: NOW - 172800000,
+  },
+];
+
+const STORE_REVIEW = {
+  review: { dueAt: NOW, intervalDays: 0, ease: 2.5, reps: 0, lapses: 0 },
+  vocabulary: STORE_WORDS[0],
+};
+
+const STORE_LIBRARY = [
+  {
+    id: STORE_VIDEO.videoId,
+    videoId: STORE_VIDEO.videoId,
+    title: STORE_VIDEO.title,
+    channelName: STORE_VIDEO.channelName,
+    createdAt: NOW - 3600000,
+    expiresAt: NOW + 23 * 86400000,
+    noteCount: 2,
+  },
+  {
+    id: "def456uvw",
+    videoId: "def456uvw",
+    title: "The Business of AI Agents",
+    channelName: "Latent Space",
+    createdAt: NOW - 86400000,
+    expiresAt: NOW + 20 * 86400000,
+    noteCount: 4,
+  },
+  {
+    id: "ghi789rst",
+    videoId: "ghi789rst",
+    title: "How Memory Works",
+    channelName: "Some Channel",
+    createdAt: NOW - 3 * 86400000,
+    expiresAt: NOW + 17 * 86400000,
+    noteCount: 1,
+  },
+];
+
+/** The size the Chrome Web Store reserves for a screenshot of the panel. */
+const STORE_PANEL = { width: 450, height: 780 };
+
+/** What each store picture shows, and the file it is written to. */
+const STORE_SHOTS = [
+  { name: "overview", tab: "overview", generate: true },
+  { name: "transcript-bilingual", tab: "transcript", bilingual: true },
+  { name: "notes", tab: "notes" },
+  { name: "words", tab: "words" },
+  { name: "library", tab: "library" },
+];
+
+/**
+ * Writes the panel pictures the store listing is built from.
+ *
+ * The listing showed a generation of the panel that no longer existed, and
+ * nothing regenerated it, so the pictures drifted a day behind the product
+ * while every gate stayed green. This is the other half of that fix:
+ * `scripts/store-shots.js` composites these onto the demo photograph.
+ *
+ * It fails rather than writes a picture of a broken panel, for the same
+ * reason the review does: a listing built from an error screen is worse than
+ * a listing with no pictures.
+ */
+async function renderStoreShots(browser, targetDir) {
+  fs.mkdirSync(targetDir, { recursive: true });
+  const failures = [];
+  const { context, page, errors } = await openPanel(
+    browser,
+    {
+      local: {
+        ytd_notes: STORE_NOTES,
+        ytd_vocabulary: STORE_WORDS,
+        // The library is every `digest_*` entry in local storage, so the
+        // library picture needs more than one entry in storage to have
+        // more than one row in it.
+        digest_def456uvw: {
+          analysis: null,
+          transcript: [],
+          transcriptText: "",
+          transcriptTimestamped: "",
+          transcriptLanguage: null,
+          videoTitle: "The Business of AI Agents",
+          channelName: "Latent Space",
+          paragraphCache: {},
+          interfaceCache: {},
+          timestamp: NOW - 86400000,
+        },
+        digest_ghi789rst: {
+          analysis: {
+            title: "How Memory Works",
+            channelName: "Some Channel",
+            summary:
+              "A talk about how memory reconstructs instead of recording.",
+            chapters: [],
+            keyPoints: [],
+          },
+          transcript: TRANSCRIPT,
+          transcriptText: TRANSCRIPT.map((segment) => segment.text).join(" "),
+          transcriptTimestamped: TRANSCRIPT.map(
+            (segment) => `[${segment.start}] ${segment.text}`,
+          ).join("\n"),
+          transcriptLanguage: "en",
+          videoTitle: "How Memory Works",
+          channelName: "Some Channel",
+          paragraphCache: {},
+          interfaceCache: {},
+          timestamp: NOW - 3 * 86400000,
+        },
+        digest_jkl012mno: {
+          analysis: {
+            title: "Building a Second Brain",
+            channelName: "Every",
+            summary: "How a notes system becomes a thinking system.",
+            chapters: [],
+            keyPoints: [],
+          },
+          transcript: TRANSCRIPT,
+          transcriptText: TRANSCRIPT.map((segment) => segment.text).join(" "),
+          transcriptTimestamped: TRANSCRIPT.map(
+            (segment) => `[${segment.start}] ${segment.text}`,
+          ).join("\n"),
+          transcriptLanguage: "en",
+          videoTitle: "Building a Second Brain",
+          channelName: "Every",
+          paragraphCache: {},
+          interfaceCache: {},
+          timestamp: NOW - 6 * 86400000,
+        },
+      },
+      words: STORE_WORDS,
+      notes: STORE_NOTES,
+      review: STORE_REVIEW,
+      library: STORE_LIBRARY,
+      transcript: STORE_TRANSCRIPT,
+      analysis: STORE_ANALYSIS,
+      videoInfo: STORE_VIDEO,
+    },
+    STORE_PANEL,
+  );
+
+  for (const shot of STORE_SHOTS) {
+    await page.evaluate((name) => {
+      document.querySelector(`[data-tab="${name}"]`)?.click();
+    }, shot.tab);
+    await page.waitForTimeout(700);
+
+
+    if (shot.generate) {
+      await page.evaluate(() => {
+        document.getElementById("summaryGenerateBtn")?.click();
+      });
+      // The summary is painted after the answer arrives, so a fixed wait
+      // photographs a half-drawn summary about half the time. The listing
+      // has to show the finished thing.
+      await page
+        .waitForFunction(
+          () => {
+            const node = document.getElementById("summaryText");
+            return node && node.textContent.trim().length > 40;
+          },
+          { timeout: 8000 },
+        )
+        .catch(() => {
+          failures.push(
+            `The ${shot.name} picture would show a summary that never arrived.`,
+          );
+        });
+      await page.waitForTimeout(400);
+    }
+
+    if (shot.bilingual) {
+      // The language is switched the way a user switches it: press the
+      // button, answer the price question, wait for the lines. Driving the
+      // state directly would photograph a view the product never produces.
+      await page.evaluate(() => {
+        document.getElementById("contentLanguageBilingual")?.click();
+      });
+      await page.waitForTimeout(400);
+      const asked = await page.evaluate(() => {
+        const confirm = document.getElementById("translationCostConfirmBtn");
+        if (!confirm) return false;
+        confirm.click();
+        return true;
+      });
+      if (!asked) {
+        failures.push(
+          "Switching to bilingual did not ask what the translation costs. " +
+            "A switch that spends money without asking is the defect this " +
+            "review exists to catch.",
+        );
+      }
+      await page.waitForTimeout(1500);
+      // A row is `translated` only once a translation is painted on it;
+      // until then it says it is still translating.
+      const translated = await page.evaluate(
+        () => document.querySelectorAll(".transcript-entry.translated").length,
+      );
+      if (!translated) {
+        failures.push(
+          "The bilingual picture has no translation under any line, so it " +
+            "would show the same thing as the original.",
+        );
+      }
+    }
+
+    // A picture of a list that has not been filled in yet is a picture of
+    // nothing. Each tab is given its content before it is photographed.
+    const expectation = TAB_EXPECTATIONS[shot.tab];
+    await page
+      .waitForFunction(
+        ({ source, key, text }) => {
+          const state = new Function(`return (${source});`)()();
+          return text
+            ? String(state[key] || "").trim().length > 0
+            : Number(state[key] || 0) > 0;
+        },
+        {
+          source: READ_PANEL_STATE.toString(),
+          key: expectation.countKey,
+          text: !!expectation.text,
+        },
+        { timeout: 8000 },
+      )
+      .catch(() => {
+        failures.push(
+          `The ${shot.name} picture would show an empty ${shot.tab} tab; ` +
+            `nothing was drawn in it.`,
+        );
+      });
+
+    const state = await page.evaluate(READ_PANEL_STATE);
+    const panel = TAB_EXPECTATIONS[shot.tab].panel;
+    if (state[panel] !== "visible" || state.error === "visible") {
+      failures.push(
+        `The ${shot.name} picture would show ${state.error === "visible" ? "the error screen" : `nothing (${panel} is ${state[panel]})`}.`,
+      );
+      continue;
+    }
+
+    const file = path.join(targetDir, `${shot.name}.png`);
+    // Not fullPage: the panel is exactly one viewport tall and scrolls its
+    // own content area, so the viewport is the picture.
+    await page.screenshot({ path: file });
+    const bytes = fs.readFileSync(file);
+    const width = bytes.readUInt32BE(16);
+    const height = bytes.readUInt32BE(20);
+    const expectedWidth = STORE_PANEL.width * 2;
+    const expectedHeight = STORE_PANEL.height * 2;
+    if (width !== expectedWidth || height !== expectedHeight) {
+      failures.push(
+        `${shot.name}.png came out ${width}x${height}; the listing needs ` +
+          `${expectedWidth}x${expectedHeight} (${STORE_PANEL.width}x${STORE_PANEL.height} at 2x).`,
+      );
+      continue;
+    }
+    console.log(`${shot.name}: ${width}x${height}`);
+
+    // The language is one choice for the whole panel, so every picture after
+    // this one would be bilingual too. A note is painted twice in that view
+    // (the line, then its translation), which on a listing reads as the
+    // product repeating every note. The listing goes back to the language
+    // most of its readers use.
+    if (shot.bilingual) {
+      await page.evaluate(() => {
+        document.getElementById("contentLanguageOriginal")?.click();
+      });
+      await page.waitForTimeout(700);
+    }
+  }
+
+  if (errors.length) {
+    failures.push(
+      `The panel logged ${errors.length} console error(s):\n` +
+        errors.map((error) => `    ${error}`).join("\n"),
+    );
+  }
+  await context.close();
+
+  if (failures.length) {
+    console.error("\nSTORE SHOTS FAILED:");
+    for (const failure of failures) console.error(`  - ${failure}`);
+    return false;
+  }
+  console.log(`\nStore panel shots in ${targetDir}`);
+  return true;
+}
+
 async function main() {
   fs.mkdirSync(outDir, { recursive: true });
   const browser = await launchReviewBrowser();
+
+  if (storeMode) {
+    const ok = await renderStoreShots(browser, outDir);
+    await browser.close();
+    if (!ok) process.exit(1);
+    return;
+  }
+
   const { context, page, errors } = await openPanel(browser);
 
   const failures = [];

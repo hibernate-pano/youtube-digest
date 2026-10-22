@@ -337,11 +337,14 @@ const PANEL_COPY = {
     costDisclosure:
       "AI calls use your own provider balance. Transcripts are read out of the page, so they cost nothing; only the fallback uses a Supadata credit.",
     aiKeyNotice:
-      "The summary, the translation and the explanations need an AI key. Reading, notes and the vocabulary do not.",
+      "The summary, the translation, the explanations and finding a new word need an AI key. Reading, notes and the words you already saved do not.",
     summaryNeedsKey:
-      "Add an AI key to generate the summary. Reading, notes and the vocabulary work without one.",
+      "Add an AI key to generate the summary. Reading, notes and the words you already saved work without one.",
     aiKeyAdded:
       "AI key added. The summary, the translation and the explanations are available now.",
+    // The title of the dialog that says a feature is waiting for a key.
+    // It names the feature, so the sentence under it can be about the key.
+    aiKeyNeededTitle: "This needs an AI key",
     translationUnavailable: "Translation unavailable.",
     translationFailed: "Translation failed.",
     translationCancelled: "Translation cancelled.",
@@ -361,6 +364,21 @@ const PANEL_COPY = {
     retrying: "Retrying...",
     signIn: "Sign in",
     signInTitle: "Sign in with GitHub to back up your notes",
+    // The sign-out takes the account's notes and words off this device. An
+    // item that never reached the account exists only here, so the sign-out
+    // would delete its last copy. The panel asks before it does that.
+    signOutUnsyncedTitle: "Sign out of this account?",
+    signOutUnsyncedBody:
+      "This device holds {items} that your account has never received. Signing out deletes {them} from this browser for good.",
+    signOutUnsyncedConfirm: "Sign out",
+    signOutUnsyncedCancel: "Stay signed in",
+    signOutUnsyncedNotes: "{count} notes",
+    signOutUnsyncedNotesOne: "{count} note",
+    signOutUnsyncedWords: "{count} words",
+    signOutUnsyncedWordsOne: "{count} word",
+    signOutUnsyncedJoin: " and ",
+    signOutUnsyncedIt: "it",
+    signOutUnsyncedThem: "them",
     settings: "Settings",
     openSettingsTitle: "Open YouTube Digest settings",
     contentLanguage: "Content language",
@@ -390,6 +408,7 @@ const PANEL_COPY = {
     nextMatch: "Next transcript match",
     searchNoMatches: "No matches",
     searchMatchCount: "{index} of {total}",
+    searchMatchCapped: "Match {index} of {shown} shown ({total} found)",
     digestReady: "Digest ready",
     explainTitle: "Explain",
     close: "Close",
@@ -625,10 +644,12 @@ const PANEL_COPY = {
     costDisclosure:
       "AI 调用使用你自己的服务额度。字幕直接从页面里读，不花钱；只有兜底那一次会消耗 1 个 Supadata 额度。",
     aiKeyNotice:
-      "摘要、翻译和讲解需要 AI 密钥。阅读、笔记和词汇本不需要。",
+      "摘要、翻译、讲解和从字幕里找生词需要 AI 密钥。阅读、笔记和你已经存下的生词不需要。",
     summaryNeedsKey:
-      "填入 AI 密钥后可以生成摘要。阅读、笔记和词汇本不需要密钥。",
+      "填入 AI 密钥后可以生成摘要。阅读、笔记和你已经存下的生词不需要密钥。",
     aiKeyAdded: "AI 密钥已添加。摘要、翻译和讲解现在可以用了。",
+    // 这个弹窗的标题：它在说某个功能在等一个密钥，标题负责说清是哪个。
+    aiKeyNeededTitle: "这个功能需要 AI 密钥",
     translationUnavailable: "翻译不可用。",
     translationFailed: "翻译失败。",
     translationCancelled: "翻译已取消。",
@@ -647,6 +668,18 @@ const PANEL_COPY = {
     retrying: "重试中...",
     signIn: "登录",
     signInTitle: "使用 GitHub 登录以备份你的笔记",
+    signOutUnsyncedTitle: "要退出这个账号吗？",
+    signOutUnsyncedBody:
+      "这台设备上有 {items} 还没有到达你的账号。退出登录会把它们从浏览器中永久删除。",
+    signOutUnsyncedConfirm: "退出登录",
+    signOutUnsyncedCancel: "保持登录",
+    signOutUnsyncedNotes: "{count} 条笔记",
+    signOutUnsyncedNotesOne: "{count} 条笔记",
+    signOutUnsyncedWords: "{count} 个单词",
+    signOutUnsyncedWordsOne: "{count} 个单词",
+    signOutUnsyncedJoin: "和",
+    signOutUnsyncedIt: "它",
+    signOutUnsyncedThem: "它们",
     settings: "设置",
     openSettingsTitle: "打开 YouTube Digest 设置",
     contentLanguage: "内容语言",
@@ -676,6 +709,7 @@ const PANEL_COPY = {
     nextMatch: "下一个字幕匹配",
     searchNoMatches: "没有匹配",
     searchMatchCount: "第 {index} 个，共 {total} 个",
+    searchMatchCapped: "第 {index} 个匹配，已显示 {shown} 个，共找到 {total} 个",
     digestReady: "摘要已就绪",
     explainTitle: "解释",
     close: "关闭",
@@ -919,12 +953,36 @@ function panelFailureMessage(result) {
     });
   }
 
+  // A code the panel has no sentence for is still a code: it is not shown
+  // as it is, and the sentence the worker sent is not shown either. The
+  // worker writes in its own language, and the panel is the layer that
+  // speaks the user's.
+  if (code && /^[A-Z][A-Z0-9_]*$/.test(code)) return panelCopy("errorMessage");
+
+  // There is no code to go by, so the provider's own words are the only
+  // thing that can explain the failure.
   const message = String(result?.message || "").trim();
   if (message) return message;
   const error = String(result?.error || "").trim();
   if (error && !/^[A-Z][A-Z0-9_]*$/.test(error)) return error;
-  if (code && /^[A-Z][A-Z0-9_]*$/.test(code)) return panelCopy("errorMessage");
   return code || panelCopy("errorMessage");
+}
+
+/**
+ * Tells whether a failure is the missing provider key.
+ *
+ * A missing key is not a failed call. It is a feature that is waiting for
+ * the settings, and the panel has to say that: a user who is told the
+ * extraction failed goes looking for a broken sentence, while the sentence
+ * was fine and the key was missing.
+ *
+ * @param {object} result - the answer the worker gave.
+ * @returns {boolean} true when the key is what is missing.
+ */
+function isMissingAiKey(result) {
+  const code =
+    String(result?.code || "").trim() || String(result?.error || "").trim();
+  return code === "NO_AI_KEY";
 }
 
 /**
@@ -1222,10 +1280,47 @@ function makeBackgroundInert(modal) {
 }
 
 // --- Transcript search state ---
-// Matches point to visible marks in the active transcript language mode.
+// A match points at a place in a row, not at a mark in the page: the row
+// may not be on the screen, and the mark is only drawn when the row is.
 // Search navigation only scrolls the panel. It does not seek the video.
 let transcriptSearchMatches = [];
 let transcriptSearchIndex = -1;
+// The mark the reader is on, so the old one can be let go of.
+let transcriptCurrentMark = null;
+// The query the matches belong to, and whether they are still true.
+let transcriptSearchQuery = "";
+let transcriptSearchScanned = false;
+// How many matches there really are, which can be more than are drawn.
+let transcriptSearchTotal = 0;
+/**
+ * How many matches are drawn at once.
+ *
+ * A search for "the" in a three hour talk finds fifteen thousand of them.
+ * Fifteen thousand marks are fifteen thousand pieces of the page, and the
+ * panel that draws them is the panel the reader cannot use. The count says
+ * how many there really are, so the cap does not lie about the answer.
+ */
+const TRANSCRIPT_SEARCH_MATCH_LIMIT = 500;
+// The wait before the transcript is searched. The reader types a word, and
+// the transcript is searched once the typing has settled.
+const TRANSCRIPT_SEARCH_DELAY_MS = 160;
+let transcriptSearchTimer = null;
+
+/**
+ * How much work the panel has done on the transcript.
+ *
+ * The numbers are the panel's own, and they are what says whether the
+ * transcript is still cheap to use: how many times the transcript was
+ * searched, how many rows the search read, and how many times the list of
+ * rows was built for the caret. A panel that reads every row on every
+ * key press has the numbers to prove it.
+ */
+const transcriptWork = {
+  searchScans: 0,
+  rowsSearched: 0,
+  rowListBuilds: 0,
+  rowsListed: 0,
+};
 
 /**
  * Prevent a stopped service worker or dead message channel from leaving the
@@ -1526,6 +1621,311 @@ function groupTranscriptEntries(entries, limits = TRANSCRIPT_SEGMENT_LIMITS) {
 }
 
 // ============================================================
+// WINDOWED LISTS
+// ============================================================
+
+/**
+ * A long list is drawn a window at a time.
+ *
+ * The transcript of a three hour talk has thousands of rows, and the word
+ * notebook can have hundreds of cards. Building every one of them costs
+ * seconds, and the reader only ever looks at a few dozen. So the panel
+ * keeps the rows and draws the window: the rows are the truth, the DOM
+ * holds the part of them that is on the screen, and the cost of drawing
+ * the list does not grow with the number of rows.
+ *
+ * The rows are not the same height - a caption of three words and a caption
+ * of thirty are not the same size - so a row that has been drawn is
+ * measured, and a row that has not been drawn yet is assumed to be the size
+ * of an average one. The assumption is wrong, but only for the rows that
+ * have never been on the screen, and it is corrected as soon as they are.
+ */
+const WINDOWED_LIST_ROW_HEIGHT = 68;
+const WINDOWED_LIST_ROWS_ON_SCREEN = 90;
+const WINDOWED_LIST_OVERSCAN = 12;
+/**
+ * The most rows a list may hold at once.
+ *
+ * A selection that reaches further than this cannot be drawn, because the
+ * two ends of it would not be on the screen at the same time.
+ */
+const WINDOWED_LIST_MAX_ROWS = 270;
+// The height of the reading area, used when the browser cannot say how tall
+// it is: a hidden tab, or a test.
+const WINDOWED_LIST_VIEWPORT_HEIGHT = 720;
+
+/**
+ * The state of a list that is drawn a window at a time.
+ *
+ * @param {Object} options - what the list needs to draw itself.
+ * @param {string} options.listId - the id of the list element.
+ * @param {Function} options.buildRow - builds the row the reader sees.
+ * @param {Function} [options.isVisible] - whether the list is on the screen.
+ * @returns {Object} the state of the list.
+ */
+function createWindowedList({ listId, buildRow, isVisible }) {
+  return {
+    listId,
+    buildRow,
+    isVisible: isVisible || (() => true),
+    rowHeight: WINDOWED_LIST_ROW_HEIGHT,
+    rowsOnScreen: WINDOWED_LIST_ROWS_ON_SCREEN,
+    overscan: WINDOWED_LIST_OVERSCAN,
+    rows: [],
+    heights: [],
+    offsets: [0],
+    elements: [],
+    start: 0,
+    end: 0,
+    version: 0,
+    // The rows that have to be on the screen whatever the reader is looking
+    // at. The selection uses it: both ends of a selection have to be drawn
+    // for the range between them to exist.
+    pinStart: -1,
+    pinEnd: -1,
+    onRender: null,
+  };
+}
+
+/**
+ * The height of one row, measured when it has been drawn.
+ */
+function windowedListRowHeight(state, index) {
+  return state.heights[index] || state.rowHeight;
+}
+
+/**
+ * The place every row starts at, in the list's own coordinates.
+ */
+function windowedListMeasure(state) {
+  const offsets = new Array(state.rows.length + 1);
+  offsets[0] = 0;
+  for (let index = 0; index < state.rows.length; index += 1) {
+    offsets[index + 1] = offsets[index] + windowedListRowHeight(state, index);
+  }
+  state.offsets = offsets;
+  return offsets;
+}
+
+/**
+ * The row that is at a place in the list.
+ */
+function windowedListRowAt(state, place) {
+  let low = 0;
+  let high = state.rows.length - 1;
+  let found = 0;
+  while (low <= high) {
+    const middle = (low + high) >> 1;
+    if (state.offsets[middle] <= place) {
+      found = middle;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return found;
+}
+
+/**
+ * The part of the list the reader can see.
+ *
+ * The list sits inside the reading area, so the place the reader is looking
+ * at is the reading area's scroll offset, less the place the list starts.
+ */
+function windowedListVisibleBand(state) {
+  const list = document.getElementById(state.listId);
+  const area = document.getElementById("contentArea");
+  const scrollTop = area?.scrollTop || 0;
+  const viewportHeight = area?.clientHeight || 0;
+  const rect = list?.getBoundingClientRect?.();
+  if (!list || !viewportHeight || !rect || !rect.height) {
+    return { top: scrollTop, bottom: scrollTop + WINDOWED_LIST_VIEWPORT_HEIGHT };
+  }
+  const areaRect = area.getBoundingClientRect();
+  const listTop = rect.top - areaRect.top + scrollTop;
+  return {
+    top: scrollTop - listTop,
+    bottom: scrollTop - listTop + viewportHeight,
+  };
+}
+
+/**
+ * Where the list starts inside the reading area.
+ */
+function windowedListListTop(state) {
+  const list = document.getElementById(state.listId);
+  const area = document.getElementById("contentArea");
+  if (!list || !area) return 0;
+  const rect = list.getBoundingClientRect?.();
+  const areaRect = area.getBoundingClientRect?.();
+  if (!rect || !areaRect || !rect.height) return 0;
+  return rect.top - areaRect.top + (area.scrollTop || 0);
+}
+
+/**
+ * Measures the rows that are on the screen.
+ *
+ * A row that has never been drawn has no size yet, so it keeps the average
+ * one. A row that has been drawn is measured, and the list is measured
+ * again, so the scroll bar tells the truth.
+ */
+function measureWindowedListRows(state) {
+  let changed = false;
+  for (let index = state.start; index < state.end; index += 1) {
+    const element = state.elements[index];
+    if (!element) continue;
+    const height = element.offsetHeight || 0;
+    if (height > 0 && state.heights[index] !== height) {
+      state.heights[index] = height;
+      changed = true;
+    }
+  }
+  if (changed) windowedListMeasure(state);
+}
+
+/**
+ * The rows that are drawn now.
+ */
+function windowedListRange(state) {
+  const band = windowedListVisibleBand(state);
+  let start = Math.max(
+    0,
+    windowedListRowAt(state, band.top) - state.overscan,
+  );
+  let end = Math.min(
+    state.rows.length,
+    windowedListRowAt(state, band.bottom) + state.overscan + 1,
+  );
+
+  // The pinned rows have to be on the screen whatever the reader is
+  // looking at.
+  const pinStart = Math.min(state.pinStart, state.pinEnd);
+  const pinEnd = Math.max(state.pinStart, state.pinEnd);
+  if (pinStart >= 0) {
+    start = Math.min(start, pinStart);
+    end = Math.max(end, pinEnd + 1);
+  }
+
+  if (end - start > state.rowsOnScreen) end = start + state.rowsOnScreen;
+  if (end - start > WINDOWED_LIST_MAX_ROWS) {
+    // The pinned rows are further apart than a list may hold. The window
+    // follows the reader and the pin is let go.
+    end = start + WINDOWED_LIST_MAX_ROWS;
+    state.pinStart = -1;
+    state.pinEnd = -1;
+  }
+  if (end <= start) end = Math.min(state.rows.length, start + 1);
+  return { start, end };
+}
+
+/**
+ * Draws the rows of the list that the reader is looking at.
+ */
+function drawWindowedList(state, start, end) {
+  const list = document.getElementById(state.listId);
+  if (!list) return;
+
+  // The row the list starts at is the anchor: if the rows that are drawn
+  // turn out to be taller than they were assumed to be, the text under the
+  // reader's eyes would move, and the anchor is what puts it back.
+  const anchor = state.start;
+  const anchorBefore = state.offsets[anchor] || 0;
+
+  list.innerHTML = "";
+  const elements = new Array(state.rows.length).fill(null);
+
+  const top = document.createElement("li");
+  top.className = "list-spacer";
+  top.setAttribute("aria-hidden", "true");
+  top.style.height = `${Math.max(0, state.offsets[start] || 0)}px`;
+  list.appendChild(top);
+
+  for (let index = start; index < end; index += 1) {
+    const element = state.buildRow(state.rows[index], index);
+    if (!element) continue;
+    elements[index] = element;
+    list.appendChild(element);
+  }
+
+  const bottom = document.createElement("li");
+  bottom.className = "list-spacer";
+  bottom.setAttribute("aria-hidden", "true");
+  const total = state.offsets[state.rows.length] || 0;
+  bottom.style.height = `${Math.max(0, total - (state.offsets[end] || 0))}px`;
+  list.appendChild(bottom);
+
+  state.start = start;
+  state.end = end;
+  state.elements = elements;
+  state.version += 1;
+
+  measureWindowedListRows(state);
+  windowedListMeasure(state);
+
+  const anchorAfter = state.offsets[anchor] || 0;
+  const drift = anchorAfter - anchorBefore;
+  if (drift) {
+    const area = document.getElementById("contentArea");
+    if (area) area.scrollTop += drift;
+  }
+
+  state.onRender?.(state);
+}
+
+/**
+ * Draws the part of the list the reader is looking at.
+ */
+function renderWindowedList(state, { force = false } = {}) {
+  const list = document.getElementById(state.listId);
+  if (!list) return;
+
+  if (!state.rows.length) {
+    list.innerHTML = "";
+    state.start = 0;
+    state.end = 0;
+    state.elements = [];
+    state.version += 1;
+    return;
+  }
+
+  const { start, end } = windowedListRange(state);
+  if (!force && start === state.start && end === state.end) {
+    measureWindowedListRows(state);
+    return;
+  }
+  drawWindowedList(state, start, end);
+}
+
+/**
+ * Gives the list its rows and draws the first window.
+ */
+function setWindowedListRows(state, rows) {
+  state.rows = rows;
+  state.heights = new Array(rows.length).fill(0);
+  state.elements = new Array(rows.length).fill(null);
+  state.start = 0;
+  state.end = 0;
+  state.pinStart = -1;
+  state.pinEnd = -1;
+  windowedListMeasure(state);
+  renderWindowedList(state, { force: true });
+}
+
+/**
+ * Brings a row onto the screen, drawing the window around it.
+ */
+function revealWindowedListRow(state, index) {
+  const area = document.getElementById("contentArea");
+  if (!area || index < 0 || index >= state.rows.length) return false;
+  const listTop = windowedListListTop(state);
+  const rowTop = state.offsets[index] || 0;
+  const viewport = area.clientHeight || WINDOWED_LIST_VIEWPORT_HEIGHT;
+  area.scrollTop = Math.max(0, listTop + rowTop - viewport / 3);
+  renderWindowedList(state, { force: true });
+  return index >= state.start && index < state.end;
+}
+
+// ============================================================
 // INITIALIZATION
 // ============================================================
 
@@ -1549,6 +1949,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 async function loadPanelContent() {
   awaitingApiKey = false;
   await refreshGithubSyncStatus();
+  // The index of the cached digests is built once, for an installation
+  // whose cache was written before the index existed. Every later question
+  // about the cache is answered from the index instead of from the digests.
+  await ensureDigestCacheIndex();
   // The panel paints from what is on this device. The pull from the
   // account is the network, and the network is not allowed to hold up the
   // paint: the panel used to wait for a download of every note in the
@@ -1937,6 +2341,12 @@ chrome.tabs.onActivated.addListener(async ({ tabId, windowId }) => {
 });
 
 function setupEventListeners() {
+  // The long lists are drawn a window at a time, so the window has to
+  // follow the reader.
+  document
+    .getElementById("contentArea")
+    ?.addEventListener("scroll", onWindowedListScroll, { passive: true });
+
   // Tab switching
   document.querySelectorAll(".tab").forEach((tab) => {
     tab.addEventListener("click", () => switchTab(tab.dataset.tab));
@@ -2064,9 +2474,11 @@ function setupEventListeners() {
       await refreshGithubSyncStatus();
       return;
     }
-    await chrome.runtime.sendMessage({ action: "logoutGithub" });
-    await refreshGithubSyncStatus();
-    loadNotes(notesFilterShowAll ? null : currentVideoId);
+    // The sign-out takes the account's notes, words and queued deletes off
+    // this device. An item that never reached the account exists only here,
+    // so the sign-out would delete its last copy without a word. The user
+    // is asked first, and the answer decides what happens.
+    await signOutGithubAccount();
   });
 
   // Transcript actions
@@ -2312,6 +2724,9 @@ function onVideoChanged(videoId) {
   // left can never be applied to the one on screen.
   videoTicket += 1;
   currentAnalysis = null;
+  // The budget belonged to the video the user just left. The new video
+  // starts with an empty one, so its first translation is asked for.
+  translationBudgetLedger.clear();
   // A new video on screen is the live one, not a saved copy.
   showingCachedVideo = false;
   renderCachedViewNote();
@@ -2509,6 +2924,9 @@ function pruneTranslationCachesForVideo(videoId) {
   for (const key of [...interfaceTranslationCache.keys()]) {
     if (!key.startsWith(prefix)) interfaceTranslationCache.delete(key);
   }
+  for (const key of [...translationPaidText]) {
+    if (!key.startsWith(prefix)) translationPaidText.delete(key);
+  }
 }
 
 function getInterfaceTranslation(surface, id, text) {
@@ -2585,6 +3003,7 @@ async function translateInterfaceSegments(surface, segments, rerender) {
   if (currentTranscriptMode === "original" || !segments.length) return;
   const generation = translationGeneration;
   const videoId = currentVideoId;
+  const mode = currentTranscriptMode;
   const missing = segments
     .filter((segment) => segment.text)
     .map((segment) => ({
@@ -2614,6 +3033,31 @@ async function translateInterfaceSegments(surface, segments, rerender) {
   missing.forEach((segment) => interfaceTranslationInFlight.add(segment.cacheKey));
   setTranslatingSpinner(true);
   try {
+    // The batch is paid for out of the budget the user agreed to. A
+    // summary that lands after the question costs more calls than the
+    // question named, so the difference goes to the user before it is
+    // spent. Text the panel already paid for is not a new purchase: a
+    // "Retry" the user presses is the same text again.
+    const fresh = missing.filter(
+      (segment) => !translationPaidText.has(segment.cacheKey),
+    );
+    const calls = fresh.length
+      ? Math.ceil(missing.length / TRANSLATION_BATCH_SIZE)
+      : 0;
+    const allowed = await spendTranslationCalls(
+      calls,
+      translationBudgetKey(videoId, mode),
+    );
+    if (!allowed) {
+      // The user said no. The text stays untranslated and the deny list
+      // offers the button that asks again.
+      missing.forEach((segment) =>
+        interfaceTranslationFailures.add(segment.cacheKey),
+      );
+      rerender();
+      return;
+    }
+    missing.forEach((segment) => translationPaidText.add(segment.cacheKey));
     for (
       let start = 0;
       start < missing.length;
@@ -3060,29 +3504,104 @@ function collectBlockTextNodes(container) {
  *
  * A row has one block of text in the original language and two in the
  * bilingual mode, so a block is the smallest piece of text the caret can
- * stand in. The blocks are read every time the caret moves, because the
- * transcript is redrawn whenever the language changes.
+ * stand in.
+ *
+ * The list is a view of the transcript and not a copy of it: a row the
+ * caret has not reached yet is not built. The transcript is built once per
+ * render and kept until the transcript is drawn again, because the caret
+ * moves on every key press, and walking every row of a long transcript on
+ * every key press is what made the transcript slow to read with the
+ * keyboard. The blocks keep the element they live in rather than the text
+ * nodes inside it, so the list stays true even when a search mark or the
+ * caret itself splits a text node.
  */
+let transcriptRowsCache = null;
+let transcriptRowsCacheVersion = -1;
+
+/**
+ * The element that holds one block of a row.
+ */
+function transcriptBlockElement(rowElement, blockIndex) {
+  if (!rowElement) return null;
+  const containers = rowElement.querySelectorAll(
+    ".transcript-text, .transcript-original, .transcript-translation",
+  );
+  return containers[blockIndex] || null;
+}
+
+/**
+ * The text nodes of a block, read when they are needed.
+ */
+function blockTextNodes(block) {
+  if (!block?.element) return [];
+  return collectBlockTextNodes(block.element);
+}
+
+/**
+ * Builds the list of rows the caret walks.
+ *
+ * @returns {Object} the list.
+ */
+function createTranscriptRowList() {
+  const entries = new Map();
+  return {
+    get length() {
+      return transcriptWindow.rows.length;
+    },
+    /**
+     * The row at a place in the transcript, built when it is first asked
+     * for.
+     */
+    at(index) {
+      const known = entries.get(index);
+      if (known) return known;
+      const model = transcriptWindow.rows[index];
+      if (!model) return null;
+      const element = transcriptWindow.elements[index] || null;
+      const entry = {
+        model,
+        row: element,
+        blocks: transcriptRowBlocks(model).map((block, blockIndex) => ({
+          element: transcriptBlockElement(element, blockIndex),
+          text: block.text,
+        })),
+      };
+      entries.set(index, entry);
+      transcriptWork.rowsListed += 1;
+      return entry;
+    },
+    /**
+     * The place of a row that is on the screen.
+     */
+    placeOf(element) {
+      return transcriptWindow.elements.indexOf(element);
+    },
+  };
+}
+
+/**
+ * Forgets the list of rows the caret walks.
+ *
+ * The rows are read from the page, so a row that is drawn again, or a row
+ * whose text is replaced, makes the list old.
+ */
+function invalidateTranscriptRowList() {
+  transcriptRowsCache = null;
+  transcriptRowsCacheVersion = -1;
+}
+
 function collectTranscriptRows() {
-  const list = document.getElementById("transcriptList");
-  if (!list) return [];
-  const rows = [];
-  list.querySelectorAll(".transcript-entry").forEach((row) => {
-    const blocks = [];
-    row
-      .querySelectorAll(
-        ".transcript-text, .transcript-original, .transcript-translation",
-      )
-      .forEach((container) => {
-        const nodes = collectBlockTextNodes(container);
-        if (!nodes.length) return;
-        blocks.push({
-          nodes,
-          text: nodes.map((node) => node.nodeValue).join(""),
-        });
-      });
-    if (blocks.length) rows.push({ row, blocks });
-  });
+  if (
+    transcriptRowsCache &&
+    transcriptRowsCacheVersion === transcriptWindow.version
+  ) {
+    return transcriptRowsCache;
+  }
+
+  const rows = createTranscriptRowList();
+  transcriptRowsCache = rows;
+  transcriptRowsCacheVersion = transcriptWindow.version;
+  transcriptWork.rowListBuilds += 1;
   return rows;
 }
 
@@ -3090,7 +3609,7 @@ function collectTranscriptRows() {
  * The block at a place in the transcript, or null when there is none.
  */
 function transcriptBlockAt(rows, row, column) {
-  const entry = rows[row];
+  const entry = rows.at(row);
   if (!entry) return null;
   return entry.blocks[Math.min(column, entry.blocks.length - 1)] || null;
 }
@@ -3101,7 +3620,8 @@ function transcriptBlockAt(rows, row, column) {
 function nextTranscriptRow(rows, row, step) {
   let index = row + step;
   while (index >= 0 && index < rows.length) {
-    if (rows[index].blocks.length) return index;
+    const entry = rows.at(index);
+    if (entry?.blocks.length) return index;
     index += step;
   }
   return null;
@@ -3110,7 +3630,9 @@ function nextTranscriptRow(rows, row, step) {
 /**
  * The place inside a block that an offset names.
  */
-function locateTextOffset(nodes, offset) {
+function locateTextOffset(block, offset) {
+  const nodes = blockTextNodes(block);
+  if (!nodes.length) return null;
   let remaining = Math.max(0, offset);
   for (const node of nodes) {
     const length = node.nodeValue.length;
@@ -3130,7 +3652,7 @@ function locateTextOffset(nodes, offset) {
  * of a sentence lands in the middle of the next one.
  */
 function moveTranscriptCaret(rows, position, key) {
-  const entry = rows[position.row];
+  const entry = rows.at(position.row);
   if (!entry) return position;
   const block = entry.blocks[position.column] || entry.blocks[0];
   if (!block) return position;
@@ -3162,7 +3684,7 @@ function moveTranscriptCaret(rows, position, key) {
     }
     const previousRow = nextTranscriptRow(rows, position.row, -1);
     if (previousRow === null) return position;
-    const previousEntry = rows[previousRow];
+    const previousEntry = rows.at(previousRow);
     const lastColumn = previousEntry.blocks.length - 1;
     return {
       row: previousRow,
@@ -3178,7 +3700,7 @@ function moveTranscriptCaret(rows, position, key) {
     const step = key === "ArrowDown" ? 1 : -1;
     const row = nextTranscriptRow(rows, position.row, step);
     if (row === null) return position;
-    const target = rows[row];
+    const target = rows.at(row);
     const column = Math.min(position.column, target.blocks.length - 1);
     const targetBlock = target.blocks[column];
     return {
@@ -3198,8 +3720,9 @@ function transcriptRangeBetween(rows, start, end) {
   const startBlock = transcriptBlockAt(rows, start.row, start.column);
   const endBlock = transcriptBlockAt(rows, end.row, end.column);
   if (!startBlock || !endBlock) return null;
-  const startPoint = locateTextOffset(startBlock.nodes, start.offset);
-  const endPoint = locateTextOffset(endBlock.nodes, end.offset);
+  const startPoint = locateTextOffset(startBlock, start.offset);
+  const endPoint = locateTextOffset(endBlock, end.offset);
+  if (!startPoint || !endPoint) return null;
   const range = document.createRange();
   range.setStart(startPoint.node, startPoint.offset);
   range.setEnd(endPoint.node, endPoint.offset);
@@ -3224,7 +3747,7 @@ function compareTranscriptPositions(a, b) {
  */
 function clampTranscriptPosition(rows, position) {
   const row = Math.max(0, Math.min(position.row, rows.length - 1));
-  const entry = rows[row];
+  const entry = rows.at(row);
   const column = Math.max(
     0,
     Math.min(position.column, entry.blocks.length - 1),
@@ -3237,49 +3760,179 @@ function clampTranscriptPosition(rows, position) {
   };
 }
 
+/**
+ * The transcript list, drawn a window at a time.
+ */
+const transcriptWindow = createWindowedList({
+  listId: "transcriptList",
+  buildRow: buildTranscriptRow,
+  isVisible: () => transcriptTabIsActive(),
+});
+
+// The row the playback is at. The list is drawn a window at a time, so the
+// row is remembered by its place and not by its element.
+let transcriptActiveRowIndex = -1;
+
+/**
+ * Watches the rows that are on the screen for the translation.
+ *
+ * A row that is drawn later is watched too: the reader scrolls, and the
+ * words that come into view are the ones that are worth translating.
+ */
+function observeTranscriptRows() {
+  if (!transcriptScrollObserver) return;
+  transcriptWindow.elements.forEach((row) => {
+    if (!row) return;
+    if (row.classList.contains("translated")) return;
+    if (row.dataset.observed === "true") return;
+    row.dataset.observed = "true";
+    transcriptScrollObserver.observe(row);
+  });
+}
+
+transcriptWindow.onRender = () => {
+  // A row that was not on the screen had no mark in it, so the marks are
+  // drawn again whenever the window moves.
+  applyTranscriptSearchMarks();
+  observeTranscriptRows();
+  restoreActiveTranscriptHighlight();
+};
+
+/**
+ * One row of the transcript.
+ *
+ * The row knows what it says in both languages, so the search can read a
+ * row that is not on the screen, and so a row that is drawn again says the
+ * same thing as the row it replaces.
+ */
+function transcriptRowModel(segment, index, mode) {
+  const translated =
+    mode === "original"
+      ? ""
+      : transcriptParagraphCache.get(transcriptTranslationCacheKey(segment)) ||
+        "";
+  const model = {
+    id: segment.id,
+    index,
+    start: Number(segment.start) || 0,
+    text: segment.text || "",
+    translation: translated,
+    error: "",
+    mode,
+  };
+  transcriptRowBlocks(model);
+  return model;
+}
+
+/**
+ * The blocks of text a row holds.
+ *
+ * A row has one block of text in the original language and two in the
+ * bilingual mode, so a block is the smallest piece of text the reader can
+ * be looking for and the caret can stand in.
+ *
+ * The blocks are read once and kept: the search reads every row of a long
+ * transcript, and reading the text of a row again for every word the
+ * reader types is what made the search slow.
+ */
+function transcriptRowBlocks(model) {
+  if (model.blocks) return model.blocks;
+  const blocks =
+    model.mode === "original"
+      ? [{ text: transcriptVisibleText(model.text) }]
+      : model.mode === "zh"
+        ? [{ text: transcriptVisibleText(model.translation) }]
+        : [
+            { text: transcriptVisibleText(model.text) },
+            { text: transcriptVisibleText(model.translation) },
+          ];
+  model.blocks = blocks;
+  return blocks;
+}
+
+/**
+ * The text of a row as the reader sees it.
+ *
+ * A row can carry a little markup - a word in italics - and the search
+ * reads the words, not the markup. Otherwise the marks would not sit where
+ * the words are.
+ */
+function transcriptVisibleText(text) {
+  return renderSubtitleInlineMarkup(text)
+    .replace(/<\/?(?:i|em|b|strong|u)>/gi, "")
+    .replace(/<br\s*\/?>/gi, "")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
+/**
+ * Builds the row the reader sees.
+ */
+function buildTranscriptRow(model, index) {
+  const element = document.createElement("li");
+  element.className = "transcript-entry";
+  element.dataset.seconds = String(model.start);
+  element.dataset.rowIndex = String(index);
+  element.dataset.segmentIndex = String(model.index);
+  if (model.id) element.dataset.segmentId = model.id;
+
+  if (model.mode !== "original") {
+    element.classList.add(model.translation ? "translated" : "translating");
+  }
+
+  const timestamp = YTD_SETTINGS.formatTimestamp(model.start);
+
+  // The timestamp is a real button, so a keyboard user can jump to the
+  // moment and a screen reader hears a control instead of loose text.
+  // The look comes from .transcript-time in the stylesheet; an inline
+  // background here used to win over it and kept the pill from showing.
+  const timeButton = `<button class="transcript-time" type="button" aria-label="${escapeHtml(panelCopyFormat("jumpTo", { time: timestamp }))}">${timestamp}</button>`;
+
+  if (model.mode === "original") {
+    element.innerHTML = `${timeButton}<span class="transcript-text">${renderSubtitleInlineMarkup(model.text)}</span>`;
+  } else {
+    element.innerHTML = `${timeButton}${renderTranscriptSegmentContent(
+      { text: model.text },
+      model.mode,
+      model.translation,
+      model.error,
+    )}`;
+  }
+
+  const timeControl = element.querySelector(".transcript-time");
+  timeControl?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    seekTo(model.start);
+  });
+
+  element.addEventListener("click", (event) =>
+    seekFromTranscriptEntryClick(event, model.start),
+  );
+  return element;
+}
+
 function renderTranscript() {
   if (!currentTranscript) return;
 
   const transcriptList = document.getElementById("transcriptList");
-  transcriptList.innerHTML = "";
+  if (!transcriptList) return;
 
   const existingBadge = document.getElementById("transcriptSourceBadge");
   if (existingBadge) existingBadge.remove();
 
   // Group entries using smart sentence-boundary + time-guardrail logic
   const grouped = groupTranscriptEntries(currentTranscript);
-
-  grouped.forEach((group) => {
-    const div = document.createElement("li");
-    div.className = "transcript-entry";
-    div.dataset.seconds = group.start;
-
-    const timestamp = YTD_SETTINGS.formatTimestamp(group.start);
-
-    // The timestamp is a real button, so a keyboard user can jump to the
-    // moment and a screen reader hears a control instead of loose text.
-    // The look comes from .transcript-time in the stylesheet; an inline
-    // background here used to win over it and kept the pill from showing.
-    div.innerHTML = `
-      <button class="transcript-time" type="button" aria-label="${escapeHtml(panelCopyFormat("jumpTo", { time: timestamp }))}">${timestamp}</button>
-      <span class="transcript-text">${renderSubtitleInlineMarkup(group.text)}</span>
-    `;
-
-    // The timestamp always seeks, even while text is selected. The row
-    // itself stays quiet then, so a selection can be explained or copied.
-    const timeButton = div.querySelector(".transcript-time");
-    timeButton.addEventListener("click", (event) => {
-      event.stopPropagation();
-      seekTo(group.start);
-    });
-
-    div.addEventListener("click", (event) =>
-      seekFromTranscriptEntryClick(event, group.start),
-    );
-    transcriptList.appendChild(div);
-  });
+  const rows = grouped.map((group, index) =>
+    transcriptRowModel(group, index, "original"),
+  );
+  setWindowedListRows(transcriptWindow, rows);
 
   // Reapply an active query after a language mode rerenders the transcript.
+  // The words of the transcript have not changed, so the answer to the
+  // search is the one that is already known.
   refreshTranscriptSearch({ preserveIndex: false, scroll: false });
 
   // Start tracking video playback for auto-scroll
@@ -3296,18 +3949,33 @@ function renderTranscript() {
  * text, not as a regular expression command.
  */
 function findLiteralTranscriptMatches(text, query) {
-  const source = String(text || "");
-  const needle = String(query || "").trim();
-  if (!needle) return [];
+  const matcher = compileTranscriptMatcher(query);
+  if (!matcher) return [];
 
-  const escapedNeedle = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const matcher = new RegExp(escapedNeedle, "giu");
+  const source = String(text || "");
   const matches = [];
   for (const match of source.matchAll(matcher)) {
     matches.push({ start: match.index, end: match.index + match[0].length });
   }
 
   return matches;
+}
+
+/**
+ * The matcher for a query.
+ *
+ * The query is compiled once and used for every row, because a transcript
+ * of a long talk has thousands of rows and compiling the same matcher for
+ * every one of them is work the reader waits for.
+ *
+ * @param {string} query - what the reader is looking for.
+ * @returns {RegExp|null} the matcher, or null when the query is empty.
+ */
+function compileTranscriptMatcher(query) {
+  const needle = String(query || "").trim();
+  if (!needle) return null;
+  const escapedNeedle = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(escapedNeedle, "giu");
 }
 
 /**
@@ -3329,40 +3997,149 @@ function clearTranscriptSearchHighlights() {
 }
 
 /**
- * Replaces matching parts of one text node with mark elements. We collect all
- * text nodes before changing the DOM, so each replacement is safe and stable.
+ * Draws one match in one block of a row.
+ *
+ * The match is a place in the text of the block, so the text nodes of the
+ * block are found first and the match is cut out of them. The marks of a
+ * row are drawn from the last one to the first one, because cutting a match
+ * out of a text node splits it, and a match that comes earlier in the same
+ * text node still has to find its place in the part that is left.
+ *
+ * @param {Element} container - the element that holds the block's text.
+ * @param {Object} match - where the match is in the block.
+ * @returns {Element|null} the mark, or null when the text is not there.
  */
-function markTranscriptTextNode(textNode, query) {
-  const ranges = findLiteralTranscriptMatches(textNode.nodeValue, query);
-  if (!ranges.length) return [];
+function markTranscriptBlock(container, match) {
+  const nodes = [];
+  const walker = document.createTreeWalker(
+    container,
+    NodeFilter.SHOW_TEXT,
+    {
+      acceptNode(node) {
+        const parent = node.parentElement;
+        if (!node.nodeValue || parent?.closest("button")) {
+          return NodeFilter.FILTER_REJECT;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      },
+    },
+  );
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  if (!nodes.length) return null;
 
-  const fragment = document.createDocumentFragment();
-  const marks = [];
   let cursor = 0;
-
-  ranges.forEach(({ start, end }) => {
-    if (start > cursor) {
-      fragment.appendChild(
-        document.createTextNode(textNode.nodeValue.slice(cursor, start)),
-      );
+  let start = null;
+  let end = null;
+  for (const node of nodes) {
+    const length = node.nodeValue.length;
+    const nodeStart = cursor;
+    const nodeEnd = cursor + length;
+    if (!start && match.start < nodeEnd) {
+      start = { node, offset: Math.max(0, match.start - nodeStart) };
     }
+    if (match.end <= nodeEnd) {
+      end = { node, offset: Math.max(0, match.end - nodeStart) };
+      break;
+    }
+    cursor = nodeEnd;
+  }
+  if (!start || !end) return null;
 
-    const mark = document.createElement("mark");
-    mark.className = "transcript-search-highlight";
-    mark.textContent = textNode.nodeValue.slice(start, end);
-    fragment.appendChild(mark);
-    marks.push(mark);
-    cursor = end;
+  const range = document.createRange();
+  range.setStart(start.node, start.offset);
+  range.setEnd(end.node, end.offset);
+  const mark = document.createElement("mark");
+  mark.className = "transcript-search-highlight";
+  mark.appendChild(range.extractContents());
+  range.insertNode(mark);
+  return mark;
+}
+
+/**
+ * Draws the matches of the search in the rows that are on the screen.
+ *
+ * Only the rows the reader can see are drawn, because a row that is not on
+ * the screen is not on the page either. A match in a row that is not drawn
+ * is drawn when that row comes on the screen.
+ */
+function applyTranscriptSearchMarks() {
+  clearTranscriptSearchHighlights();
+  transcriptSearchMatches.forEach((match) => {
+    match.mark = null;
+  });
+  if (!transcriptSearchMatches.length) return;
+
+  const byRow = new Map();
+  transcriptSearchMatches.forEach((match, index) => {
+    const list = byRow.get(match.rowIndex) || [];
+    list.push({ ...match, index });
+    byRow.set(match.rowIndex, list);
   });
 
-  if (cursor < textNode.nodeValue.length) {
-    fragment.appendChild(
-      document.createTextNode(textNode.nodeValue.slice(cursor)),
-    );
-  }
+  byRow.forEach((matches, rowIndex) => {
+    const element = transcriptWindow.elements[rowIndex];
+    if (!element) return;
+    // The last match of the row is drawn first: cutting a match out of a
+    // text node splits it, and the matches that come earlier in the same
+    // text node have to find their place in the part that is left.
+    matches
+      .slice()
+      .sort((a, b) => b.start - a.start)
+      .forEach((match) => {
+        const container = transcriptBlockElement(element, match.blockIndex);
+        if (!container) return;
+        const mark = markTranscriptBlock(container, match);
+        if (!mark) return;
+        transcriptSearchMatches[match.index].mark = mark;
+        if (match.index === transcriptSearchIndex) {
+          mark.classList.add("current");
+        }
+      });
+  });
+}
 
-  textNode.parentNode.replaceChild(fragment, textNode);
-  return marks;
+/**
+ * Finds the matches of a query in the transcript.
+ *
+ * The transcript is read from the rows the panel knows about and not from
+ * the page: a row that is not on the screen still has its text, so the
+ * reader is not made to scroll to a word to find out that it is there.
+ *
+ * The number of matches that are kept is capped. A search for "the" in a
+ * three hour talk finds fifteen thousand of them, and fifteen thousand
+ * marks are fifteen thousand pieces of the page. The count says how many
+ * there really are, so the cap is not a lie about the answer.
+ *
+ * @param {string} query - what the reader is looking for.
+ * @returns {{matches: Array, total: number}} the matches that are kept and
+ *   the number of matches that exist.
+ */
+function scanTranscriptForMatches(query) {
+  const matches = [];
+  let total = 0;
+  const matcher = compileTranscriptMatcher(query);
+  if (!matcher) return { matches, total };
+
+  transcriptWork.searchScans += 1;
+  transcriptWork.rowsSearched += transcriptWindow.rows.length;
+
+  transcriptWindow.rows.forEach((model, rowIndex) => {
+    transcriptRowBlocks(model).forEach((block, blockIndex) => {
+      for (const match of block.text.matchAll(matcher)) {
+        total += 1;
+        if (matches.length >= TRANSCRIPT_SEARCH_MATCH_LIMIT) break;
+        matches.push({
+          rowIndex,
+          blockIndex,
+          start: match.index,
+          end: match.index + match[0].length,
+          mark: null,
+        });
+      }
+    });
+  });
+
+  return { matches, total };
 }
 
 /**
@@ -3374,15 +4151,22 @@ function updateTranscriptSearchControls(query) {
   const previous = document.getElementById("transcriptSearchPrevBtn");
   const next = document.getElementById("transcriptSearchNextBtn");
   const hasMatches = transcriptSearchMatches.length > 0;
+  const capped = transcriptSearchTotal > transcriptSearchMatches.length;
 
   if (count) {
     count.textContent = !query
       ? ""
       : hasMatches
-        ? panelCopyFormat("searchMatchCount", {
-            index: String(transcriptSearchIndex + 1),
-            total: String(transcriptSearchMatches.length),
-          })
+        ? capped
+          ? panelCopyFormat("searchMatchCapped", {
+              index: String(transcriptSearchIndex + 1),
+              shown: String(transcriptSearchMatches.length),
+              total: String(transcriptSearchTotal),
+            })
+          : panelCopyFormat("searchMatchCount", {
+              index: String(transcriptSearchIndex + 1),
+              total: String(transcriptSearchMatches.length),
+            })
         : panelCopy("searchNoMatches");
   }
   if (previous) previous.disabled = !hasMatches;
@@ -3394,14 +4178,31 @@ function updateTranscriptSearchControls(query) {
  * following, so playback cannot pull the user away from the result they found.
  */
 function revealCurrentTranscriptSearchMatch({ scroll = true } = {}) {
-  transcriptSearchMatches.forEach((mark) => mark.classList.remove("current"));
+  if (transcriptCurrentMark) {
+    transcriptCurrentMark.classList.remove("current");
+    transcriptCurrentMark.closest?.(".transcript-entry")?.classList.remove(
+      "search-current",
+    );
+    transcriptCurrentMark = null;
+  }
   document
     .querySelectorAll("#transcriptList .transcript-entry.search-current")
     .forEach((row) => row.classList.remove("search-current"));
 
-  const mark = transcriptSearchMatches[transcriptSearchIndex];
-  if (!mark) return;
+  const match = transcriptSearchMatches[transcriptSearchIndex];
+  if (!match) return;
 
+  // The row the match is in may not be on the screen. It is brought there,
+  // and the marks are drawn again, because a row that was not on the screen
+  // had no mark in it.
+  if (!match.mark) {
+    revealWindowedListRow(transcriptWindow, match.rowIndex);
+    applyTranscriptSearchMarks();
+  }
+
+  const mark = match.mark;
+  if (!mark) return;
+  transcriptCurrentMark = mark;
   mark.classList.add("current");
   mark.closest(".transcript-entry")?.classList.add("search-current");
 
@@ -3424,49 +4225,45 @@ function refreshTranscriptSearch({ preserveIndex = false, scroll = true } = {}) 
   const query = String(input?.value || "").trim();
   const previousIndex = transcriptSearchIndex;
 
-  clearTranscriptSearchHighlights();
-  transcriptSearchMatches = [];
-  transcriptSearchIndex = -1;
   if (clearButton) clearButton.hidden = !input?.value;
 
-  if (!query) {
-    updateTranscriptSearchControls(query);
-    return;
+  // The same question does not have to be asked twice. The transcript is
+  // redrawn whenever the language changes and whenever a translation
+  // arrives, and the answer does not change with the redraw: only the
+  // drawing of the marks has to be done again.
+  if (!transcriptSearchScanned || query !== transcriptSearchQuery) {
+    const scanned = scanTranscriptForMatches(query);
+    transcriptSearchMatches = scanned.matches;
+    transcriptSearchTotal = scanned.total;
+    transcriptSearchQuery = query;
+    transcriptSearchScanned = true;
+    transcriptSearchIndex = transcriptSearchMatches.length
+      ? preserveIndex
+        ? Math.min(
+            Math.max(previousIndex, 0),
+            transcriptSearchMatches.length - 1,
+          )
+        : 0
+      : -1;
   }
 
-  document
-    .querySelectorAll("#transcriptList .transcript-entry")
-    .forEach((row) => {
-      const content = row.querySelector(".transcript-text, .transcript-copy");
-      if (!content) return;
-
-      const textNodes = [];
-      const walker = document.createTreeWalker(
-        content,
-        NodeFilter.SHOW_TEXT,
-        {
-          acceptNode(node) {
-            const parent = node.parentElement;
-            if (!node.nodeValue || parent?.closest("button")) {
-              return NodeFilter.FILTER_REJECT;
-            }
-            return NodeFilter.FILTER_ACCEPT;
-          },
-        },
-      );
-      while (walker.nextNode()) textNodes.push(walker.currentNode);
-      textNodes.forEach((node) => {
-        transcriptSearchMatches.push(...markTranscriptTextNode(node, query));
-      });
-    });
+  applyTranscriptSearchMarks();
 
   if (transcriptSearchMatches.length) {
-    transcriptSearchIndex = preserveIndex
-      ? Math.min(Math.max(previousIndex, 0), transcriptSearchMatches.length - 1)
-      : 0;
     revealCurrentTranscriptSearchMatch({ scroll });
   }
   updateTranscriptSearchControls(query);
+}
+
+/**
+ * Forgets the answer to the last search.
+ *
+ * The transcript is redrawn and its text changes when the language changes
+ * and when a translation arrives. The answer to the search has to be asked
+ * again then, because the words have changed.
+ */
+function invalidateTranscriptSearch() {
+  transcriptSearchScanned = false;
 }
 
 /**
@@ -3490,8 +4287,47 @@ function moveTranscriptSearch(direction) {
 function resetTranscriptSearch({ focus = false } = {}) {
   const input = document.getElementById("transcriptSearchInput");
   if (input) input.value = "";
+  cancelTranscriptSearch();
+  invalidateTranscriptSearch();
   refreshTranscriptSearch({ scroll: false });
   if (focus) input?.focus();
+}
+
+/**
+ * Searches the transcript once the typing has settled.
+ *
+ * The transcript of a long talk is thousands of rows, and searching it
+ * takes a moment. Searching it on every key press means searching it
+ * again for the letter the reader has just typed over. The search waits
+ * for the typing to stop.
+ */
+function scheduleTranscriptSearch() {
+  cancelTranscriptSearch();
+  transcriptSearchTimer = setTimeout(() => {
+    transcriptSearchTimer = null;
+    refreshTranscriptSearch();
+  }, TRANSCRIPT_SEARCH_DELAY_MS);
+}
+
+/**
+ * Stops a search that is waiting to happen.
+ */
+function cancelTranscriptSearch() {
+  if (!transcriptSearchTimer) return;
+  clearTimeout(transcriptSearchTimer);
+  transcriptSearchTimer = null;
+}
+
+/**
+ * Searches the transcript now, if a search was waiting.
+ *
+ * The reader asked for the next match, so the matches on screen have to be
+ * the ones of the query the reader just typed.
+ */
+function flushTranscriptSearch() {
+  if (!transcriptSearchTimer) return;
+  cancelTranscriptSearch();
+  refreshTranscriptSearch();
 }
 
 /**
@@ -3504,10 +4340,11 @@ function setupTranscriptSearch() {
   const next = document.getElementById("transcriptSearchNextBtn");
   if (!input) return;
 
-  input.addEventListener("input", () => refreshTranscriptSearch());
+  input.addEventListener("input", () => scheduleTranscriptSearch());
   input.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
       event.preventDefault();
+      flushTranscriptSearch();
       moveTranscriptSearch(event.shiftKey ? -1 : 1);
     } else if (event.key === "Escape" && input.value) {
       event.preventDefault();
@@ -3776,10 +4613,11 @@ async function updateWelcomeCounts() {
 
   if (libraryCount) {
     try {
-      const all = await chrome.storage.local.get(null);
-      const count = Object.keys(all).filter((key) =>
-        key.startsWith("digest_"),
-      ).length;
+      // The index says how many digests are in the store. Reading the store
+      // to count them would read every cached transcript as well, and a
+      // cached transcript of a three hour talk is a megabyte or two.
+      const index = await readDigestCacheIndex();
+      const count = index ? Object.keys(index).length : 0;
       libraryCount.textContent = `(${count})`;
     } catch (error) {
       libraryCount.textContent = "(0)";
@@ -4014,6 +4852,9 @@ function showTranscriptError(result) {
       );
       return;
     case "NO_TRANSCRIPT":
+      // The worker's sentence is not shown: the panel says the reason in
+      // the language the reader reads. Every other code in this function
+      // does the same, and this one used to be the exception.
       showError(
         panelCopy("noTranscriptTitle"),
         panelCopy("noTranscriptMessage"),
@@ -4051,7 +4892,7 @@ function showTranscriptError(result) {
       // the user's.
       showError(
         panelCopy("noTranscriptTitle"),
-        panelCopy(PANEL_ERROR_CODE_COPY[code] || "errorMessage"),
+        panelFailureMessage(result),
         retry,
       );
   }
@@ -4140,6 +4981,9 @@ function switchTab(tabName) {
       if (!contentArea || !transcriptTabIsActive()) return;
       lastAutoScrollTime = Date.now();
       contentArea.scrollTop = lastTranscriptScrollTop;
+      // The list is drawn a window at a time, and the window follows the
+      // place the reader is looking at.
+      renderWindowedList(transcriptWindow);
     });
     startPlaybackTracking();
   } else {
@@ -4155,6 +4999,14 @@ function switchTab(tabName) {
         '.tab-panel[data-panel="notes"].active',
       );
       if (contentArea && notesPanelIsActive) contentArea.scrollTop = 0;
+    });
+  }
+
+  // The word notebook is drawn a window at a time too, and it was not on
+  // the screen a moment ago.
+  if (tabName === "words") {
+    requestAnimationFrame(() => {
+      renderWindowedList(wordsWindow);
     });
   }
 
@@ -4653,7 +5505,8 @@ function setupExplainFeature() {
     const block = transcriptBlockAt(rows, position.row, position.column);
     if (!block) return;
 
-    const point = locateTextOffset(block.nodes, position.offset);
+    const point = locateTextOffset(block, position.offset);
+    if (!point) return;
     const marker = document.createElement("span");
     marker.className = "transcript-caret";
     marker.setAttribute("aria-hidden", "true");
@@ -4675,16 +5528,54 @@ function setupExplainFeature() {
    * @returns {boolean} true when the caret could be placed.
    */
   function applyTranscriptCaret(next, extend) {
-    const rows = collectTranscriptRows();
+    let rows = collectTranscriptRows();
     if (!rows.length) return false;
 
     // The transcript was redrawn under the caret, so the place it pointed
     // at may be gone. The closest place that still exists is used.
-    const position = clampTranscriptPosition(rows, next);
-    const anchor =
+    let position = clampTranscriptPosition(rows, next);
+    let anchor =
       extend && caretAnchor
         ? clampTranscriptPosition(rows, caretAnchor)
         : position;
+
+    // The caret stands in a row, and a row that is not on the screen has no
+    // text to stand in. The window is moved to the row, and the list is
+    // read again, because the rows are new.
+    if (!rows.at(position.row)?.row) {
+      revealWindowedListRow(transcriptWindow, position.row);
+      rows = collectTranscriptRows();
+      position = clampTranscriptPosition(rows, position);
+      anchor =
+        extend && caretAnchor
+          ? clampTranscriptPosition(rows, caretAnchor)
+          : position;
+    }
+    if (!rows.at(position.row)?.row) return false;
+
+    // The window is told to keep both ends of the selection in it, so a
+    // selection that reaches from one row to another can be drawn. A
+    // selection that is not growing has only one end, and the window is
+    // free to follow the caret alone.
+    transcriptWindow.pinStart = extend
+      ? Math.min(anchor.row, position.row)
+      : -1;
+    transcriptWindow.pinEnd = extend
+      ? Math.max(anchor.row, position.row)
+      : -1;
+
+    // The other end of the selection has to be on the screen too. The
+    // window is told to keep both ends in it, so a selection that reaches
+    // from one row to another can be drawn.
+    if (!rows.at(anchor.row)?.row) {
+      revealWindowedListRow(transcriptWindow, anchor.row);
+      rows = collectTranscriptRows();
+      position = clampTranscriptPosition(rows, position);
+      anchor = clampTranscriptPosition(rows, anchor);
+    }
+    if (!rows.at(anchor.row)?.row) {
+      anchor = position;
+    }
 
     const [start, end] =
       compareTranscriptPositions(anchor, position) <= 0
@@ -4718,7 +5609,7 @@ function setupExplainFeature() {
   function transcriptCaretStart(rows, target) {
     const entry = target?.closest?.(".transcript-entry");
     if (entry) {
-      const index = rows.findIndex((candidate) => candidate.row === entry);
+      const index = rows.placeOf(entry);
       if (index >= 0) return { row: index, column: 0, offset: 0 };
     }
     return { row: 0, column: 0, offset: 0 };
@@ -4735,7 +5626,7 @@ function setupExplainFeature() {
     // at may be gone. A caret that no longer has text under it starts
     // again at the top.
     const current =
-      caret && rows[caret.row] ? caret : transcriptCaretStart(rows, target);
+      caret && rows.at(caret.row) ? caret : transcriptCaretStart(rows, target);
     // The selection grows from the place the caret stood before the move.
     // The first Shift therefore selects the character under the caret.
     if (extend && !caretAnchor) caretAnchor = current;
@@ -5041,6 +5932,13 @@ function setupExplainFeature() {
       });
 
       if (!result?.success) {
+        // A missing key is not a failed extraction. The panel knows how to
+        // say that the key is missing, and it says it with the way out.
+        if (isMissingAiKey(result)) {
+          showAiKeyNeededDialog(panelFailureMessage(result), button);
+          tooltip.style.display = "none";
+          return;
+        }
         throw new Error(result?.error || panelCopy("extractWordFailed"));
       }
 
@@ -5060,6 +5958,104 @@ function setupExplainFeature() {
       button.disabled = false;
     }
   });
+}
+
+/**
+ * Says that a feature is waiting for a provider key, and offers the way to
+ * get one.
+ *
+ * The panel already knows how to say this: the summary says the same thing
+ * when the analysis fails for the same reason, with the same "Open Settings"
+ * button. The word extraction failed for the same reason and used to say
+ * "could not read a word from this sentence", which was true and useless:
+ * nothing was wrong with the sentence, the key was missing.
+ *
+ * The dialog is a real dialog: it names itself, takes the focus, keeps the
+ * focus inside, closes on Escape, and gives the focus back to the control
+ * that opened it.
+ *
+ * @param {string} message - the sentence that says what is missing.
+ * @param {Element|null} trigger - the control the focus goes back to.
+ */
+function showAiKeyNeededDialog(message, trigger = null) {
+  const returnFocusTo = trigger || document.activeElement;
+
+  const modal = document.createElement("div");
+  modal.id = "aiKeyNeededModal";
+  modal.className = "explain-modal-overlay";
+
+  const dialog = document.createElement("div");
+  dialog.className = "explain-modal";
+  dialog.setAttribute("role", "dialog");
+  dialog.setAttribute("aria-modal", "true");
+  dialog.setAttribute("aria-labelledby", "ai-key-needed-title");
+  dialog.setAttribute("tabindex", "-1");
+
+  const header = document.createElement("div");
+  header.className = "explain-modal-header";
+  const title = document.createElement("div");
+  title.className = "explain-modal-title";
+  title.id = "ai-key-needed-title";
+  title.textContent = panelCopy("aiKeyNeededTitle");
+  const closeButton = document.createElement("button");
+  closeButton.className = "explain-modal-close";
+  closeButton.type = "button";
+  closeButton.textContent = panelCopy("close");
+  header.append(title, closeButton);
+
+  const content = document.createElement("div");
+  content.className = "explain-modal-content";
+
+  const text = document.createElement("p");
+  text.className = "explain-error";
+  text.textContent = message;
+
+  const actions = document.createElement("div");
+  actions.className = "word-confirm-actions";
+  const settingsButton = document.createElement("button");
+  settingsButton.type = "button";
+  settingsButton.className = "primary-btn";
+  settingsButton.id = "aiKeyNeededSettingsBtn";
+  settingsButton.textContent = panelCopy("openSettings");
+  actions.appendChild(settingsButton);
+  content.append(text, actions);
+
+  dialog.append(header, content);
+  modal.appendChild(dialog);
+  document.body.appendChild(modal);
+
+  // Everything behind the dialog is out of reach while it is open. The
+  // announcers stay live so a state change is still spoken.
+  const releaseBackground = makeBackgroundInert(modal);
+
+  let settled = false;
+  const finish = () => {
+    if (settled) return;
+    settled = true;
+    document.removeEventListener("keydown", onKeydown, true);
+    releaseBackground();
+    modal.remove();
+    if (returnFocusTo && typeof returnFocusTo.focus === "function") {
+      returnFocusTo.focus();
+    }
+  };
+
+  // Escape closes the dialog, and Tab cycles inside it. The listener sits
+  // on the document in the capture phase, so the dialog owns the keyboard
+  // for as long as it is open.
+  const onKeydown = createDialogKeyHandler(dialog, finish);
+  document.addEventListener("keydown", onKeydown, true);
+
+  closeButton.addEventListener("click", finish);
+  settingsButton.addEventListener("click", () => {
+    finish();
+    openOptions();
+  });
+  modal.addEventListener("click", (event) => {
+    if (event.target === modal) finish();
+  });
+
+  dialog.focus();
 }
 
 /**
@@ -5412,6 +6408,174 @@ async function saveToCache(videoId) {
 }
 
 /**
+ * The index of the cached digests.
+ *
+ * The cache used to be counted by reading every digest out of the store and
+ * looking at the keys. A digest of a three hour talk is a megabyte or two,
+ * so counting twenty of them means reading twenty megabytes to learn that
+ * there are twenty. The index answers the same question from a few hundred
+ * bytes: it says which digests are in the store, how old each one is and
+ * how much room it takes.
+ *
+ * The index is written when a digest is saved and pruned when a digest is
+ * dropped, so it stays true. It is also the only way the panel can honour
+ * a byte budget without reading the digests it is measuring.
+ */
+const DIGEST_CACHE_INDEX_KEY = "ytd_digest_cache_index";
+const DIGEST_CACHE_INDEX_VERSION = 1;
+
+/**
+ * How much room the cached digests may take.
+ *
+ * Twenty digests of three hour talks are twenty-two megabytes of store, and
+ * a panel that keeps them is a panel that reads them into memory every
+ * time it counts its library. The cache is kept under ten megabytes - the
+ * size Chrome gives an ordinary extension - and the oldest digest goes
+ * first when it does not fit.
+ */
+const DIGEST_CACHE_MAX_BYTES = 10 * 1024 * 1024;
+
+/**
+ * Reads the index of the cached digests.
+ *
+ * @returns {Promise<Object|null>} the index, or null when there is none yet.
+ */
+async function readDigestCacheIndex() {
+  try {
+    const stored = await chrome.storage.local.get(DIGEST_CACHE_INDEX_KEY);
+    const index = stored?.[DIGEST_CACHE_INDEX_KEY];
+    if (
+      index &&
+      index.version === DIGEST_CACHE_INDEX_VERSION &&
+      index.entries &&
+      typeof index.entries === "object"
+    ) {
+      return index.entries;
+    }
+  } catch (error) {
+    // A missing index is not a failure: it is built again below.
+  }
+  return null;
+}
+
+/**
+ * Writes the index of the cached digests.
+ *
+ * @param {Object} entries - the index, keyed by video id.
+ * @returns {Promise<boolean>} whether the index made it into the store.
+ */
+async function writeDigestCacheIndex(entries) {
+  try {
+    await chrome.storage.local.set({
+      [DIGEST_CACHE_INDEX_KEY]: {
+        version: DIGEST_CACHE_INDEX_VERSION,
+        entries,
+      },
+    });
+    return true;
+  } catch (error) {
+    console.error("[YouTube Digest Panel] Cache index write error:", error);
+    return false;
+  }
+}
+
+/**
+ * Brings the index of the cached digests up to date from the store.
+ *
+ * The library reads every digest anyway, so the index is corrected here
+ * without reading anything twice. The background drops a digest when the
+ * device storage is full, and this is where the panel hears about it.
+ *
+ * @param {Object} all - everything in the local store.
+ */
+async function refreshDigestCacheIndex(all) {
+  const entries = {};
+  Object.keys(all || {})
+    .filter((key) => key.startsWith("digest_"))
+    .forEach((key) => {
+      const digest = all[key] || {};
+      entries[key.slice("digest_".length)] = {
+        key,
+        timestamp: Number(digest.timestamp) || 0,
+        bytes: digestCacheBytes(digest),
+      };
+    });
+  await writeDigestCacheIndex(entries);
+  return entries;
+}
+
+/**
+ * Builds the index from the store.
+ *
+ * This is the one time the whole store is read. It happens for an
+ * installation whose cache was written before the index existed, and the
+ * index it writes is what every later question is answered from.
+ *
+ * @returns {Promise<Object>} the index.
+ */
+async function buildDigestCacheIndex() {
+  let all = {};
+  try {
+    all = await chrome.storage.local.get(null);
+  } catch (error) {
+    console.error("[YouTube Digest Panel] Cache index build error:", error);
+  }
+  return refreshDigestCacheIndex(all);
+}
+
+/**
+ * The index of the cached digests, built when it is not there yet.
+ *
+ * @returns {Promise<Object>} the index.
+ */
+async function ensureDigestCacheIndex() {
+  const index = await readDigestCacheIndex();
+  if (index) return index;
+  return buildDigestCacheIndex();
+}
+
+/**
+ * How much room a digest takes in the store.
+ *
+ * @param {Object} digest - the cached digest.
+ * @returns {number} the size in bytes.
+ */
+function digestCacheBytes(digest) {
+  try {
+    const json = JSON.stringify(digest);
+    if (typeof TextEncoder !== "undefined") {
+      return new TextEncoder().encode(json).length;
+    }
+    return json.length;
+  } catch (error) {
+    return 0;
+  }
+}
+
+/**
+ * Removes cached digests and forgets them in the index.
+ *
+ * @param {string|string[]} keys - the storage keys of the digests.
+ */
+async function removeCachedDigests(keys) {
+  const list = (Array.isArray(keys) ? keys : [keys]).filter(Boolean);
+  if (!list.length) return;
+  await chrome.storage.local.remove(list);
+  const index = await readDigestCacheIndex();
+  if (!index) return;
+  let changed = false;
+  list.forEach((key) => {
+    if (!String(key).startsWith("digest_")) return;
+    const videoId = String(key).slice("digest_".length);
+    if (index[videoId]) {
+      delete index[videoId];
+      changed = true;
+    }
+  });
+  if (changed) await writeDigestCacheIndex(index);
+}
+
+/**
  * Writes a cached digest, making room when the device storage is full.
  *
  * A full storage used to be a silent failure: the write threw, the catch
@@ -5419,6 +6583,9 @@ async function saveToCache(videoId) {
  * cached. The cached digests go first, because they are the only thing in
  * the store that can be fetched again. Half of them are dropped first; if
  * that is not enough, all of them are.
+ *
+ * The index is written after the digest, so the index never names a digest
+ * that is not in the store.
  *
  * @param {string} videoId the video the digest belongs to
  * @param {Object} cacheData the digest to store
@@ -5430,21 +6597,30 @@ async function writeDigestCache(videoId, cacheData) {
 
   try {
     await write();
-    return true;
   } catch (error) {
     if (!isStorageQuotaError(error)) throw error;
+    let written = false;
+    for (const cap of [Math.floor(LIBRARY_MAX_ENTRIES / 2), 0]) {
+      await evictOldCacheEntries(cap);
+      try {
+        await write();
+        written = true;
+        break;
+      } catch (retryError) {
+        if (!isStorageQuotaError(retryError)) throw retryError;
+      }
+    }
+    if (!written) return false;
   }
 
-  for (const cap of [Math.floor(LIBRARY_MAX_ENTRIES / 2), 0]) {
-    await evictOldCacheEntries(cap);
-    try {
-      await write();
-      return true;
-    } catch (error) {
-      if (!isStorageQuotaError(error)) throw error;
-    }
-  }
-  return false;
+  const index = await ensureDigestCacheIndex();
+  index[videoId] = {
+    key,
+    timestamp: Number(cacheData?.timestamp) || Date.now(),
+    bytes: digestCacheBytes(cacheData),
+  };
+  await writeDigestCacheIndex(index);
+  return true;
 }
 
 /**
@@ -5462,7 +6638,13 @@ function isStorageQuotaError(error) {
 
 /**
  * Keeps the cache from growing unbounded.
- * Removes the oldest entries when we exceed maxEntries videos.
+ *
+ * The cache is kept three ways: by age, by the number of videos it holds,
+ * and by the number of bytes it takes. The last one is the one that
+ * matters. A digest of a three hour talk is a megabyte or two, so twenty
+ * of them are twenty-two megabytes of store, and a panel that keeps them
+ * reads them into memory every time it counts its library. The oldest
+ * digest goes first, and the cache is left under its byte budget.
  *
  * The cleanup is recorded, because dropping the user's cached videos
  * without telling them is the one thing the library must never do.
@@ -5471,40 +6653,52 @@ function isStorageQuotaError(error) {
  */
 async function evictOldCacheEntries(maxEntries) {
   try {
-    const allData = await chrome.storage.local.get(null);
-    let digestKeys = Object.keys(allData).filter((k) =>
-      k.startsWith("digest_"),
-    );
+    const index = await ensureDigestCacheIndex();
+    const now = Date.now();
     const THIRTY_DAYS = LIBRARY_MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
-    const expired = digestKeys.filter((key) => {
-      const timestamp = Number(allData[key]?.timestamp) || 0;
-      return Date.now() - timestamp > THIRTY_DAYS;
+
+    const entries = Object.entries(index)
+      .map(([videoId, entry]) => ({
+        videoId,
+        key: entry?.key || `digest_${videoId}`,
+        timestamp: Number(entry?.timestamp) || 0,
+        bytes: Number(entry?.bytes) || 0,
+      }))
+      .sort((a, b) => a.timestamp - b.timestamp);
+
+    const dropped = new Set();
+    const drop = (entry) => dropped.add(entry.videoId);
+    const survivors = () => entries.filter((entry) => !dropped.has(entry.videoId));
+
+    // The ones that are too old.
+    entries.forEach((entry) => {
+      if (!entry.timestamp || now - entry.timestamp > THIRTY_DAYS) drop(entry);
     });
-    let removed = 0;
-    if (expired.length) {
-      await chrome.storage.local.remove(expired);
-      const expiredSet = new Set(expired);
-      digestKeys = digestKeys.filter((key) => !expiredSet.has(key));
-      removed += expired.length;
+
+    // The ones that are too many. The oldest goes first.
+    const kept = survivors();
+    if (kept.length > maxEntries) {
+      kept.slice(0, kept.length - maxEntries).forEach(drop);
     }
 
-    if (digestKeys.length > maxEntries) {
-      // Sort by timestamp (oldest first) and remove excess
-      const sorted = digestKeys
-        .map((k) => ({ key: k, ts: allData[k]?.timestamp || 0 }))
-        .sort((a, b) => a.ts - b.ts);
-
-      const toRemove = sorted
-        .slice(0, sorted.length - maxEntries)
-        .map((e) => e.key);
-      if (toRemove.length > 0) {
-        await chrome.storage.local.remove(toRemove);
-        removed += toRemove.length;
-        debugLog(`[YouTube Digest] Evicted ${toRemove.length} old cache entries`);
-      }
+    // The ones that are too big. The oldest goes first.
+    let bytes = survivors().reduce((sum, entry) => sum + entry.bytes, 0);
+    for (const entry of survivors()) {
+      if (bytes <= DIGEST_CACHE_MAX_BYTES) break;
+      drop(entry);
+      bytes -= entry.bytes;
     }
 
-    if (removed > 0) await recordLibraryCleanup(removed);
+    const doomed = entries.filter((entry) => dropped.has(entry.videoId));
+    if (!doomed.length) return;
+
+    await chrome.storage.local.remove(doomed.map((entry) => entry.key));
+    doomed.forEach((entry) => {
+      delete index[entry.videoId];
+    });
+    await writeDigestCacheIndex(index);
+    debugLog(`[YouTube Digest] Evicted ${doomed.length} old cache entries`);
+    await recordLibraryCleanup(doomed.length);
   } catch (error) {
     console.error("Cache eviction error:", error);
   }
@@ -5526,7 +6720,7 @@ async function loadFromCache(videoId) {
     // Cache expires after 30 days
     const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
     if (Date.now() - cached.timestamp > THIRTY_DAYS) {
-      await chrome.storage.local.remove(`digest_${videoId}`);
+      await removeCachedDigests(`digest_${videoId}`);
       return null;
     }
 
@@ -6264,15 +7458,97 @@ async function loadVocabulary() {
 /**
  * Draws the vocabulary list.
  */
+/**
+ * The word notebook, drawn a window at a time.
+ */
+const wordsWindow = createWindowedList({
+  listId: "wordsList",
+  buildRow: buildWordCard,
+  isVisible: () => wordsTabIsActive(),
+});
+
+/**
+ * Builds the card the reader sees.
+ */
+function buildWordCard(item) {
+  const card = document.createElement("li");
+  card.className = "word-item";
+
+  const statusKey = WORD_STATUS_LABELS[item.status] || "wordStatusLearning";
+  // The title and the time are two different things: the title says which
+  // video, the time is where in it. Kept as one string the time could not
+  // wear the same chip as every other timestamp in the panel.
+  const source = item.videoId
+    ? `<button class="word-source" type="button" data-video-id="${escapeHtml(item.videoId)}" data-seconds="${Number(item.timestampSeconds) || 0}" title="${escapeHtml(item.videoTitle || panelCopy("untitledVideo"))}"><span class="word-source-title">${escapeHtml(item.videoTitle || panelCopy("untitledVideo"))}</span><span class="word-source-sep">·</span><span class="word-timestamp">${escapeHtml(YTD_SETTINGS.formatTimestamp(item.timestampSeconds))}</span></button>`
+    : "";
+
+  card.innerHTML = `
+    <div class="word-header">
+      <span class="word-term">${escapeHtml(item.term)}</span>
+      <span class="word-status word-status--${escapeHtml(item.status || "learning")}">${escapeHtml(panelCopy(statusKey))}</span>
+      <button class="word-delete" type="button" data-id="${escapeHtml(item.id)}" aria-label="${escapeHtml(panelCopy("deleteWord"))}" title="${escapeHtml(panelCopy("deleteWord"))}">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M3 6h18"></path>
+          <path d="M8 6V4h8v2"></path>
+          <path d="m19 6-1 14H6L5 6"></path>
+          <path d="M10 11v5"></path>
+          <path d="M14 11v5"></path>
+        </svg>
+      </button>
+    </div>
+    <div class="word-definition">${escapeHtml(item.translation || "")}</div>
+    ${item.explanation ? `<div class="word-explanation">${escapeHtml(item.explanation)}</div>` : ""}
+    ${item.sentence ? `<div class="word-sentence">${escapeHtml(item.sentence)}</div>` : ""}
+    ${source ? `<div class="word-footer">${source}</div>` : ""}
+  `;
+
+  const sourceButton = card.querySelector(".word-source");
+  sourceButton?.addEventListener("click", () => {
+    const videoId = sourceButton.dataset.videoId;
+    const seconds = Number(sourceButton.dataset.seconds) || 0;
+    openVideoAt(videoId, seconds);
+  });
+
+  const deleteButton = card.querySelector(".word-delete");
+  deleteButton?.addEventListener("click", async () => {
+    deleteButton.disabled = true;
+    const result = await chrome.runtime
+      .sendMessage({
+        action: "deleteVocabulary",
+        vocabId: item.id,
+      })
+      .catch(() => null);
+    if (result?.success) {
+      vocabularyItems = vocabularyItems.filter(
+        (candidate) => candidate.id !== item.id,
+      );
+      renderVocabulary();
+      updateWelcomeCounts();
+      // The word is gone, and that is what has to be said. "Copied" is a
+      // different action, and a screen reader user who hears it has no
+      // way of telling what happened to the word.
+      announceStatus(panelCopy("wordDeleted"));
+    } else {
+      deleteButton.disabled = false;
+      announceAlert(panelCopy("couldNotSave"));
+    }
+  });
+
+  return card;
+}
+
+/**
+ * Draws the vocabulary list.
+ */
 function renderVocabulary() {
   const list = document.getElementById("wordsList");
   if (!list) return;
 
-  list.innerHTML = "";
   renderWordsCount();
   void loadWordsDroppedNotice();
 
   if (!vocabularyItems.length) {
+    setWindowedListRows(wordsWindow, []);
     // Inside a <ul> only a list item is a list item. A <p> there is not an
     // item, and some browsers drop it out of the list altogether.
     const empty = document.createElement("li");
@@ -6282,72 +7558,7 @@ function renderVocabulary() {
     return;
   }
 
-  vocabularyItems.forEach((item) => {
-    const card = document.createElement("li");
-    card.className = "word-item";
-
-    const statusKey = WORD_STATUS_LABELS[item.status] || "wordStatusLearning";
-    // The title and the time are two different things: the title says which
-    // video, the time is where in it. Kept as one string the time could not
-    // wear the same chip as every other timestamp in the panel.
-    const source = item.videoId
-      ? `<button class="word-source" type="button" data-video-id="${escapeHtml(item.videoId)}" data-seconds="${Number(item.timestampSeconds) || 0}" title="${escapeHtml(item.videoTitle || panelCopy("untitledVideo"))}"><span class="word-source-title">${escapeHtml(item.videoTitle || panelCopy("untitledVideo"))}</span><span class="word-source-sep">·</span><span class="word-timestamp">${escapeHtml(YTD_SETTINGS.formatTimestamp(item.timestampSeconds))}</span></button>`
-      : "";
-
-    card.innerHTML = `
-      <div class="word-header">
-        <span class="word-term">${escapeHtml(item.term)}</span>
-        <span class="word-status word-status--${escapeHtml(item.status || "learning")}">${escapeHtml(panelCopy(statusKey))}</span>
-        <button class="word-delete" type="button" data-id="${escapeHtml(item.id)}" aria-label="${escapeHtml(panelCopy("deleteWord"))}" title="${escapeHtml(panelCopy("deleteWord"))}">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M3 6h18"></path>
-            <path d="M8 6V4h8v2"></path>
-            <path d="m19 6-1 14H6L5 6"></path>
-            <path d="M10 11v5"></path>
-            <path d="M14 11v5"></path>
-          </svg>
-        </button>
-      </div>
-      <div class="word-definition">${escapeHtml(item.translation || "")}</div>
-      ${item.explanation ? `<div class="word-explanation">${escapeHtml(item.explanation)}</div>` : ""}
-      ${item.sentence ? `<div class="word-sentence">${escapeHtml(item.sentence)}</div>` : ""}
-      ${source ? `<div class="word-footer">${source}</div>` : ""}
-    `;
-
-    const sourceButton = card.querySelector(".word-source");
-    sourceButton?.addEventListener("click", () => {
-      const videoId = sourceButton.dataset.videoId;
-      const seconds = Number(sourceButton.dataset.seconds) || 0;
-      openVideoAt(videoId, seconds);
-    });
-
-    const deleteButton = card.querySelector(".word-delete");
-    deleteButton?.addEventListener("click", async () => {
-      deleteButton.disabled = true;
-      const result = await chrome.runtime
-        .sendMessage({
-          action: "deleteVocabulary",
-          vocabId: item.id,
-        })
-        .catch(() => null);
-      if (result?.success) {
-        vocabularyItems = vocabularyItems.filter(
-          (candidate) => candidate.id !== item.id,
-        );
-        renderVocabulary();
-        updateWelcomeCounts();
-        // The word is gone, and that is what has to be said. "Copied" is a
-        // different action, and a screen reader user who hears it has no
-        // way of telling what happened to the word.
-        announceStatus(panelCopy("wordDeleted"));
-      } else {
-        deleteButton.disabled = false;
-        announceAlert(panelCopy("couldNotSave"));
-      }
-    });
-
-    list.appendChild(card);
-  });
+  setWindowedListRows(wordsWindow, vocabularyItems.slice());
 }
 
 /**
@@ -6629,6 +7840,10 @@ async function loadLibrary() {
       // would change nothing.
       .filter((entry) => entry.videoId !== currentVideoId)
       .sort((a, b) => b.timestamp - a.timestamp);
+
+    // The library has just read every digest anyway, so the index of the
+    // cache is brought up to date here for nothing.
+    await refreshDigestCacheIndex(all);
   } catch (error) {
     console.error("[YouTube Digest Panel] Load library error:", error);
     libraryEntries = [];
@@ -6953,6 +8168,7 @@ function stopPlaybackTracking() {
     .forEach((el) => {
       el.classList.remove("active-playback");
     });
+  transcriptActiveRowIndex = -1;
 }
 
 /**
@@ -7010,12 +8226,15 @@ async function playbackTrackingTick() {
  * scrolling away (which would re-disable auto-scroll immediately).
  */
 function scrollToActiveEntry() {
-  const activeEntry = document.querySelector(
-    "#transcriptList .transcript-entry.active-playback",
-  );
-  if (!activeEntry) return false;
+  const index = transcriptActiveRowIndex;
+  if (index < 0) return false;
 
   lastAutoScrollTime = Date.now();
+  if (!transcriptWindow.elements[index]) {
+    revealWindowedListRow(transcriptWindow, index);
+  }
+  const activeEntry = transcriptWindow.elements[index];
+  if (!activeEntry) return false;
   activeEntry.scrollIntoView({ behavior: scrollBehavior(), block: "center" });
   return true;
 }
@@ -7030,37 +8249,78 @@ function highlightActiveEntry(currentSeconds) {
   const transcriptList = document.getElementById("transcriptList");
   if (!transcriptList) return;
 
-  const entries = transcriptList.querySelectorAll(".transcript-entry");
-  if (entries.length === 0) return;
+  const rows = transcriptWindow.rows;
+  if (!rows.length) return;
 
-  // Find the entry whose time range contains the current playback time
-  let activeEntry = null;
-  entries.forEach((entry, index) => {
-    const entrySeconds = parseInt(entry.dataset.seconds);
-    const nextEntry = entries[index + 1];
-    const nextSeconds = nextEntry
-      ? parseInt(nextEntry.dataset.seconds)
-      : Infinity;
+  // Find the row whose time range contains the current playback time. The
+  // rows are the truth: a row that is not on the screen is still a row of
+  // the transcript, and the reader is following the video, not the window.
+  const index = transcriptRowIndexAtTime(rows, currentSeconds);
+  if (index < 0) return;
 
-    if (currentSeconds >= entrySeconds && currentSeconds < nextSeconds) {
-      activeEntry = entry;
-    }
-  });
-
+  let activeEntry = transcriptWindow.elements[index];
+  if (!activeEntry) {
+    // The row that is being spoken is not on the screen. The panel pulls
+    // the reader to it only while the reader is following the playback: a
+    // reader who scrolled away is left where they are.
+    if (!autoScrollEnabled) return;
+    lastAutoScrollTime = Date.now();
+    revealWindowedListRow(transcriptWindow, index);
+    activeEntry = transcriptWindow.elements[index];
+  }
   if (!activeEntry) return;
+
+  transcriptActiveRowIndex = index;
 
   // Skip if this entry is already highlighted (no DOM thrashing)
   if (activeEntry.classList.contains("active-playback")) return;
 
   // Remove old highlight, add new one
-  entries.forEach((e) => e.classList.remove("active-playback"));
+  transcriptList
+    .querySelectorAll(".transcript-entry.active-playback")
+    .forEach((entry) => entry.classList.remove("active-playback"));
   activeEntry.classList.add("active-playback");
 
   // Only scroll if auto-scroll is enabled
   if (autoScrollEnabled) {
     lastAutoScrollTime = Date.now();
-    activeEntry.scrollIntoView({ behavior: scrollBehavior(), block: "center" });
+    activeEntry.scrollIntoView?.({ behavior: scrollBehavior(), block: "center" });
   }
+}
+
+/**
+ * Puts the playback highlight back on the row that has it.
+ *
+ * The list is drawn a window at a time, so a row that is drawn again is a
+ * new element, and the mark the reader was following has to be put on it.
+ */
+function restoreActiveTranscriptHighlight() {
+  if (transcriptActiveRowIndex < 0) return;
+  const element = transcriptWindow.elements[transcriptActiveRowIndex];
+  if (!element) return;
+  element.classList.add("active-playback");
+}
+
+/**
+ * The row that is being spoken at a moment.
+ *
+ * The rows are in order, so the row is the last one that starts before the
+ * moment does.
+ */
+function transcriptRowIndexAtTime(rows, seconds) {
+  let low = 0;
+  let high = rows.length - 1;
+  let found = -1;
+  while (low <= high) {
+    const middle = (low + high) >> 1;
+    if (rows[middle].start <= seconds) {
+      found = middle;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return found;
 }
 
 /**
@@ -7080,6 +8340,18 @@ function onContentAreaScroll() {
     autoScrollEnabled = false;
     document.getElementById("followPlaybackBtn").style.display = "block";
   }
+}
+
+/**
+ * Draws the long lists again when the reader scrolls.
+ *
+ * The transcript and the word notebook are drawn a window at a time, so
+ * the window has to follow the reader. The list that is not on the screen
+ * is left alone: its window is drawn when its tab is opened.
+ */
+function onWindowedListScroll() {
+  if (transcriptWindow.isVisible()) renderWindowedList(transcriptWindow);
+  if (wordsWindow.isVisible()) renderWindowedList(wordsWindow);
 }
 
 /**
@@ -7174,6 +8446,10 @@ function transcriptTabIsActive() {
   return resultTabIsActive("transcript");
 }
 
+function wordsTabIsActive() {
+  return resultTabIsActive("words");
+}
+
 function resultTabIsActive(tabName) {
   return Boolean(
     document.querySelector(
@@ -7216,6 +8492,9 @@ function restorePendingTranscriptViewState(videoId) {
     lastTranscriptScrollTop = state.scrollTop;
     document.getElementById("followPlaybackBtn").style.display = "block";
     contentArea.classList.remove("restoring-transcript-view");
+    // The list is drawn a window at a time, and the window follows the
+    // place the reader was last reading.
+    renderWindowedList(transcriptWindow);
     requestAnimationFrame(() => {
       isRestoringTranscriptView = false;
     });
@@ -7281,13 +8560,94 @@ function setTranscriptModeButtons(mode) {
 }
 
 /**
- * The translations the user has already paid for.
+ * What the user agreed to pay for a translation, and what has been spent
+ * against it.
  *
- * The key is the video and the language, so asking twice about the same
- * video would be noise, and the price does not change between two
- * switches of the same video.
+ * The old answer was a yes or a no: "this video in this language was
+ * confirmed". That said nothing about how much was left, so every screen
+ * that came later - a summary that landed after the question, a tab the
+ * user opened, a note that was written - spent out of the same answer
+ * without asking again. The panel stated two calls and made seven.
+ *
+ * The key is the video and the language. The number is a ceiling: the
+ * panel may spend it without a question, and going past it asks again.
  */
-const translationPriceConfirmed = new Set();
+const translationBudgetLedger = new Map();
+
+/**
+ * The text the user has already paid for.
+ *
+ * A batch the provider refused is asked again by the panel itself, or by
+ * the user pressing "Retry". That is the same text, so it is not a new
+ * purchase: the price the user agreed to covers it.
+ */
+const translationPaidText = new Set();
+
+/**
+ * The budget a translation is spent from.
+ *
+ * @param {string} videoId - the video on screen.
+ * @param {string} mode - the language on screen.
+ * @returns {string} the key of the budget.
+ */
+function translationBudgetKey(videoId, mode) {
+  return `${videoId || "none"}:${mode}`;
+}
+
+/**
+ * Spends provider calls out of the budget the user agreed to.
+ *
+ * Every paid batch goes through here. A batch that fits in the budget is
+ * paid for silently. A batch that does not is put to the user again, with
+ * the number of calls that are still missing: saying yes raises the
+ * ceiling to the new total, saying no spends nothing.
+ *
+ * @param {number} calls - how many provider calls the batch takes.
+ * @param {string} key - the budget the calls are spent from.
+ * @returns {Promise<boolean>} true when the batch may go out.
+ */
+async function spendTranslationCalls(
+  calls,
+  key = translationBudgetKey(currentVideoId, currentTranscriptMode),
+) {
+  const wanted = Number(calls);
+  if (!Number.isFinite(wanted) || wanted <= 0) return true;
+  const budget = translationBudgetLedger.get(key) || { confirmed: 0, spent: 0 };
+  if (budget.spent + wanted <= budget.confirmed) {
+    budget.spent += wanted;
+    translationBudgetLedger.set(key, budget);
+    return true;
+  }
+  const missing = budget.spent + wanted - budget.confirmed;
+  const agreed = await confirmTranslationCost(missing);
+  if (!agreed) {
+    translationBudgetLedger.set(key, budget);
+    return false;
+  }
+  budget.confirmed = budget.spent + wanted;
+  budget.spent += wanted;
+  translationBudgetLedger.set(key, budget);
+  return true;
+}
+
+/**
+ * Gives a language a budget when nobody was there to ask for one.
+ *
+ * A switch that was not the user's click - a saved choice being restored -
+ * must not stop at a question nobody can answer. The budget it gets is
+ * the price of the work that is on screen at that moment; work that comes
+ * later still asks.
+ *
+ * @param {string} mode - the language that is on screen.
+ */
+function ensureTranslationBudget(mode) {
+  const key = translationBudgetKey(currentVideoId, mode);
+  if (translationBudgetLedger.has(key)) return;
+  translationBudgetLedger.set(key, {
+    confirmed: translationCallsToPayFor(),
+    spent: 0,
+  });
+}
 
 /**
  * How many provider calls a translation of this video will take.
@@ -7437,6 +8797,176 @@ function confirmTranslationCost(calls) {
 }
 
 /**
+ * Counts the items of the signed-in account that have never reached it.
+ *
+ * A note or a word with no cloud id is one the account has never seen. It
+ * exists only on this device, so a sign-out deletes its last copy. The
+ * settings page asks the same question before it signs out, and the panel
+ * asks it here too: the two surfaces sign the same account out, so they
+ * have to ask the same question.
+ *
+ * @returns {Promise<{notes: number, words: number}>} the items only on this device.
+ */
+async function unsyncedAccountItems() {
+  let githubId = "";
+  try {
+    const stored = await chrome.storage.local.get(
+      YTD_SETTINGS.GITHUB_SESSION_KEY,
+    );
+    githubId = stored?.[YTD_SETTINGS.GITHUB_SESSION_KEY]?.githubId || "";
+  } catch (error) {
+    return { notes: 0, words: 0 };
+  }
+  if (!githubId) return { notes: 0, words: 0 };
+
+  const noteKey = YTD_SETTINGS.notesStorageKey(githubId);
+  const wordKey = YTD_SETTINGS.vocabularyStorageKey(githubId);
+  let stored;
+  try {
+    stored = await chrome.storage.local.get([noteKey, wordKey]);
+  } catch (error) {
+    return { notes: 0, words: 0 };
+  }
+  const unsynced = (key) => {
+    const items = stored[key];
+    if (!Array.isArray(items)) return 0;
+    return items.filter((item) => item && !item.cloudId).length;
+  };
+  return { notes: unsynced(noteKey), words: unsynced(wordKey) };
+}
+
+/**
+ * Asks the user before the sign-out takes the account's items with it.
+ *
+ * Signing out is not only the end of the session: the account's notes and
+ * words leave this device with it. A shared browser is the reason. An item
+ * that never reached the account exists only here, so the sign-out deletes
+ * its last copy, and it cannot be undone. The user is asked first.
+ *
+ * @param {{notes: number, words: number}} unsynced - the items only on this device.
+ * @returns {Promise<boolean>} true when the user wants to sign out.
+ */
+function confirmSignOutWithUnsyncedItems(unsynced) {
+  return new Promise((resolve) => {
+    const parts = [];
+    if (unsynced.notes > 0) {
+      parts.push(
+        panelCopyFormat("signOutUnsyncedNotes", {
+          count: String(unsynced.notes),
+        }),
+      );
+    }
+    if (unsynced.words > 0) {
+      parts.push(
+        panelCopyFormat("signOutUnsyncedWords", {
+          count: String(unsynced.words),
+        }),
+      );
+    }
+    const one = unsynced.notes + unsynced.words === 1;
+
+    const modal = document.createElement("div");
+    modal.id = "signOutUnsyncedModal";
+    modal.className = "explain-modal-overlay";
+
+    const dialog = document.createElement("div");
+    dialog.className = "explain-modal";
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-modal", "true");
+    dialog.setAttribute("aria-labelledby", "sign-out-unsynced-title");
+    dialog.setAttribute("tabindex", "-1");
+
+    const header = document.createElement("div");
+    header.className = "explain-modal-header";
+    const title = document.createElement("div");
+    title.className = "explain-modal-title";
+    title.id = "sign-out-unsynced-title";
+    title.textContent = panelCopy("signOutUnsyncedTitle");
+    const closeButton = document.createElement("button");
+    closeButton.className = "explain-modal-close";
+    closeButton.type = "button";
+    closeButton.textContent = panelCopy("close");
+    header.append(title, closeButton);
+
+    const content = document.createElement("div");
+    content.className = "explain-modal-content";
+
+    const body = document.createElement("p");
+    body.className = "word-cost";
+    body.textContent = panelCopyFormat("signOutUnsyncedBody", {
+      items: parts.join(panelCopy("signOutUnsyncedJoin")),
+      them: one ? panelCopy("signOutUnsyncedIt") : panelCopy("signOutUnsyncedThem"),
+    });
+    content.appendChild(body);
+
+    const actions = document.createElement("div");
+    actions.className = "word-confirm-actions";
+    const cancelButton = document.createElement("button");
+    cancelButton.type = "button";
+    cancelButton.className = "enhance-btn";
+    cancelButton.id = "signOutUnsyncedCancelBtn";
+    cancelButton.textContent = panelCopy("signOutUnsyncedCancel");
+    const confirmButton = document.createElement("button");
+    confirmButton.type = "button";
+    confirmButton.className = "primary-btn";
+    confirmButton.id = "signOutUnsyncedConfirmBtn";
+    confirmButton.textContent = panelCopy("signOutUnsyncedConfirm");
+    actions.append(cancelButton, confirmButton);
+    content.appendChild(actions);
+
+    dialog.append(header, content);
+    modal.appendChild(dialog);
+    document.body.appendChild(modal);
+
+    const releaseBackground = makeBackgroundInert(modal);
+
+    let settled = false;
+    const finish = (answer) => {
+      if (settled) return;
+      settled = true;
+      document.removeEventListener("keydown", onKeydown, true);
+      releaseBackground();
+      modal.remove();
+      resolve(answer);
+    };
+
+    const onKeydown = createDialogKeyHandler(dialog, () => finish(false));
+    document.addEventListener("keydown", onKeydown, true);
+
+    closeButton.addEventListener("click", () => finish(false));
+    cancelButton.addEventListener("click", () => finish(false));
+    confirmButton.addEventListener("click", () => finish(true));
+    modal.addEventListener("click", (event) => {
+      if (event.target === modal) finish(false);
+    });
+
+    dialog.focus();
+  });
+}
+
+/**
+ * Signs the account out, after asking about the items that only exist here.
+ *
+ * The sign-out sends the account's notes, words and queued deletes off this
+ * device. An item that never reached the account is only here, so the
+ * sign-out would delete its last copy. The question is asked first, and the
+ * answer decides what happens.
+ *
+ * @returns {Promise<boolean>} whether the account was signed out.
+ */
+async function signOutGithubAccount() {
+  const unsynced = await unsyncedAccountItems();
+  if (unsynced.notes + unsynced.words > 0) {
+    const agreed = await confirmSignOutWithUnsyncedItems(unsynced);
+    if (!agreed) return false;
+  }
+  await chrome.runtime.sendMessage({ action: "logoutGithub" });
+  await refreshGithubSyncStatus();
+  loadNotes(notesFilterShowAll ? null : currentVideoId);
+  return true;
+}
+
+/**
  * Asks the user what a language switch costs, and switches if they agree.
  *
  * This is the path the user's click takes. Switching to Chinese or to the
@@ -7452,8 +8982,8 @@ async function requestDisplayLanguageModeChange(mode) {
   if (mode === currentTranscriptMode) return;
 
   if (mode !== "original") {
-    const confirmedKey = `${currentVideoId}:${mode}`;
-    if (!translationPriceConfirmed.has(confirmedKey)) {
+    const budgetKey = translationBudgetKey(currentVideoId, mode);
+    if (!translationBudgetLedger.has(budgetKey)) {
       const calls = translationCallsToPayFor();
       if (calls > 0) {
         const agreed = await confirmTranslationCost(calls);
@@ -7464,7 +8994,9 @@ async function requestDisplayLanguageModeChange(mode) {
           return;
         }
       }
-      translationPriceConfirmed.add(confirmedKey);
+      // The number the user agreed to is the ceiling for this video and
+      // this language. Everything that goes past it asks again.
+      translationBudgetLedger.set(budgetKey, { confirmed: calls, spent: 0 });
     }
   }
 
@@ -7486,7 +9018,17 @@ async function handleDisplayLanguageModeChange(mode) {
   if (!DISPLAY_LANGUAGE_MODES.has(mode)) return;
   if (mode === currentTranscriptMode) return;
 
+  const previousMode = currentTranscriptMode;
   currentTranscriptMode = mode;
+  // The budget belongs to the video and to the language that is on screen.
+  // The language that just went away keeps no budget, so switching back to
+  // it asks the user again instead of spending the old promise.
+  translationBudgetLedger.delete(
+    translationBudgetKey(currentVideoId, previousMode),
+  );
+  // A switch that was not the user's click still needs a budget, or the
+  // gate would stop work the user already agreed to.
+  ensureTranslationBudget(mode);
   // Invalidate the in-flight translations BEFORE the first await. The old
   // order let a response for the previous mode land after the await and be
   // accepted as if it belonged to the new one.
@@ -7548,48 +9090,21 @@ function renderTranscriptSegmentContent(segment, mode, translated, error) {
 function renderTranscriptModeRows(segments, mode) {
   const transcriptList = document.getElementById("transcriptList");
   if (!transcriptList) return [];
-  transcriptList.innerHTML = "";
 
   const existingBadge = document.getElementById("transcriptSourceBadge");
   if (existingBadge) existingBadge.remove();
 
-  const rows = [];
-  segments.forEach((segment, index) => {
-    const div = document.createElement("div");
-    const cached = transcriptParagraphCache.get(
-      transcriptTranslationCacheKey(segment),
-    );
-    div.className = `transcript-entry ${cached ? "translated" : "translating"}`;
-    div.dataset.seconds = segment.start;
-    div.dataset.segmentId = segment.id;
-    div.dataset.segmentIndex = index;
-
-    const timestamp = YTD_SETTINGS.formatTimestamp(segment.start);
-
-    // The timestamp is a real button here too, so a translated transcript
-    // is no less reachable with the keyboard than the original one.
-    div.innerHTML = `
-      <button class="transcript-time" type="button" aria-label="${escapeHtml(panelCopyFormat("jumpTo", { time: timestamp }))}">${timestamp}</button>
-      ${renderTranscriptSegmentContent(segment, mode, cached, "")}
-    `;
-    const timeButton = div.querySelector(".transcript-time");
-    timeButton.addEventListener("click", (event) => {
-      event.stopPropagation();
-      seekTo(segment.start);
-    });
-
-    div.addEventListener("click", (event) =>
-      seekFromTranscriptEntryClick(event, segment.start),
-    );
-    transcriptList.appendChild(div);
-    rows.push(div);
-  });
+  const rows = segments.map((segment, index) =>
+    transcriptRowModel(segment, index, mode),
+  );
+  setWindowedListRows(transcriptWindow, rows);
+  invalidateTranscriptSearch();
 
   // Bilingual mode can find source text before each translation arrives.
   refreshTranscriptSearch({ preserveIndex: false, scroll: false });
 
   startPlaybackTracking();
-  return rows;
+  return transcriptWindow.elements.filter(Boolean);
 }
 
 /**
@@ -7618,10 +9133,8 @@ function alignTranslatedSegmentBatch(sourceSegments, responseSegments) {
 
 function updateTranslatedRow(segment, index, alignedItem, generation) {
   if (generation !== translationGeneration) return;
-  const row = document.querySelector(
-    `.transcript-entry[data-segment-id="${CSS.escape(segment.id)}"]`,
-  );
-  if (!row) return;
+  const model = transcriptWindow.rows[index];
+  if (!model || model.id !== segment.id) return;
 
   if (alignedItem.text) {
     transcriptParagraphCache.set(
@@ -7630,33 +9143,47 @@ function updateTranslatedRow(segment, index, alignedItem, generation) {
     );
   }
 
-  const copy = row.querySelector(".transcript-copy");
-  if (copy) {
-    copy.outerHTML = renderTranscriptSegmentContent(
-      segment,
-      currentTranscriptMode,
-      alignedItem.text,
-      alignedItem.error,
-    );
-  }
-  row.classList.toggle("translated", !!alignedItem.text);
-  row.classList.toggle("translating", false);
-  row.classList.toggle("translation-failed", !alignedItem.text);
+  // The row is told what it says now, whether it is on the screen or not.
+  model.translation = alignedItem.text || "";
+  model.error = alignedItem.error || "";
+  // The words of the row have changed, so the text that was read for the
+  // search and for the caret is read again.
+  model.blocks = null;
+  invalidateTranscriptRowList();
 
-  const retry = row.querySelector(".translation-retry-btn");
-  if (retry) {
-    ["mousedown", "mouseup"].forEach((eventName) => {
-      retry.addEventListener(eventName, (event) => {
+  const row = transcriptWindow.elements[index];
+  if (row) {
+    const copy = row.querySelector(".transcript-copy");
+    if (copy) {
+      copy.outerHTML = renderTranscriptSegmentContent(
+        { text: model.text },
+        currentTranscriptMode,
+        model.translation,
+        model.error,
+      );
+    }
+    row.classList.toggle("translated", !!model.translation);
+    row.classList.toggle("translating", false);
+    row.classList.toggle("translation-failed", !model.translation);
+
+    const retry = row.querySelector(".translation-retry-btn");
+    if (retry) {
+      ["mousedown", "mouseup"].forEach((eventName) => {
+        retry.addEventListener(eventName, (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+        });
+      });
+      retry.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
+        retryTranslationSegment(index, generation);
       });
-    });
-    retry.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      retryTranslationSegment(index, generation);
-    });
+    }
   }
+
+  // The words of the row have changed, so the search has to look again.
+  invalidateTranscriptSearch();
 }
 
 let activeTranslationQueue = null;
@@ -7678,6 +9205,41 @@ async function requestTranscriptTranslationBatch(
     mode !== currentTranscriptMode;
   setTranslatingSpinner(true);
   try {
+    // The batch is paid for out of the budget the user agreed to. Text the
+    // panel already paid for is not a new purchase: a "Retry" the user
+    // presses is the same text again.
+    const fresh = sourceBatch.filter(
+      (segment) =>
+        !translationPaidText.has(
+          transcriptTranslationCacheKey(segment, videoId),
+        ),
+    );
+    const allowed = await spendTranslationCalls(
+      fresh.length ? 1 : 0,
+      translationBudgetKey(videoId, mode),
+    );
+    if (!allowed) {
+      // The user said no. The row says so and keeps the button that asks
+      // again, and nothing is spent.
+      sourceBatch.forEach((segment, batchIndex) => {
+        updateTranslatedRow(
+          segment,
+          indices[batchIndex],
+          {
+            id: segment.id,
+            text: "",
+            error: panelCopy("translationCancelled"),
+          },
+          generation,
+        );
+      });
+      return;
+    }
+    sourceBatch.forEach((segment) =>
+      translationPaidText.add(
+        transcriptTranslationCacheKey(segment, videoId),
+      ),
+    );
     // The payload is built once and never changes between the attempts, so
     // every attempt asks for the very same thing and the cache key of the
     // batch stays correct.
@@ -7751,9 +9313,13 @@ async function requestTranscriptTranslationBatch(
 
 function retryTranslationSegment(index, generation) {
   if (generation !== translationGeneration || !activeTranslationQueue) return;
-  const row = document.querySelector(
-    `.transcript-entry[data-segment-index="${index}"]`,
-  );
+  const model = transcriptWindow.rows[index];
+  if (model) {
+    model.error = "";
+    model.translation = "";
+    model.blocks = null;
+  }
+  const row = transcriptWindow.elements[index];
   if (row) {
     row.classList.add("translating");
     row.classList.remove("translation-failed");
@@ -7763,6 +9329,7 @@ function retryTranslationSegment(index, generation) {
       translation.textContent = panelCopy("retrying");
     }
   }
+  invalidateTranscriptSearch();
   activeTranslationQueue.enqueue(index, true);
 }
 
@@ -7773,6 +9340,11 @@ function retryTranslationSegment(index, generation) {
 async function translateTranscript() {
   const segments = getActiveTranscriptSegments();
   if (!segments.length || currentTranscriptMode === "original") return;
+
+  // A language that was restored from a saved choice was never put to the
+  // user, so it has no budget yet. It gets one for the work that is on
+  // screen; work that comes later still asks.
+  ensureTranslationBudget(currentTranscriptMode);
 
   const generation = translationGeneration;
   const videoId = currentVideoId;
@@ -7836,9 +9408,11 @@ async function translateTranscript() {
     },
   );
 
-  rows.forEach((row, index) => {
+  rows.forEach((row) => {
+    if (!row) return;
+    const segmentIndex = Number(row.dataset.segmentIndex);
     if (!row.classList.contains("translated")) transcriptScrollObserver.observe(row);
-    if (index < TRANSLATION_BATCH_SIZE) enqueue(index);
+    if (segmentIndex < TRANSLATION_BATCH_SIZE) enqueue(segmentIndex);
   });
 }
 
@@ -7935,6 +9509,22 @@ globalThis.__YTD_PANEL_TESTING__ = {
   openLibraryEntry,
   showWordConfirmation,
   displayTimestamp,
+  // The cache and the transcript, so a test can look at what the panel
+  // knows and at what it did.
+  evictOldCacheEntries,
+  readDigestCacheIndex,
+  writeDigestCacheIndex,
+  digestCacheBytes,
+  unsyncedAccountItems,
+  signOutGithubAccount,
+  getTranscriptWork: () => ({ ...transcriptWork }),
+  resetTranscriptWork: () => {
+    transcriptWork.searchScans = 0;
+    transcriptWork.rowsSearched = 0;
+    transcriptWork.rowListBuilds = 0;
+    transcriptWork.rowsListed = 0;
+  },
+  highlightActiveEntry,
   formatTimestamp: (seconds) => YTD_SETTINGS.formatTimestamp(seconds),
   extractVideoId,
   loadNotesDroppedNotice,

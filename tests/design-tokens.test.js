@@ -428,7 +428,7 @@ test("every timestamp in the panel wears the same chip", () => {
   assert.equal(shared.declarations["font-size"], "var(--fs-sm)");
   assert.equal(shared.declarations["border-radius"], "var(--r-pill)");
   assert.equal(shared.declarations.padding, "3px 8px");
-  assert.equal(shared.declarations["min-width"], "66px");
+  assert.equal(shared.declarations["min-width"], "68px");
   assert.equal(shared.declarations["text-align"], "center");
 
   for (const selector of TIMESTAMP_SELECTORS) {

@@ -39,6 +39,18 @@
   list-style: none;
 }
 
+/* A long list is drawn a window at a time, and the space the rows that are
+   not on the screen would take is held by these two. They are not items:
+   they are the room the list keeps for the rows that are not drawn yet, and
+   a screen reader is not told about them. */
+.list-spacer {
+  display: block;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  pointer-events: none;
+}
+
 /* ============================================================
    KEYBOARD FOCUS — page-level safety net
    ============================================================ */
@@ -692,10 +704,13 @@ body {
   cursor: pointer;
   border-radius: var(--r-pill);
   padding: 3px 8px;
-  /* Wide enough for "1:30:00" - seven monospace characters - and the same
-     width for every stamp, so the stamps of one video stay in a straight
-     column instead of stepping in and out with the length of each one. */
-  min-width: 66px;
+  /* Wide enough for "1:30:00" - seven monospace characters, which measure
+     about 50.6px at this size, plus the padding - and the same width for
+     every stamp, so the stamps of one video stay in a straight column
+     instead of stepping in and out with the length of each one. The width
+     was 66px, which is half a pixel short of seven characters: the long
+     stamp grew and the column stepped by a pixel. */
+  min-width: 68px;
   text-align: center;
   flex-shrink: 0;
   white-space: nowrap;

@@ -322,6 +322,9 @@ test("the transcript search count is said in the panel's language", async () => 
   const input = panel.el("transcriptSearchInput");
   input.value = "caption";
   input.dispatchEvent(new panel.window.Event("input", { bubbles: true }));
+  // The search waits for the typing to settle, so the clock is moved
+  // forward before the count is read.
+  panel.clock.advance(300);
   await flush();
 
   const count = panel.el("transcriptSearchCount").textContent;
@@ -856,6 +859,41 @@ test("the panel keeps the worker's sentence out of every failure", async () => {
     panel.el("errorMessage").textContent,
     /worker wrote/i,
     "an unknown failure shows the sentence the worker sent",
+  );
+});
+
+test("a failure the panel has no sentence for is not the worker's sentence", async () => {
+  const panel = createPanel({ sendMessageImpl: workerRouter() });
+
+  // This is the sentence every other failure screen uses, not only the
+  // transcript one: the words a failed analysis, a failed extraction or a
+  // failed review are shown with are the panel's, in the reader's
+  // language. A code the panel has no sentence for is replaced by the
+  // generic one, and the sentence the worker sent is not shown either.
+  const message = panel.helpers.panelFailureMessage({
+    error: "A_CODE_WE_DO_NOT_KNOW",
+    message: "A sentence the worker wrote in its own language.",
+  });
+  assert.doesNotMatch(
+    message,
+    /worker wrote/i,
+    "the sentence the worker sent is shown",
+  );
+  assert.ok(
+    message.trim().length > 10,
+    "there is no sentence of the panel's own",
+  );
+
+  // A failure with no code at all is the provider's own words, and they
+  // are the only thing that can explain it: there is nothing to translate
+  // them from.
+  const provider = panel.helpers.panelFailureMessage({
+    message: "The provider said something the panel cannot translate.",
+  });
+  assert.match(
+    provider,
+    /cannot translate/,
+    "the provider's own words are lost",
   );
 });
 
@@ -2074,5 +2112,200 @@ test("the price the user agrees to covers the summary and the notes too", async 
     spent <= stated,
     `the panel asked for ${stated} calls and made ${spent}: the price it ` +
       `named did not cover the screens it then translated`,
+  );
+});
+
+/**
+ * The number of provider calls the price question names.
+ */
+function statedCalls(modal) {
+  return Number((modal.textContent.match(/at least\s+(\d+)\s+times?/i) || [])[1]);
+}
+
+test("a summary that lands after the price was agreed to asks again", async () => {
+  // The price the user agreed to was the price of what was on screen at
+  // that moment: the transcript and the notes. The summary landed after
+  // the question, and reading it took more calls than the number the
+  // panel had stated - without a second question.
+  const requests = [];
+  const router = workerRouter({
+    getNotes: {
+      success: true,
+      notes: [
+        { id: "n1", text: "a note", timestampSeconds: 30, timestampedUrl: "u" },
+      ],
+    },
+    analyzeTranscript: async () => ({
+      success: true,
+      analysis: {
+        summary: "A summary the reader will want in Chinese.",
+        chapters: [
+          { title: "A chapter", summary: "A chapter summary", timestampSeconds: 1 },
+          { title: "Another chapter", summary: "Another summary", timestampSeconds: 2 },
+        ],
+        keyQuotes: [
+          { quote: "A quote", timestampSeconds: 3 },
+          { quote: "Another quote", timestampSeconds: 4 },
+        ],
+      },
+    }),
+    translateContent: async (message) => {
+      requests.push(message);
+      return { success: true, translatedContent: { segments: [] } };
+    },
+  });
+  const panel = createPanel({ sendMessageImpl: router });
+  await waitForBoot(panel);
+  await panel.helpers.startDigest(
+    "videoA",
+    "https://www.youtube.com/watch?v=videoA",
+  );
+  await flush();
+
+  // The user picks Chinese and reads the number the panel is asking for.
+  await panel.click(panel.el("contentLanguageChinese"));
+  const first = panel.el("translationCostModal");
+  assert.ok(first, "the switch started paying without asking");
+  const agreed = statedCalls(first);
+  assert.ok(
+    agreed > 0,
+    `the question states no number of calls: ${first.textContent}`,
+  );
+  await panel.click(panel.el("translationCostConfirmBtn"));
+  await flush();
+  assert.ok(
+    requests.length <= agreed,
+    `the panel spent ${requests.length} calls for a price of ${agreed}`,
+  );
+
+  // The summary lands AFTER the user agreed to the price.
+  await panel.helpers.triggerAnalysis();
+  await flush();
+
+  // The user reads their own summary.
+  await panel.helpers.switchTab("overview");
+  await flush();
+
+  const second = panel.el("translationCostModal");
+  assert.ok(
+    second,
+    "the panel spent more than the user agreed to without asking again",
+  );
+  const extra = statedCalls(second);
+  assert.ok(
+    extra > 0,
+    `the second question states no number of calls: ${second.textContent}`,
+  );
+
+  // Nothing was spent while the question was on screen.
+  const spentBefore = requests.length;
+  assert.ok(
+    spentBefore <= agreed,
+    `the panel spent ${spentBefore} calls for a price of ${agreed}`,
+  );
+
+  // The user says no to the extra calls.
+  await panel.click(panel.el("translationCostCancelBtn"));
+  await flush();
+  assert.equal(
+    requests.length,
+    spentBefore,
+    "the summary was paid for even though the user refused",
+  );
+
+  // The notes were in the first price, so they still translate - and they
+  // do not push the panel past the number the user agreed to.
+  await panel.helpers.switchTab("notes");
+  await flush();
+  assert.ok(
+    requests.length <= agreed,
+    `the panel spent ${requests.length} calls for a price of ${agreed}`,
+  );
+});
+
+test("a word extraction without a provider key says the key is missing", async () => {
+  // The worker answers "NO_AI_KEY" when there is no key. The panel turned
+  // that into "no words could be read from this sentence", so a user
+  // without a key went looking for a broken sentence while the sentence
+  // was fine and the key was missing.
+  const router = workerRouter({
+    extractVocabulary: {
+      success: false,
+      error: "NO_AI_KEY",
+      provider: "OpenAI",
+    },
+  });
+  const panel = createPanel({ sendMessageImpl: router });
+  await waitForBoot(panel);
+  await panel.helpers.startDigest(
+    "videoA",
+    "https://www.youtube.com/watch?v=videoA",
+  );
+  await flush();
+
+  // The browser measures a range to place the toolbar. jsdom does not.
+  panel.window.Range.prototype.getBoundingClientRect = () => ({
+    left: 0,
+    top: 0,
+    right: 10,
+    bottom: 10,
+    width: 10,
+    height: 10,
+  });
+
+  // The user selects a sentence in the transcript.
+  const sentence = panel
+    .el("transcriptList")
+    .querySelector(".transcript-text")
+    .firstChild;
+  const range = panel.window.document.createRange();
+  range.setStart(sentence, 0);
+  range.setEnd(sentence, 5);
+  const selection = panel.window.getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
+  panel.window.document.dispatchEvent(
+    new panel.window.MouseEvent("mouseup", { bubbles: true }),
+  );
+  await flush();
+
+  const toolbar = panel.el("explainTooltip");
+  assert.equal(
+    toolbar.style.display,
+    "flex",
+    "the actions on the selection are not on screen",
+  );
+
+  // The user asks for the words of that sentence.
+  await panel.click(toolbar.querySelector(".selection-word-btn"));
+  await flush();
+
+  const modal = panel.el("aiKeyNeededModal");
+  assert.ok(modal, "the panel did not say that the key is missing");
+  assert.doesNotMatch(
+    modal.textContent,
+    /no words could be read/i,
+    "the panel blames the sentence instead of the key",
+  );
+  assert.match(
+    modal.textContent,
+    /key/i,
+    "the panel does not say that a key is what is missing",
+  );
+
+  // The panel offers the way out, the same way the summary does.
+  const settingsButton = modal.querySelector("#aiKeyNeededSettingsBtn");
+  assert.ok(settingsButton, "the panel does not offer the way to add the key");
+  assert.match(
+    settingsButton.textContent,
+    /settings/i,
+    "the button does not say that it opens the settings",
+  );
+
+  await panel.click(settingsButton);
+  await flush();
+  assert.ok(
+    panel.sentMessages.some((message) => message.action === "openOptions"),
+    "the button does not open the settings",
   );
 });
