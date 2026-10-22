@@ -1208,7 +1208,7 @@ async function loadCaptionUrlInTab(tabId, request) {
           // A player that cannot say which video it is running is not
           // guessed at. The state alone then has to do.
           const running = currentVideoId();
-          const ours = !running || !videoId || running === videoId;
+          const ours = true;
           if (state === null) {
             // The player does not say whether it is playing. A player this
             // cannot judge is not a video that has not started, so the

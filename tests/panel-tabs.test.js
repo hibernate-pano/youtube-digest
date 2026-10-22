@@ -557,6 +557,79 @@ test("a word can be deleted", async () => {
   assert.equal(call.vocabId, "vocab_1");
 });
 
+test("the grades wait for the answer", async () => {
+  // A learner who grades a word they have not looked at schedules the
+  // next review from a guess. The card is the only way to see the
+  // answer, so the grades wait for it.
+  const router = workerRouter({
+    getDueReviews: {
+      success: true,
+      reviews: [
+        {
+          review: { dueAt: Date.now() - 1000, intervalDays: 1, ease: 2.5, reps: 1 },
+          vocabulary: {
+            id: "cloud-uuid-1",
+            term: "spaced repetition",
+            translation: "间隔重复",
+          },
+        },
+      ],
+    },
+  });
+  const panel = createPanel({ sendMessageImpl: router });
+
+  await panel.helpers.loadDueReviews();
+
+  assert.equal(
+    panel.el("reviewActions").hidden,
+    true,
+    "the learner can grade a word they cannot see",
+  );
+
+  await panel.helpers.revealReviewAnswer();
+
+  assert.equal(
+    panel.el("reviewActions").hidden,
+    false,
+    "the answer is on screen but there is nowhere to grade it",
+  );
+});
+
+test("the answer can be put away again", async () => {
+  const router = workerRouter({
+    getDueReviews: {
+      success: true,
+      reviews: [
+        {
+          review: { dueAt: Date.now() - 1000, intervalDays: 1, ease: 2.5, reps: 1 },
+          vocabulary: {
+            id: "cloud-uuid-1",
+            term: "spaced repetition",
+            translation: "间隔重复",
+          },
+        },
+      ],
+    },
+  });
+  const panel = createPanel({ sendMessageImpl: router });
+
+  await panel.helpers.loadDueReviews();
+  await panel.helpers.revealReviewAnswer();
+  await panel.helpers.hideReviewAnswer();
+
+  assert.equal(panel.el("reviewTranslation").hidden, true, "the answer is still on screen");
+  assert.equal(
+    panel.el("reviewActions").hidden,
+    true,
+    "a word that cannot be seen can still be graded",
+  );
+  assert.match(
+    panel.el("reviewHint").textContent,
+    /show answer/i,
+    "the card does not say it can be opened again",
+  );
+});
+
 test("the review card offers the four grades the dashboard uses", async () => {
   const router = workerRouter({
     getDueReviews: {

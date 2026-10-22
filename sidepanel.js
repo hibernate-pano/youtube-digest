@@ -1799,7 +1799,10 @@ function setupEventListeners() {
     void loadDueReviews();
   });
   document.getElementById("reviewCard")?.addEventListener("click", () => {
-    revealReviewAnswer();
+    // The card folds and unfolds. The answer can be put away so the
+    // learner can try the word again.
+    if (reviewRevealed) hideReviewAnswer();
+    else revealReviewAnswer();
   });
   document
     .querySelectorAll("#reviewActions .grade-btn")
@@ -2676,18 +2679,13 @@ function renderAnalysisResults(analysis) {
   });
   if (!quotesList.children.length) {
     // The model wrote a summary but no quotes. An empty list under a
-    // heading looks like the panel broke, so it says what happened.
-    const item = document.createElement("div");
-    item.className = "quote-item";
-    item.style.color = "var(--text-muted)";
-    item.style.borderLeftColor = "var(--border)";
-    item.style.cursor = "default";
-    const text = document.createElement("div");
-    text.className = "quote-text";
-    text.style.fontStyle = "normal";
-    text.textContent = panelCopy("quotesNone");
-    item.appendChild(text);
-    quotesList.appendChild(item);
+    // heading looks like the panel broke, so it says what happened. It is
+    // said as a plain line, not as a quote: a quotation mark in front of
+    // "there are no quotes" is a joke nobody asked for.
+    const note = document.createElement("p");
+    note.className = "panel-hint";
+    note.textContent = panelCopy("quotesNone");
+    quotesList.appendChild(note);
   }
 
   if (
@@ -5786,6 +5784,12 @@ function renderReviewCard() {
   }
   card.setAttribute("aria-expanded", "false");
 
+  // The grades are not offered until the answer is on screen. A learner
+  // who grades a word they have not looked at schedules the next review
+  // from a guess, and the guess is what the schedule then believes.
+  const actions = document.getElementById("reviewActions");
+  if (actions) actions.hidden = true;
+
   const progress = document.getElementById("reviewProgress");
   if (progress) {
     progress.textContent = panelCopyFormat("reviewProgress", {
@@ -5808,10 +5812,38 @@ function revealReviewAnswer() {
   if (translation) translation.hidden = false;
   if (explanation) explanation.hidden = false;
   if (hint) {
-    hint.hidden = true;
+    hint.hidden = false;
     hint.textContent = panelCopy("reviewHideAnswer");
   }
   card?.setAttribute("aria-expanded", "true");
+  // Now the learner can say what they remember, the grades appear.
+  const actions = document.getElementById("reviewActions");
+  if (actions) actions.hidden = false;
+}
+
+/**
+ * Puts the answer away again.
+ *
+ * A learner who wants to check themselves a second time needs the card to
+ * go back to the word alone, and the card says it can be folded away. The
+ * grades go with it: a word that is not on screen cannot be graded.
+ */
+function hideReviewAnswer() {
+  if (!reviewRevealed) return;
+  reviewRevealed = false;
+  const translation = document.getElementById("reviewTranslation");
+  const explanation = document.getElementById("reviewExplanation");
+  const hint = document.getElementById("reviewHint");
+  const card = document.getElementById("reviewCard");
+  if (translation) translation.hidden = true;
+  if (explanation) explanation.hidden = true;
+  if (hint) {
+    hint.hidden = false;
+    hint.textContent = panelCopy("reviewShowAnswer");
+  }
+  card?.setAttribute("aria-expanded", "false");
+  const actions = document.getElementById("reviewActions");
+  if (actions) actions.hidden = true;
 }
 
 /**
@@ -6945,6 +6977,7 @@ globalThis.__YTD_PANEL_TESTING__ = {
   toggleNoteStar,
   submitReviewGrade,
   revealReviewAnswer,
+  hideReviewAnswer,
   updateWelcomeCounts,
   updateEmptyStates,
   openLibraryEntry,

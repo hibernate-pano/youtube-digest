@@ -2337,8 +2337,13 @@ body.toast-visible .follow-playback-btn {
 .review-hint {
   font-family: var(--font-sans);
   font-size: var(--fs-xs);
-  color: var(--text-muted);
+  color: var(--accent);
   margin-top: var(--sp-1);
+  /* The whole card is the button, but the reader sees this line. It has
+     to look like the thing to press, not like a caption. */
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
 }
 
 .review-actions {
