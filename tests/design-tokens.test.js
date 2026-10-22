@@ -271,3 +271,203 @@ test("the type scale has no half-pixel steps", () => {
     }
   }
 });
+
+/* ---------- reading the panel's own stylesheet ---------- */
+
+/* A stylesheet cannot be measured in Node, so the rules that carry a
+   number are read as they are written and the number is checked. Each gate
+   below says what the number has to be, so a change that moves the design
+   has to say why in the test as well. */
+const panelCss = read("sidepanel.css");
+
+const parseRules = (source) => {
+  const withoutComments = source.replace(/\/\*[\s\S]*?\*\//g, "");
+  const rules = [];
+  const pattern = /([^{}]+)\{([^{}]*)\}/g;
+  let match;
+  while ((match = pattern.exec(withoutComments))) {
+    const selectors = match[1]
+      .split(",")
+      .map((selector) => selector.trim())
+      .filter(Boolean);
+    const declarations = {};
+    for (const piece of match[2].split(";")) {
+      const colon = piece.indexOf(":");
+      if (colon === -1) continue;
+      declarations[piece.slice(0, colon).trim()] = piece.slice(colon + 1).trim();
+    }
+    rules.push({ selectors, declarations });
+  }
+  return rules;
+};
+
+const panelRules = parseRules(panelCss);
+
+const rulesFor = (selector) =>
+  panelRules.filter((rule) => rule.selectors.includes(selector));
+
+/* The rules that name a selector are read as one, the way the browser
+   reads them: the last declaration of a property is the one that counts. */
+const ruleFor = (selector) => {
+  const rules = rulesFor(selector);
+  assert.ok(rules.length > 0, `sidepanel.css has no rule for ${selector}`);
+  const declarations = {};
+  for (const rule of rules) Object.assign(declarations, rule.declarations);
+  return { selectors: rules.flatMap((rule) => rule.selectors), declarations };
+};
+
+/* A size written as a token is read through the token table, so the gate
+   measures the size the user sees and not the name of it. */
+const sizeIn = (value) => {
+  if (!value) return null;
+  const token = value.match(/^var\((--[a-z0-9-]+)\)$/);
+  const resolved = token ? themes.light[token[1]] : value;
+  const pixels = parseFloat(resolved);
+  return Number.isNaN(pixels) ? null : pixels;
+};
+
+test("a starred note is starred in a colour that can be seen", () => {
+  const star = ruleFor(".note-star--on");
+  const fill = ruleFor(".note-star--on svg");
+
+  assert.equal(
+    star.declarations.color,
+    "var(--star)",
+    "the star is painted in the star colour",
+  );
+  assert.equal(
+    fill.declarations.fill,
+    "currentColor",
+    "the filled star has to be the star colour itself: the pale wash it used " +
+      "measured 1.37:1 against the card, so a starred note and an unstarred " +
+      "one looked the same once the colour was gone",
+  );
+  for (const theme of ["light", "dark"]) {
+    const ratio = on(theme, "--star", "--surface");
+    assert.ok(
+      ratio >= 3,
+      `${theme}: the filled star measures ${ratio.toFixed(2)}:1 against the ` +
+        "card; a state nobody can see is not a state",
+    );
+  }
+});
+
+test("the notes filter is a target a finger can hit", () => {
+  const rule = ruleFor(".notes-filter .enhance-btn");
+  const fontSize = sizeIn(rule.declarations["font-size"]) || 16;
+  const lineHeight =
+    rule.declarations["line-height"] && rule.declarations["line-height"] !== "normal"
+      ? sizeIn(rule.declarations["line-height"])
+      : fontSize * 1.2;
+  const height = Math.max(
+    sizeIn(rule.declarations["min-height"]) || 0,
+    lineHeight +
+      (sizeIn(rule.declarations["padding-top"]) || 0) +
+      (sizeIn(rule.declarations["padding-bottom"]) || 0),
+  );
+  assert.ok(
+    height >= 24,
+    `the notes filter is ${height}px tall; WCAG 2.2 asks for 24px, and the ` +
+      "dashboard solves the same problem with a 44px target",
+  );
+});
+
+test("the price is read before the button that spends it", () => {
+  const gate = ruleFor(".summary-gate");
+  assert.equal(
+    gate.declarations.display,
+    "flex",
+    "the gate is a column, so the price can be put back above the button",
+  );
+  assert.equal(gate.declarations["flex-direction"], "column");
+
+  const cost = ruleFor(".summary-gate-cost");
+  const button = ruleFor(".summary-gate #summaryGenerateBtn");
+  assert.ok(
+    Number(cost.declarations.order) < Number(button.declarations.order),
+    "the price has to be painted above the button that spends it: the user " +
+      "authorises the call before reading what it costs",
+  );
+});
+
+test("the cost note is written with the type scale", () => {
+  const rule = ruleFor(".cost-note");
+  assert.equal(
+    rule.declarations["font-size"],
+    "var(--fs-xs)",
+    "the cost note has to use a token: 10.5px was smaller than the smallest " +
+      "size the design allows",
+  );
+
+  const html = read("sidepanel.html");
+  const note = html.match(/<p[^>]*class="cost-note"[^>]*>/);
+  assert.ok(note, "the panel still says what a call costs");
+  assert.doesNotMatch(
+    note[0],
+    /font-size/,
+    "the cost note must not carry a size of its own",
+  );
+});
+
+const TIMESTAMP_SELECTORS = [
+  ".chapter-timestamp",
+  ".quote-timestamp",
+  ".note-timestamp",
+  ".transcript-time",
+];
+
+test("every timestamp in the panel wears the same chip", () => {
+  const shared = panelRules.find((rule) =>
+    TIMESTAMP_SELECTORS.every((selector) => rule.selectors.includes(selector)),
+  );
+  assert.ok(
+    shared,
+    "the timestamps share one rule, or they drift apart again: a timestamp " +
+      "that looks different in every tab is four ways to read one thing",
+  );
+  assert.equal(shared.declarations["font-size"], "var(--fs-sm)");
+  assert.equal(shared.declarations["border-radius"], "var(--r-pill)");
+  assert.equal(shared.declarations.padding, "3px 8px");
+  assert.equal(shared.declarations["min-width"], "66px");
+  assert.equal(shared.declarations["text-align"], "center");
+
+  for (const selector of TIMESTAMP_SELECTORS) {
+    for (const rule of rulesFor(selector)) {
+      if (rule === shared) continue;
+      for (const property of [
+        "font-size",
+        "border-radius",
+        "padding",
+        "min-width",
+        "text-align",
+        "background",
+      ]) {
+        const value = rule.declarations[property];
+        if (value === undefined) continue;
+        assert.equal(
+          value.replace(/\s*!important$/, ""),
+          shared.declarations[property],
+          `${selector} declares a second ${property} (${value}); one chip, ` +
+            "one design",
+        );
+      }
+    }
+  }
+});
+
+test("the note composer is as big as the note it produces", () => {
+  const input = ruleFor(".quick-note-input");
+  const output = ruleFor(".note-text");
+  const save = ruleFor(".note-save-btn");
+
+  const noteSize = sizeIn(output.declarations["font-size"]);
+  assert.ok(
+    sizeIn(input.declarations["font-size"]) >= noteSize,
+    "the box the note is written in must not be smaller than the note it " +
+      "writes",
+  );
+  assert.ok(
+    sizeIn(save.declarations["font-size"]) >= noteSize,
+    "the button that writes the note must not be smaller than the note",
+  );
+});

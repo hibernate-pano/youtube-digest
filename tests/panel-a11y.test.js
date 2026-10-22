@@ -1591,3 +1591,118 @@ test("a note from the selection toolbar that did not save says why", async () =>
     "the code reached the user",
   );
 });
+
+/* ============================================================
+   D. The panel says the same thing to every reader
+   ============================================================ */
+
+test("the panel's lists are real lists", () => {
+  const harness = createPanelHarness();
+
+  for (const id of [
+    "transcriptList",
+    "notesList",
+    "wordsList",
+    "libraryList",
+    "quotesList",
+    "chapterList",
+  ]) {
+    const list = harness.el(id);
+    assert.ok(list, `${id} is on the page`);
+    assert.equal(
+      list.tagName,
+      "UL",
+      `${id} is a list: a screen reader counts the items and the list ` +
+        "shortcuts move between them, and a div has neither",
+    );
+  }
+});
+
+test("the language switcher is one choice with three answers", () => {
+  const harness = createPanelHarness();
+  const control = harness.el("transcriptModeControl");
+
+  assert.equal(
+    control.getAttribute("role"),
+    "radiogroup",
+    "three languages are one choice with three answers, so they are one " +
+      "radio group and not three switches that happen to sit together",
+  );
+
+  const radios = harness.all(".transcript-mode-btn");
+  assert.equal(radios.length, 3, "the panel offers three languages");
+
+  const names = new Set();
+  for (const radio of radios) {
+    assert.equal(radio.tagName, "INPUT", "the choice is a radio");
+    assert.equal(radio.getAttribute("type"), "radio");
+    assert.ok(radio.getAttribute("id"), "the radio has an id a label can name");
+    names.add(radio.getAttribute("name"));
+    assert.equal(
+      radio.getAttribute("aria-pressed"),
+      null,
+      "a radio says whether it is picked; it does not say that it is pressed",
+    );
+  }
+  assert.equal(
+    names.size,
+    1,
+    "the three radios are one group, so the arrow keys move between them",
+  );
+  assert.ok(
+    radios.some((radio) => radio.hasAttribute("checked")),
+    "one of the radios starts out picked",
+  );
+
+  const labels = harness.all(".transcript-mode-label");
+  assert.equal(labels.length, 3, "every radio has a label to paint");
+  const named = new Set(labels.map((label) => label.getAttribute("for")));
+  for (const radio of radios) {
+    assert.ok(
+      named.has(radio.getAttribute("id")),
+      "every radio is named by the label the user sees",
+    );
+  }
+});
+
+test("the cost note does not take the header's height", () => {
+  const harness = createPanelHarness();
+  const note = harness.el("costNote");
+
+  assert.ok(note, "the panel still says what a call costs");
+  assert.equal(
+    note.closest(".header"),
+    null,
+    "the header is on screen in every tab, and the price belongs with the " +
+      "thing it prices",
+  );
+});
+
+test("a message on the toast also reaches the screen reader", async () => {
+  const harness = await createLoadedHarness();
+
+  harness.helpers.announceStatus("Saved the note.");
+  await harness.flush();
+
+  assert.equal(
+    harness.el("panelToastText").textContent,
+    "Saved the note.",
+    "the message is on screen",
+  );
+  assert.equal(
+    harness.el("panelStatus").textContent,
+    "Saved the note.",
+    "the same words reach the screen reader: the toast is the visible half " +
+      "of a message and the live region is the half that is spoken",
+  );
+
+  harness.helpers.announceAlert("It did not save.");
+  await harness.flush();
+
+  assert.equal(harness.el("panelToastText").textContent, "It did not save.");
+  assert.equal(
+    harness.el("panelAlert").textContent,
+    "It did not save.",
+    "a failure reaches the screen reader too",
+  );
+});

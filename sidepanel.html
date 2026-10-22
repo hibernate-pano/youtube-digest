@@ -91,35 +91,59 @@
           >
             Settings
           </button>
+          <!--
+            The three languages are one choice with three answers, so they
+            are a radio group: a screen reader says which one is picked and
+            how far it is in the list, and the arrow keys move between them.
+            Three toggle buttons said "pressed" instead, which left the
+            user with three switches and no way to tell them apart.
+            The radio carries the state; the label is what is painted.
+          -->
           <div
             class="transcript-mode-control global-language-control"
             id="transcriptModeControl"
-            role="group"
+            role="radiogroup"
             aria-label="Content language"
             data-i18n-aria-label="contentLanguage"
             style="display: none"
           >
-            <button
+            <input
               class="transcript-mode-btn active"
-              type="button"
+              type="radio"
+              name="contentLanguage"
+              id="contentLanguageOriginal"
               data-transcript-mode="original"
-              aria-pressed="true"
+              checked
+            />
+            <label
+              class="transcript-mode-label"
+              for="contentLanguageOriginal"
               data-i18n="modeOriginal"
-            >Original</button>
-            <button
+            >Original</label>
+            <input
               class="transcript-mode-btn"
-              type="button"
+              type="radio"
+              name="contentLanguage"
+              id="contentLanguageChinese"
               data-transcript-mode="zh"
-              aria-pressed="false"
+            />
+            <label
+              class="transcript-mode-label"
+              for="contentLanguageChinese"
               data-i18n="modeChinese"
-            >中文</button>
-            <button
+            >中文</label>
+            <input
               class="transcript-mode-btn"
-              type="button"
+              type="radio"
+              name="contentLanguage"
+              id="contentLanguageBilingual"
               data-transcript-mode="bilingual"
-              aria-pressed="false"
+            />
+            <label
+              class="transcript-mode-label"
+              for="contentLanguageBilingual"
               data-i18n="modeBilingual"
-            >双语</button>
+            >双语</label>
             <span
               class="translation-spinner"
               id="langSpinner"
@@ -128,24 +152,6 @@
           </div>
         </div>
       </div>
-
-      <!-- The user pays for every call with their own key. Say so. -->
-      <p
-        class="cost-note"
-        id="costNote"
-        data-i18n="costDisclosure"
-        style="
-          margin: 6px 0 0;
-          font-family: var(--font-body);
-          font-size: 10.5px;
-          line-height: 1.45;
-          color: var(--text-muted);
-          text-align: right;
-        "
-      >
-        AI calls use your own provider balance. Transcripts are read out of
-        the page, so they cost nothing; only the fallback uses a Supadata credit.
-      </p>
 
       <!--
         The AI features need a key. Reading, notes and the vocabulary do
@@ -358,6 +364,18 @@
                 </button>
               </div>
             </div>
+            <!--
+              The price belongs with the thing it prices. The header is on
+              screen in every tab and it was spending a fifth of the panel
+              on one line of small print, so the note moved down here:
+              this is where the transcript is read, and this is where the
+              free path and the paid fallback meet.
+            -->
+            <p class="cost-note" id="costNote" data-i18n="costDisclosure">
+              AI calls use your own provider balance. Transcripts are read out
+              of the page, so they cost nothing; only the fallback uses a
+              Supadata credit.
+            </p>
             <!-- Search stays inside the Transcript tab and never changes playback. -->
             <div class="transcript-search" role="search">
               <svg
@@ -432,7 +450,7 @@
                 </button>
               </div>
             </div>
-            <div id="transcriptList"></div>
+            <ul class="plain-list" id="transcriptList"></ul>
           </div>
           </div>
         </div>
@@ -499,8 +517,8 @@
           <!-- Key Quotes -->
           <div class="section">
             <div class="section-title" data-i18n="keyQuotes">Key Quotes</div>
-            <div id="quotesList">
-              <div
+            <ul class="plain-list" id="quotesList">
+              <li
                 class="quote-item"
                 style="
                   color: var(--text-muted);
@@ -515,8 +533,8 @@
                 >
                   The quotes come with the summary.
                 </div>
-              </div>
-            </div>
+              </li>
+            </ul>
           </div>
           </div>
         </div>
@@ -572,8 +590,13 @@
                 ></textarea>
                 <div class="notes-composer-actions">
                   <span class="notes-current-time" id="notesCurrentTime"></span>
+                  <!--
+                    The button that writes the note has to be as important
+                    as the note it writes, so it is the panel's filled
+                    button rather than a small grey one.
+                  -->
                   <button
-                    class="enhance-btn"
+                    class="primary-btn note-save-btn"
                     id="quickNoteSaveBtn"
                     type="button"
                     data-i18n="quickNoteSave"
@@ -601,7 +624,7 @@
                 Move your mouse over the video and click Note to save a
                 timestamped note, or press the "n" key while the video is focused.
               </p>
-              <div id="notesList"></div>
+              <ul class="plain-list" id="notesList"></ul>
             </div>
           </div>
         </div>
@@ -687,7 +710,7 @@
             </div>
             <p class="words-warning" id="wordsLimitWarning" hidden></p>
             <p class="words-warning words-dropped" id="wordsDroppedNotice" hidden></p>
-            <div id="wordsList"></div>
+            <ul class="plain-list" id="wordsList"></ul>
           </div>
         </div>
 
@@ -728,7 +751,7 @@
               The library keeps the last 20 videos for 30 days.
             </p>
             <p class="panel-hint library-cleanup" id="libraryCleanup" hidden></p>
-            <div id="libraryList"></div>
+            <ul class="plain-list" id="libraryList"></ul>
           </div>
         </div>
 
