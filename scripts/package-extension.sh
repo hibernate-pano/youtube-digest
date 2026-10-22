@@ -70,6 +70,10 @@ mv -f "$temporary_zip" "$output_zip"
 rmdir "$temporary_dir"
 trap - EXIT
 
+# The ZIP has to be the code that is in the tree right now. A ZIP that is
+# not is a build of something else, and the store would be shown that.
+node "$script_dir/verify-package.js" "$output_zip"
+
 checksum="$(shasum -a 256 "$output_zip" | awk '{print $1}')"
 printf 'Created %s\n' "$output_zip"
 printf 'SHA-256: %s\n' "$checksum"

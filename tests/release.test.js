@@ -70,7 +70,10 @@ test("manifest uses minimized install-time permissions", () => {
   assert.ok(manifest.host_permissions.includes("https://api.minimaxi.com/*"));
   assert.ok(manifest.host_permissions.includes("https://opencode.ai/zen/go/*"));
   assert.equal(Object.hasOwn(manifest, "optional_host_permissions"), false);
-  assert.equal(manifest.version, "1.7.3");
+  // A pinned number is not a gate: it only has to be edited when the
+  // version moves. What matters is that the version is a version, and that
+  // the manifest and the package agree.
+  assert.match(manifest.version, /^\d+\.\d+\.\d+$/);
 });
 
 test("release copy documents current scope without em dashes", () => {
@@ -639,6 +642,30 @@ test("the store screenshots are the size the store accepts", () => {
   }
 });
 
+test("the listing holds exactly the pictures the generator makes", () => {
+  // The listing drifts when the product changes and the pictures do not.
+  // The generator knows what the listing should contain, so the two are
+  // compared: a picture nobody regenerates any more is a picture of a
+  // product that no longer exists, and the store shows it to reviewers.
+  const generator = read("scripts/store-shots.js");
+  const wanted = [...generator.matchAll(/\bout:\s*"([^"]+)"/g)].map(
+    (match) => match[1],
+  );
+  assert.ok(wanted.length > 0, "scripts/store-shots.js lists no screenshots");
+  const storeDir = path.join(root, "store");
+  const present = fs
+    .readdirSync(storeDir)
+    .filter((name) => /^\d\d-.*\.png$/.test(name))
+    .sort();
+  assert.deepEqual(
+    present,
+    wanted.slice().sort(),
+    "store/ and scripts/store-shots.js disagree about the screenshots; " +
+      "run `node scripts/panel-review.js --store` and then " +
+      "`node scripts/store-shots.js`",
+  );
+});
+
 test("every link the product shows a reader points at something that exists", () => {
   // An extension page cannot open a path inside its own package: Chrome
   // serves the page, not the folder, and a link to PRIVACY.md in the
@@ -803,4 +830,59 @@ test("the repository itself holds no credential", () => {
     [],
     `these repository files look like they hold a credential: ${found.join("; ")}`,
   );
+});
+
+test("the READMEs document the version that is shipping", () => {
+  // A version number that nothing writes about is a version number nobody
+  // can check. The release notes have to name the version in the manifest,
+  // so a reader who lands on the repository and the store listing are
+  // talking about the same release.
+  const manifest = JSON.parse(read("manifest.json"));
+  const version = manifest.version.replace(/\./g, "\\.");
+  assert.match(
+    read("README.md"),
+    new RegExp(`^## New in v${version}$`, "m"),
+    `README.md does not have a "New in v${manifest.version}" section`,
+  );
+  assert.match(
+    read("README.zh-CN.md"),
+    new RegExp(`^## v${version} 更新$`, "m"),
+    `README.zh-CN.md does not have a "v${manifest.version} 更新" section`,
+  );
+});
+
+test("a package that is not this code is refused", () => {
+  // The ZIP in dist/ is what the store is shown. A ZIP left over from an
+  // older version of the code looks exactly like a good one until someone
+  // compares it with the tree, so the comparison is the gate, and this
+  // proves the gate can fail.
+  const { execFileSync, spawnSync } = require("node:child_process");
+  const os = require("node:os");
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "ytd-package-"));
+  try {
+    const zip = path.join(scratch, "stale.zip");
+    execFileSync(
+      "zip",
+      ["-X", "-q", zip, "manifest.json", "README.md"],
+      { cwd: root },
+    );
+    const result = spawnSync(
+      process.execPath,
+      [path.join(root, "scripts", "verify-package.js"), zip],
+      { cwd: root, encoding: "utf8" },
+    );
+    assert.notEqual(
+      result.status,
+      0,
+      "a ZIP holding two files was accepted as this release; the gate " +
+        "cannot tell a stale package from a good one",
+    );
+    assert.match(
+      `${result.stdout}${result.stderr}`,
+      /missing|not this code|not this release/,
+      "the gate refused the ZIP without saying what was wrong with it",
+    );
+  } finally {
+    fs.rmSync(scratch, { recursive: true, force: true });
+  }
 });

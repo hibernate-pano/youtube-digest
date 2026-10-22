@@ -8,6 +8,11 @@ config.js
 architecture.excalidraw
 explainer-video/
 
+# The panel pictures the store listing is composited from. They are
+# generated: `node scripts/panel-review.js --store` writes them and
+# `node scripts/store-shots.js` pastes them into the listing.
+.review-store/
+
 # Tooling & agent workspaces
 .agents/
 .augment/
@@ -17,6 +22,10 @@ skills-lock.json
 .playwright-mcp/
 node_modules/
 dist/
+
+# Python bytecode from the mutation scripts
+__pycache__/
+*.pyc
 
 # Server secrets (GitHub OAuth client secret, JWT secret, Neon URL)
 server/.dev.vars
