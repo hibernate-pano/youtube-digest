@@ -397,8 +397,8 @@ MUTATIONS = [
         "file": "background.js",
         "hunks": [
             (
-                """      if (response.status === 401 || response.status === 403) {""",
-                """      if (false) {""",
+                """  if (status === 401 || status === 403) {""",
+                """  if (false) {""",
             )
         ],
         "expect": [
@@ -415,11 +415,15 @@ MUTATIONS = [
             (
                 """    return {
       success: false,
+      // The provider's own words stay in the message: they are for the
+      // console. The panel reads the code.
       error: error.message || "Vocabulary extraction failed",
-      code: error.code,
+      code,
     };""",
                 """    return {
       success: false,
+      // The provider's own words stay in the message: they are for the
+      // console. The panel reads the code.
       error: error.message || "Vocabulary extraction failed",
     };""",
             )
@@ -428,6 +432,40 @@ MUTATIONS = [
             (
                 "background-vocabulary.test.js",
                 "a provider that refuses the key is reported as a missing key",
+            ),
+        ],
+    },
+    {
+        "name": "M17 a failed AI call leaves the worker without a code",
+        "file": "background.js",
+        "hunks": [
+            (
+                """      error: error.message || "Vocabulary extraction failed",
+      code,""",
+                """      error: error.message || "Vocabulary extraction failed",
+      code: error.code,""",
+            )
+        ],
+        "expect": [
+            (
+                "error-language.test.js",
+                "a provider that fails leaves the worker with a code",
+            ),
+        ],
+    },
+    {
+        "name": "M18 the panel shows the worker's sentence again",
+        "file": "sidepanel.js",
+        "hunks": [
+            (
+                """${escapeHtml(panelFailureMessage(result))}</div>`;""",
+                """${escapeHtml(result.error || "")}</div>`;""",
+            )
+        ],
+        "expect": [
+            (
+                "error-language.test.js",
+                "a failed explanation shows the panel's sentence, not the provider's words",
             ),
         ],
     },

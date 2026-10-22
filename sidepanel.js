@@ -241,6 +241,8 @@ const PANEL_COPY = {
     yourAiProvider: "your AI provider",
     errorCodeInvalidAiKey:
       "The AI provider rejected the API key. Check the key in YouTube Digest Settings.",
+    errorCodeAiRequestFailed:
+      "The AI provider did not answer the request. Try again in a moment.",
     errorCodeNoSupadataKey:
       "No Supadata API key is set. Open YouTube Digest Settings to add one.",
     errorCodeInvalidSupadataKey:
@@ -561,6 +563,7 @@ const PANEL_COPY = {
     yourAiProvider: "你的 AI 服务商",
     errorCodeInvalidAiKey:
       "AI 服务拒绝了这个密钥。请检查 YouTube Digest 设置里的密钥。",
+    errorCodeAiRequestFailed: "AI 服务没有回应这次请求。请稍后再试。",
     errorCodeNoSupadataKey:
       "还没有设置 Supadata API 密钥。请在 YouTube Digest 设置里填入。",
     errorCodeInvalidSupadataKey:
@@ -848,6 +851,8 @@ let panelLanguage = "en";
 const PANEL_ERROR_CODE_COPY = {
   NO_AI_KEY: "errorCodeNoAiKey",
   INVALID_AI_KEY: "errorCodeInvalidAiKey",
+  AI_REQUEST_FAILED: "errorCodeAiRequestFailed",
+  NOTE_SAVE_FAILED: "couldNotSave",
   NO_SUPADATA_KEY: "errorCodeNoSupadataKey",
   INVALID_SUPADATA_KEY: "errorCodeInvalidSupadataKey",
   NO_TRANSCRIPT: "errorCodeNoTranscript",
@@ -6320,7 +6325,7 @@ async function showExplanation(selectedText, trigger = null) {
     if (result.success) {
       contentDiv.innerHTML = `<div class="explain-text">${escapeHtml(result.explanation).replace(/\n\n/g, "</p><p>").replace(/\n/g, "<br>")}</div>`;
     } else {
-      contentDiv.innerHTML = `<div class="explain-error">${escapeHtml(panelCopy("explainFailed"))} ${escapeHtml(result.error || "")}</div>`;
+      contentDiv.innerHTML = `<div class="explain-error">${escapeHtml(panelCopy("explainFailed"))} ${escapeHtml(panelFailureMessage(result))}</div>`;
     }
   } catch (error) {
     const contentDiv = document.getElementById("explanationContent");
@@ -9280,7 +9285,9 @@ async function requestTranscriptTranslationBatch(
 
     aligned.forEach((item, batchIndex) => {
       if (!result?.success) {
-        item.error = result?.error || panelCopy("translationFailed");
+        // The panel says what went wrong, in the reader's language. The
+        // provider's own words are in the provider's language.
+        item.error = panelFailureMessage(result);
       }
       updateTranslatedRow(
         sourceBatch[batchIndex],

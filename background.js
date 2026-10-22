@@ -189,6 +189,51 @@ async function loadPromptSection(fileName, heading, variables = {}) {
   return prompt;
 }
 
+// The codes the worker sends when an AI call fails.
+//
+// The panel is the layer that speaks the user's language. The provider's own
+// words are in the provider's language, so they are kept for the console,
+// where the developer reads them, and the user gets a code the panel turns
+// into a sentence of their own.
+const AI_KEY_MISSING = "NO_AI_KEY";
+const AI_RATE_LIMITED = "RATE_LIMITED";
+const AI_REQUEST_FAILED = "AI_REQUEST_FAILED";
+
+// The codes of a note that did not save. A device that is out of room is a
+// different problem from a note that could not be written, and the panel can
+// only tell the two apart if it knows which one happened.
+const STORAGE_QUOTA_EXCEEDED = "STORAGE_QUOTA_EXCEEDED";
+const NOTE_SAVE_FAILED = "NOTE_SAVE_FAILED";
+
+/**
+ * Turns a failed AI call into a code the panel has a sentence for.
+ *
+ * The provider answers with its own words, and those words are not in the
+ * user's language. The user does not need them: they need to know whether
+ * the key is wrong, whether the provider is busy, or whether the request
+ * simply did not work, and they need to be told in a language they read.
+ * The provider's own words stay in the error's message, where the console
+ * shows them to the developer.
+ *
+ * @param {Error} error the failure the provider answered with.
+ * @returns {string} a code the panel can turn into a sentence.
+ */
+function aiFailureCode(error) {
+  const code = String((error && error.code) || "").trim();
+  if (code) return code;
+  const status = Number(error && error.status) || 0;
+  if (status === 401 || status === 403) {
+    // The service refused the key. Every provider answers this the same
+    // way, and the answer the user needs is the same too: the key is
+    // missing or wrong, and it is set in Settings. Without the code the
+    // surface can only show the provider's own words, and the user is left
+    // looking for a setting that is right there.
+    return AI_KEY_MISSING;
+  }
+  if (status === 429) return AI_RATE_LIMITED;
+  return AI_REQUEST_FAILED;
+}
+
 async function requestAiCompletion({
   messages,
   maxTokens,
@@ -307,14 +352,9 @@ async function requestAiCompletion({
       }
       const error = new Error(message);
       error.status = response.status;
-      if (response.status === 401 || response.status === 403) {
-        // The service refused the key. Every provider answers this the same
-        // way, and the answer the user needs is the same too: the key is
-        // missing or wrong, and it is set in Settings. Without the code the
-        // surface can only show the provider's own words, and the user is
-        // left looking for a setting that is right there.
-        error.code = "NO_AI_KEY";
-      }
+      // The code that says the key was refused is worked out in one place,
+      // aiFailureCode, so there is one answer to "what does this mean" and
+      // not one per caller.
       throw error;
     }
 
@@ -2539,21 +2579,16 @@ async function handleAnalyzeTranscript(
     };
   } catch (error) {
     console.error("Analysis error:", error);
-    if (error.status === 401) {
-      return {
-        success: false,
-        error: "INVALID_AI_KEY",
-      };
-    }
-    if (error.status === 429) {
-      return {
-        success: false,
-        error: "RATE_LIMITED",
-      };
-    }
+    // The provider's own words are not sent to the panel: they are in the
+    // provider's language. The code is what the panel turns into a sentence
+    // the reader can act on.
+    const code = aiFailureCode(error);
     return {
       success: false,
+      // The provider's own words stay in the message: they are for the
+      // console. The panel reads the code.
       error: error.message || "Failed to analyze transcript",
+      code,
     };
   }
 }
@@ -2906,7 +2941,16 @@ async function handleSaveNote(
     // The code travels with the message: a note that did not fit into the
     // device's storage is a different problem from a failed edit, and the
     // panel can only say so if it knows which one happened.
-    return { success: false, error: error.message, code: error.code };
+    //
+    // The error's own message is not sent. It is a sentence for the
+    // developer ("QUOTA_BYTES quota exceeded"), and the panel is the layer
+    // that speaks the user's language.
+    const quota =
+      typeof YTD_SETTINGS !== "undefined" &&
+      typeof YTD_SETTINGS.isQuotaExceededError === "function" &&
+      YTD_SETTINGS.isQuotaExceededError(error);
+    const code = error.code || (quota ? STORAGE_QUOTA_EXCEEDED : NOTE_SAVE_FAILED);
+    return { success: false, error: error.message, code };
   }
 }
 
@@ -3036,11 +3080,15 @@ async function handleExtractVocabulary(sentence) {
     // The code travels with the message: a service that refused the key
     // and a service that was slow are two different problems, and the
     // panel can only send the user to the right one if it knows which it
-    // was.
+    // was. The provider's own words are not sent: they are in the
+    // provider's language.
+    const code = aiFailureCode(error);
     return {
       success: false,
+      // The provider's own words stay in the message: they are for the
+      // console. The panel reads the code.
       error: error.message || "Vocabulary extraction failed",
-      code: error.code,
+      code,
     };
   }
 }
@@ -3096,10 +3144,13 @@ async function handleExplainSelection(
     };
   } catch (error) {
     console.error("Explain selection error:", error);
+    const code = aiFailureCode(error);
     return {
       success: false,
+      // The provider's own words stay in the message: they are for the
+      // console. The panel reads the code.
       error: error.message || "Failed to explain selection",
-      code: error.code,
+      code,
     };
   }
 }
@@ -3285,10 +3336,13 @@ async function handleTranslateContent(
     return { success: true, translatedContent: aligned };
   } catch (error) {
     console.error("[YouTube Digest] Translation error:", error);
+    const code = aiFailureCode(error);
     return {
       success: false,
+      // The provider's own words stay in the message: they are for the
+      // console. The panel reads the code.
       error: error.message || "Translation failed",
-      code: error.code,
+      code,
     };
   }
 }
@@ -3319,14 +3373,10 @@ async function callAiTranslation(
 
     return { success: true, text };
   } catch (error) {
-    if (error.status === 429) {
-      return {
-        success: false,
-        error: "Rate limited — try again in a moment",
-        code: "RATE_LIMITED",
-      };
-    }
-    return { success: false, error: error.message, code: error.code };
+    const code = aiFailureCode(error);
+    // The provider's own words stay in the message: they are for the
+    // console. The panel reads the code.
+    return { success: false, error: error.message, code };
   }
 }
 
