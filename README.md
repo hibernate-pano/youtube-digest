@@ -4,21 +4,34 @@
 
 Turn every YouTube video into a resource for deep learning. YouTube Digest brings transcripts, bilingual translation, AI summaries, explanations, timestamped notes, and a vocabulary notebook into one Chrome side panel, so you can study ideas and language without losing your place.
 
+**First time here?** [The install guide (docs/INSTALL_GUIDE.md)](docs/INSTALL_GUIDE.md) is the short version to hand to a friend. It is written in Simplified Chinese.
+
 - Turn captions into a readable, searchable learning resource.
 - Learn languages with the original transcript, a Simplified Chinese translation, or an aligned bilingual view.
 - Build understanding with an AI summary, chapters, key quotes, and selected-text explanations.
 - Navigate long videos by clicking timestamps in the transcript, summary, or notes.
-- Save polished timestamped notes for later study.
-- Build a vocabulary notebook from the transcript, with spaced review built in.
+- Save timestamped notes for later study. A note you write in the panel is saved exactly as you wrote it. The Note button on the video page is the one that asks the AI to tidy the line that was being spoken.
+- Build a vocabulary notebook from the transcript, with spaced review built in. Extracting the words needs an AI provider key, and the review schedule needs a GitHub sign-in.
 - Keep the videos you have read in a 30-day library, so opening one again costs nothing.
 - Read your notes, favorites and vocabulary on any device through the web dashboard that comes with the sync service.
 - Keep control of your data with your own API keys, local Chrome storage, and no analytics or telemetry.
 
-YouTube Digest is a bring-your-own-key project installed locally from GitHub. It is not available through the Chrome Web Store and does not include API credits. The extension has no analytics and no telemetry. If you sign in with GitHub, the optional sync feature mirrors your saved notes and words to this project's own sync service at `https://ytd.panbo.space`; without signing in, no note or word data leaves your device.
+YouTube Digest is a bring-your-own-key project installed locally from GitHub. It is not available through the Chrome Web Store and does not include API credits. The extension has no analytics and no telemetry. If you sign in with GitHub, the optional sync feature mirrors your saved notes, words and review progress to this project's own sync service at `https://ytd.panbo.space`; without signing in, no note, word or review data leaves your device.
 
 ![YouTube Digest demo](YouTube%20Digest%20demo.jpg)
 
 The absolute address of the image above, for use outside this repository. The file name contains a space, so it is written as `%20`: `https://raw.githubusercontent.com/hibernate-pano/youtube-digest/main/YouTube%20Digest%20demo.jpg`
+
+## New in v1.8.0
+
+- Signing out now takes this browser's copy of your account with it. Your notes, your words and the deletions that were still on their way to the server go when you sign out, and the extension asks first when something never reached the account.
+- Deleting your account removes what the account left on this device, including the deletions that had not reached the server yet.
+- "Delete all notes" now deletes on your account as well as on this device. If the account cannot do it, the extension says so and deletes nothing, instead of letting you find out later.
+- The first time you sign in, the extension tells you how many notes and words moved into your account.
+- The price of a translation is agreed before it is spent. Switching to Chinese or to the bilingual view asks once and says how many calls it takes, and the panel keeps to that number: a summary that arrives later, a tab you open, a note you write, none of them spends past what you agreed to.
+- A missing provider key opens a dialog that takes you to Settings, instead of a sentence that says your word could not be read.
+- The sync service can hand out your notes and your words separately, so an account too large for one file can still be taken out, and it says when it could not answer the whole question.
+- Your notes are really deleted on the account when you ask for it. The service marks them deleted and clears them for good after thirty days, and the extension tells you how many were removed.
 
 ## New in v1.7.3
 
@@ -61,7 +74,7 @@ The absolute address of the image above, for use outside this repository. The fi
 
 
 - The side panel is now five tabs: **Transcript**, **Summary**, **Notes**, **Words**, and **Library**. The old Overview tab is now Summary, and it carries a written summary of the video, not only a list of chapters.
-- Capture words from the transcript into a vocabulary notebook: select a word and save it, or let your AI provider pick the words worth learning out of a sentence. Each word keeps its meaning, its sentence, and the moment it came from.
+- Capture words from the transcript into a vocabulary notebook: select text in the transcript and choose **Word**, and your AI provider picks the words worth learning out of it. Each word keeps its meaning, its sentence, and the moment it came from.
 - Review your words on a schedule, with the same four grades the web dashboard uses.
 - The library keeps the videos you have read for 30 days, so opening one again costs nothing.
 - Search inside the transcript for words or phrases and move through every match.
@@ -69,7 +82,7 @@ The absolute address of the image above, for use outside this repository. The fi
 - Translate visible Summary and Notes content progressively in small cached batches.
 - Explain selected transcript text or save it directly as a timestamped note.
 - Keep your transcript position across navigation, with the panel closing automatically outside YouTube video pages.
-- Sign in with GitHub to back up your notes and words to the project's sync service, and sign in again on any other device to pick them up.
+- Sign in with GitHub to mirror your notes, words and review progress to the project's sync service, and sign in again on any other device to pick them up.
 - Click a note's text to correct it; the edit is saved locally and synced.
 - See a clear "Sync expired" chip when the GitHub session ends, and sign in again to resume the backup.
 
@@ -110,8 +123,10 @@ Because this is an unpacked extension, it does not update automatically. After d
 
 YouTube Digest needs one API key from your chosen AI provider, and optionally a Supadata key:
 
-1. An **AI provider key** from DeepSeek, MiniMax (China), or OpenCode Go, for summaries, explanations, translation, and automatic note polishing. The panel opens without one: the transcript, the notes and the vocabulary all work on your own machine, and the panel tells you which half is waiting for a key.
+1. An **AI provider key** from DeepSeek, MiniMax (China), or OpenCode Go, for summaries, explanations, translation, and for tidying the line that was being spoken into a note when you press the Note button on the video page. The panel opens without one: the transcript, the search, the notes and the library all work on your own machine, and the panel tells you which half is waiting for a key. Extracting the words for the vocabulary notebook needs a key as well, and the spaced review needs a GitHub sign-in, because the review schedule is kept on the sync service.
 2. A **Supadata API key**, used only as a fallback. Transcripts are read out of the YouTube page you already have open, so most videos work without it and no Supadata credit is spent. Add it if you want the fallback for videos whose captions cannot be read locally.
+
+A note you write in the panel is saved exactly as you wrote it, and no AI provider ever receives it. The Note button on the video page (the `n` key, or the button on the player) is the only path that asks the AI to tidy the line that was being spoken.
 
 ### Get a Supadata API key (optional)
 
@@ -166,7 +181,21 @@ Keys and settings are stored in Chrome's local extension storage on your device.
 
 ## Optional GitHub sync
 
-Sign in with GitHub from Settings (or the **Sign in** button in the side panel) to back up your notes and words. Your notes and words are stored in this project's own database on `https://ytd.panbo.space`, a Cloudflare Worker backed by a Neon PostgreSQL database, and are linked to your GitHub account id. They are not written to your GitHub account, and no GitHub repository or gist is created. Every account's data is isolated server-side: the extension stores notes and words under an account-specific namespace, the server scopes every query by the verified token, and signing in with a different account shows that account's data only. Sync is optional: without signing in, everything stays on this device exactly as before, and AI/transcript requests never involve the sync service. When signed in, saved notes and words mirror to the cloud automatically (idempotent, newest edit wins) and appear on any device where you sign in with the same GitHub account.
+Sign in with GitHub from Settings (or the **Sign in** button in the side panel) to back up your notes and words. Your notes and words are stored in this project's own database on `https://ytd.panbo.space`, a Cloudflare Worker backed by a Neon PostgreSQL database, and are linked to your GitHub account id. They are not written to your GitHub account, and no GitHub repository or gist is created. Every account's data is isolated server-side: the extension stores notes and words under an account-specific namespace, the server scopes every query by the verified token, and signing in with a different account shows that account's data only.
+
+When you sign in, the notes, words and review progress you save are mirrored to your own account on the sync service. Signing out stops the mirroring and removes this browser's copy. There is no per-item switch: signing in is what starts the mirroring, and signing out is what stops it.
+
+The first time you sign in, the notes and words you saved while signed out move into your account. The settings page tells you how many.
+
+An account can hold 20,000 notes and words together. When the limit is reached the service refuses the new note and tells you how many are already there.
+
+Sync is optional: without signing in, everything stays on this device exactly as before, and AI/transcript requests never involve the sync service. When signed in, saved notes and words mirror to the cloud automatically (idempotent, newest edit wins) and appear on any device where you sign in with the same GitHub account.
+
+### Signing out, deleting your account, deleting your notes
+
+- Signing out removes the sign-in token and this browser's copy of your notes, your words, and the words that were waiting to be deleted. Your account on the sync service keeps what it already holds, so signing in again brings it back.
+- Deleting your account removes the account from the sync service and everything it left on this browser: your notes, your words, and the words that were waiting to be deleted. The deletion is permanent and cannot be undone.
+- Delete all notes removes your notes from this browser and from your account. While you are signed out, Delete all notes removes the notes on this browser.
 
 ### The web dashboard
 
@@ -176,20 +205,19 @@ The same service also serves a small web app at `https://ytd.panbo.space`. Sign 
 - **Favorites** - the notes you starred in the side panel.
 - **Vocabulary** - the words you captured, with their meaning and the sentence they came from.
 - **Review** - the spaced-repetition queue for those words, scheduled server-side.
-- **Export my data** - a copy of everything the service holds for your account.
+- **Export my data** - every note and every word in your account, as one JSON file. If the account is too large to send in one file, the service says so instead of sending you part of it.
 
 The dashboard is read-mostly on purpose: it is the place to *read* and *review* what you collected while watching, and the side panel is where you collect it. Both talk to the same database, and the same per-account isolation applies.
 
 ## Use YouTube Digest
 
-1. Open a standard YouTube watch page with captions.
-2. Click the YouTube Digest extension icon to open the side panel.
-3. Read the timestamped transcript, or choose **Original**, **中文**, or **双语**.
-4. Search inside the transcript to find a word or phrase, and step through the matches.
-5. Open **Summary** when you want the AI-written summary, chapters, and key quotes. The tab says what the call costs before you spend anything.
-6. Select transcript text when you want an AI explanation, or save it as a note.
-7. Save a note from the player or a key quote, then revisit it from **Notes**. Click a note's text to correct it.
-8. Select a word in the transcript and choose **Word** to add it to your **Words** notebook, or open **Words** and let your AI provider pick the words worth learning out of a selected sentence.
+1. Open a YouTube video and click the extension icon to read its transcript and build a summary. The panel opens on the YouTube tab you are watching, so use a standard `youtube.com/watch` page with captions.
+2. Read the timestamped transcript, or choose **Original**, **中文**, or **双语**.
+3. Search inside the transcript to find a word or phrase, and step through the matches.
+4. Open **Summary** when you want the AI-written summary, chapters, and key quotes. The tab says what the call costs before you spend anything.
+5. Select transcript text when you want an AI explanation, or save it as a note.
+6. Save a note from the player or a key quote, then revisit it from **Notes**. Click a note's text to correct it. A note you write in the panel is saved exactly as you wrote it.
+7. Select text in the transcript and choose **Word**: your AI provider reads the selection and picks out the words worth learning, and you confirm them before they are saved. Extracting words needs an AI provider key, and the spaced review needs a GitHub sign-in.
 
 ## What works today
 
@@ -198,12 +226,12 @@ The dashboard is read-mostly on purpose: it is the place to *read* and *review* 
 - Native subtitle tracks. YouTube Digest reads them out of the YouTube page you already have open, so no transcript credit is spent. Supadata is used only as a fallback for videos whose captions cannot be read that way. YouTube Digest prefers English when available, but may show another native language.
 - Original, Simplified Chinese, and aligned bilingual transcript views, with one content-language setting shared across Transcript, Summary, and Notes.
 - Transcript search for words or phrases, with previous and next buttons for every match.
-- AI summaries, chapters, key quotes, selected-text explanations, translation, and automatic note polishing.
+- AI summaries, chapters, key quotes, selected-text explanations, translation, and the tidying of a transcript line into a note by the Note button on the video page. A note you write in the panel is saved exactly as you wrote it, and no AI provider ever receives it.
 - Timestamped notes saved from the player, a key quote, or selected transcript text, with click-to-edit correction and buttons to copy the note text or its timestamped link.
-- A vocabulary notebook: capture a word from the transcript, keep its meaning, its sentence, and the moment it came from, and review it later on a schedule.
+- A vocabulary notebook: capture a word from the transcript, keep its meaning, its sentence, and the moment it came from, and review it later on a schedule. Extracting the words needs an AI provider key, and the review schedule needs a GitHub sign-in.
 - A library of the videos you have read, kept for 30 days so that opening one again costs no transcript credit.
 - Local notes, words, and a local cache for recent transcript and digest results.
-- Optional GitHub sync of your saved notes and words to the project's sync service, with one isolated data set per GitHub account.
+- Optional GitHub sync of your saved notes, words and review progress to the project's sync service, with one isolated data set per GitHub account.
 - DeepSeek V4 Flash, MiniMax M3, and OpenCode Go's DeepSeek V4 Flash for all published AI features. Other providers require a local code adaptation and are not supported by this published version.
 
 Shorts, live streams, private or access-restricted videos, and videos without an available native transcript may not work. Firefox, Safari, mobile browsers, and other Chromium browsers are not currently tested or supported.
@@ -224,7 +252,7 @@ The [Supadata transcript documentation](https://docs.supadata.ai/get-transcript)
 - A generated transcript costs **2 credits per video minute**. YouTube Digest does not use this path because it forces `mode=native`.
 - An unavailable native lookup returned as HTTP `206` still uses **1 credit**. YouTube Digest shows this as "No native subtitle track is available for this video.", but the credit is already spent.
 
-With the current native-only behavior, the free tier can cover roughly 100 fallback lookups per month when each request succeeds once. A video that turns out to have no native captions is remembered for a day, so it costs one credit instead of one credit every time you open it. "Try again" always performs a real new lookup, and a new lookup does cost a credit.
+With the current native-only behavior, the free tier can cover roughly 100 fallback lookups per month when each request succeeds once. A video with no subtitles is remembered for 24 hours, so opening it again the next day can spend your quota again. Within that day it costs one credit instead of one credit every time you open it. "Try again" always performs a real new lookup, and a new lookup does cost a credit.
 
 DeepSeek usage is separate from Supadata. YouTube Digest does not collect payments or resell access. Set spending limits and monitor both accounts.
 
@@ -276,7 +304,7 @@ YouTube Digest makes provider requests directly from the extension:
 4. Focused features send only the content they need, such as selected text with context or small transcript batches for translation.
 5. It stores keys, settings, notes, and recent cache entries locally in Chrome.
 
-The one exception is the optional GitHub sync described above. If you sign in, your saved notes are also mirrored to this project's own sync service at `https://ytd.panbo.space`, which runs on Cloudflare Workers with a Neon PostgreSQL database. Sign-in uses GitHub's OAuth flow, and the service only ever serves the rows belonging to the account you signed in with. If you never sign in, no note data leaves your device.
+The one exception is the optional GitHub sync described above. When you sign in, the notes, words and review progress you save are mirrored to your own account on the sync service at `https://ytd.panbo.space`, which runs on Cloudflare Workers with a Neon PostgreSQL database. Signing out stops the mirroring and removes this browser's copy. Sign-in uses GitHub's OAuth flow, and the service only ever serves the rows belonging to the account you signed in with. If you never sign in, no note, word or review data leaves your device.
 
 There is no YouTube Digest account system, advertising, analytics, or telemetry. Supadata and your chosen AI provider still receive data under their own terms and privacy policies. [PRIVACY.md](PRIVACY.md) is the authoritative description of every data flow, including the sync service. A convenience translation is available in [PRIVACY.zh-CN.md](PRIVACY.zh-CN.md).
 
@@ -300,7 +328,7 @@ There is no YouTube Digest account system, advertising, analytics, or telemetry.
 
 ### YouTube Digest asks for setup
 
-- The panel shows the title **API Keys Missing** and a button labeled **Open Settings** when a key is missing. Click that button, or open **Settings** from the panel header, from the YouTube Digest card at `chrome://extensions`, or by right-clicking the toolbar icon.
+- When a key is missing, a bar appears at the top of the side panel, above the tabs, saying that the summary, the translation and the explanations need an AI key. There is no separate "API Keys Missing" screen any more: that bar is the warning. Click **Open Settings** on it, or open **Settings** from the panel header, from the YouTube Digest card at `chrome://extensions`, or by right-clicking the toolbar icon.
 - Save the API key of your chosen AI provider. The Supadata key is optional. The extension also opens Settings by itself the first time it is installed.
 - Choose one of the supported providers: DeepSeek V4 Flash, MiniMax M3, or OpenCode Go. Endpoints and models are fixed, so there are no Base URL or Model fields to configure.
 - If Settings says a legacy custom provider was removed, enter the API key of your chosen provider. The old AI key was cleared so it could not be reused with the wrong service.

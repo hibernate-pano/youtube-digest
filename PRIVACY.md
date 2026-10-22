@@ -1,12 +1,12 @@
 # Privacy
 
-Effective: October 20, 2026
+Effective: October 22, 2026
 
 > A convenience translation is available in [PRIVACY.zh-CN.md](PRIVACY.zh-CN.md). The English file below is the authoritative version.
 
 YouTube Digest is a GitHub-only, bring-your-own-key Chrome extension. It has no YouTube Digest account, analytics, advertising, or telemetry. It does run an optional sync service, described in "GitHub sync (optional)" below, that stores your saved notes, vocabulary, and review progress when you choose to sign in.
 
-Two kinds of data leave your device, and it is worth naming them up front. The transcript is read out of the YouTube page you already have open, so most of the time no subtitle data leaves your device at all; when that read does not work and a Supadata key is set, the canonical video URL goes to Supadata to fetch the transcript. The transcript text you ask to be translated, explained, summarized, or polished goes to the AI provider you selected in Settings. Both requests carry your own API key and go straight from your browser to those services. YouTube Digest's developer does not proxy, receive, or store them.
+Two kinds of data leave your device, and it is worth naming them up front. The transcript is read out of the YouTube page you already have open, so most of the time no subtitle data leaves your device at all; when that read does not work and a Supadata key is set, the canonical video URL goes to Supadata to fetch the transcript. The transcript text you ask to be translated, explained, summarized, or tidied into a note goes to the AI provider you selected in Settings. A note you write in the panel is not one of those: it is saved exactly as you wrote it, and no AI provider ever receives it. Both provider requests carry your own API key and go straight from your browser to those services. YouTube Digest's developer does not proxy, receive, or store them.
 
 ## Data the extension handles
 
@@ -22,6 +22,8 @@ Depending on the feature you use, YouTube Digest handles:
 - vocabulary entries you capture, and the review schedule attached to them;
 - Supadata and AI provider configuration, including API keys; and
 - cached transcript, digest, and translation results.
+
+A note you write in the panel is stored on the device exactly as you wrote it. The Note button on the video page is the one that asks the AI to tidy the line that was being spoken; that request carries the transcript line, the transcript around it and the video title, never the words you wrote.
 
 The Supadata key is optional. It is only needed for the fallback path, and the panel tells you when a video needs it.
 
@@ -39,6 +41,11 @@ stores locally. That token is valid for 30 days and there is no refresh token,
 so an expired session asks you to sign in again. The service refuses every
 token it issued for an account that no longer exists.
 
+When you sign in, the notes, words and review progress you save are mirrored
+to your own account on the sync service. Signing out stops the mirroring and
+removes this browser's copy. There is no per-item switch: signing in is what
+starts the mirroring, and signing out is what stops it.
+
 The service stores the following per account:
 
 - **Account**: your GitHub numeric id, login name, and avatar URL.
@@ -49,35 +56,55 @@ The service stores the following per account:
   learning status.
 - **Review progress**: when each vocabulary item is next due, its repetition
   count, its current interval, and a difficulty score.
-- **The name of the browser**: a random id the extension generates once and
-  keeps in its own storage. Sign-in and every request that carries a session
-  send it, so a session is bound to the browser that started it and a token
-  copied to another browser is refused. It is not derived from anything about
-  you or your machine, and it is not used to recognise you anywhere else.
+- **The name of the browser**: The browser's name is a random id the browser
+  makes up once. The extension and the dashboard each make their own. The
+  service keeps it only for the life of the session: it rides in the session
+  token and in the sign-in cookie, and it is never written to the database.
+  Sign-in and every request that carries a session send it, so a session is
+  bound to the browser that started it and a token copied to another browser
+  is refused. It is not derived from anything about you or your machine, and
+  it is not used to recognise you anywhere else.
 - **A deletion mark**: a deleted note or word is marked as deleted rather than
   erased at once, and the mark is kept for 30 days. Without it, a device that
   still holds the note would upload it again and the note would come back. A
   marked row is never served, and a scheduled cleanup removes it after 30 days.
   Deleting your account removes it immediately.
+- **The limit on an account**: An account can hold 20,000 notes and words
+  together. When the limit is reached the service refuses the new note and
+  tells you how many are already there.
 
 - Notes are stored under your GitHub account id and only your account's rows are
   ever served: the server scopes every query by the verified token, and the
   extension keeps separate local namespaces per account.
-- Signing out keeps the token local until you remove it; your data remains on the
-  server under your account until deleted from the extension or with the account.
+- Signing out removes the sign-in token and this browser's copy of your notes,
+  your words, and the words that were waiting to be deleted. What your account
+  already holds on the sync service stays there, and signing in again brings
+  it back.
 - This sync service is optional and separate from AI and transcript processing:
-  when you are not signed in, no note data leaves the device at all.
+  when you are not signed in, no note, word, or review data leaves the device
+  at all. The notes, the words, the record that says which account owns which
+  of them, and the cached transcripts all stay in Chrome's local storage.
 
-The service also publishes a short privacy page of its own at
+Downloading your data gives you every note and every word in your account, as
+one JSON file. If the account is too large to send in one file, the service
+says so instead of sending you part of it.
+
+The first time you sign in, the notes and words you saved while signed out
+move into your account. The settings page tells you how many.
+
+The service also publishes a privacy page of its own at
 `https://ytd.panbo.space/privacy` (Simplified Chinese:
-`https://ytd.panbo.space/privacy?lang=zh-CN`). It describes the sync
-service only. This file is the complete description for the extension.
+`https://ytd.panbo.space/privacy?lang=zh-CN`). It covers the extension and
+the sync service. This file is the complete description for the extension.
 
 ### Deleting your account
 
 "Delete my account" is a deletion, not a sign-out. The Options page of the
 extension and the dashboard at `https://ytd.panbo.space` both offer it, and
-both ask for confirmation twice. Deleting the account does all of the following:
+both ask for confirmation twice. Deleting your account removes the account
+from the sync service and everything it left on this browser: your notes, your
+words, and the words that were waiting to be deleted. Concretely, it does all
+of the following:
 
 - it removes every note, vocabulary entry, and review item stored for your
   account from the Neon database;
@@ -85,8 +112,9 @@ both ask for confirmation twice. Deleting the account does all of the following:
   created from is no longer registered with the service;
 - it revokes every session token the account issued, so a token still saved on
   an old device stops working; and
-- in the extension, it removes the notes and words stored under that account on
-  this device and ends the local session. Notes and words belonging to a
+- in the extension, it removes the notes and the words stored under that
+  account on this device, together with the words that were waiting to be
+  deleted, and it ends the local session. Notes and words belonging to a
   different account on the same device are left alone, and your API keys and
   settings are not touched.
 
@@ -121,14 +149,16 @@ This is the default path. It is tried first on every video.
 
 ### Supadata (fallback)
 
-When the page cannot be read — YouTube changed how the player exposes its
-captions, the tab is gone, or the video has no caption track at all — the
+When the page cannot be read (YouTube changed how the player exposes its
+captions, the tab is gone, or the video has no caption track at all), the
 extension falls back to Supadata, and only then does the canonical YouTube
 video URL leave your device.
 
 YouTube Digest sends the canonical YouTube video URL to `https://api.supadata.ai` with your Supadata API key. Supadata returns the transcript and timestamps. **A Supadata key is optional**: without one, videos whose captions can be read locally still work, and the panel tells you plainly when a video needs the fallback and a key is not set. The request asks for native caption tracks only: no audio, no video, and no other file from the watch page is uploaded.
 
-A video with no caption track is remembered as having none, so reopening it does not spend a credit on the same answer again.
+A video with no caption track is remembered for 24 hours, so opening it again
+the next day can spend your quota again. Within that day, reopening it does
+not spend a credit on the same answer twice.
 
 ### AI providers
 
@@ -143,8 +173,14 @@ Each provider receives:
 - transcript plus relevant title, channel, description, or duration for an overview;
 - selected text plus nearby transcript context for an explanation;
 - small semantic transcript batches currently needed for progressive Chinese
-  translation, or requested overview or explanation content;
-- nearby transcript context and video metadata when polishing a saved note.
+  translation, and small batches of the Summary and Notes text that are on
+  screen;
+- the transcript line that was being spoken, the transcript around it, and the
+  video title, when the Note button on the video page tidies that line into a
+  note. The words you wrote yourself are never part of that request.
+
+A note you write in the panel is saved exactly as you wrote it, and no AI
+provider ever receives it.
 
 OpenCode Go routes and caches on a session id, so a request to that provider also
 carries one: a random value your browser generates once and keeps. It says
@@ -159,9 +195,11 @@ Those services process data under their own terms, privacy policies, retention p
 
 ## Local storage and retention
 
-YouTube Digest uses Chrome's local extension storage for its own data. The only
+YouTube Digest uses Chrome's local extension storage for its own data. Apart
+from the provider requests described under "Where data goes" above, the only
 data that also leaves the device is the notes, vocabulary, and review progress
-you choose to sync, as described under "GitHub sync (optional)" above.
+that the mirroring sends to your account while you are signed in, as described
+under "GitHub sync (optional)" above.
 
 - Supadata and AI provider settings and API keys remain on the device in Chrome's extension storage. They are never sent to the sync service.
 - Keys for all supported AI providers are kept side by side so you can switch
@@ -173,14 +211,17 @@ you choose to sync, as described under "GitHub sync (optional)" above.
 - Recent transcript, digest, and per-segment translation cache entries are stored
   locally and are never synced. The cache is limited to 20 videos, and entries older than 30 days are
   removed when the side panel opens.
+- A delete that has not reached the service yet is remembered on the device, so
+  it can still be sent later. That record holds the id of the note, or the word
+  and the sentence it was seen in, and nothing else.
 
 Chrome extension storage is not a password vault. Anyone with sufficient access to your browser profile or device may be able to recover locally stored keys or content. Use scoped keys where providers support them, set spending limits, and rotate or revoke a key if the device or browser profile is compromised.
 
 To remove data:
 
 - delete individual saved notes in YouTube Digest;
-- use the Options page to clear cached digests, delete all notes, or reset all extension data. "Delete all notes" removes the saved notes of every account on this device; it does not remove saved words or API keys. "Reset extension data" clears the extension's entire local storage, which includes the keys, the notes, the words, the session, and the cached results;
-- export your data first if you want a copy of it: the dashboard's "Export my data" button downloads everything the service holds for your account as a JSON file;
+- use the Options page to clear cached digests, delete all notes, or reset all extension data. While you are signed in, "Delete all notes" removes your notes from this browser and from your account. While you are signed out, "Delete all notes" removes the notes on this browser. It does not remove your saved words or your API keys. "Reset extension data" clears the extension's entire local storage, which includes the keys, the notes, the words, the session, and the cached results;
+- export your data first if you want a copy of it: the dashboard's "Export my data" button downloads every note and every word in your account as one JSON file, and if the account is too large to send in one file the service says so instead of sending you part of it;
 - use "Delete my account" in the Options page, or in the dashboard at `https://ytd.panbo.space`, to remove the account and all of its data from the sync service, as described under "Deleting your account" above;
 - remove the extension or clear its stored data from Chrome to delete all local settings, keys, notes, and cache entries; and
 - revoke keys in the Supadata or selected AI provider's dashboard to stop their future use.
@@ -201,8 +242,8 @@ YouTube Digest uses Chrome permissions for these purposes:
 - `scripting`: coordinate the extension's YouTube page controls, and read the page's own caption tracks so the transcript can be fetched without a third party.
 - YouTube host access: read the active video's URL and metadata, provide timestamp controls, and fetch the caption track the page already carries.
 - Supadata host access: retrieve transcripts when the page's own captions cannot be read.
-- DeepSeek, MiniMax, and OpenCode Go host access: provide AI overviews, explanations, translation, and note polishing through the selected provider.
-- Sync service host access (`https://ytd.panbo.space`): sign in with GitHub, and sync the saved notes you choose to back up. This permission is only used for the optional sync; it is not used while you are signed out.
+- DeepSeek, MiniMax, and OpenCode Go host access: provide AI overviews, explanations, translation, and the tidying of a transcript line into a note, through the selected provider.
+- Sync service host access (`https://ytd.panbo.space`): sign in with GitHub, and mirror your saved notes, words, and review progress to your own account on the sync service. This permission is only used for the optional sync; it is not used while you are signed out.
 
 YouTube Digest does not use these permissions to monitor general browsing activity.
 

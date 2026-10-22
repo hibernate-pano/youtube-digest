@@ -9,17 +9,19 @@
 > 1. `README.md` / `README.zh-CN.md`：删掉「not available through the Chrome Web
 >    Store」这句话，改成商店链接。
 > 2. `manifest.json`：`version` 与 `package.json` 一起 bump（发布门禁会比对两者）。
+>    这一轮已经 bump 到 1.8.0。
 > 3. 商店描述里的「local install」措辞：改成「从 Chrome Web Store 安装」。
-> 4. 商店截图：全部换成当前界面拍的（见「截图清单」）。
+> 4. 商店截图：这一轮已经重拍，五张都是现在的界面、同一支视频（见「截图清单」）。
 
 ## 前置条件
 
 - [ ] 注册 Chrome Web Store 开发者账号（$5 一次性）：https://chrome.google.com/webstore/devconsole
 - [ ] 隐私政策 URL：见下面「隐私政策 URL」一节。**线上只有一页**，它自带中英文切换。
-- [ ] 打包好的 ZIP：仓库根目录 npm run package 生成 dist/youtube-digest-v1.7.3.zip
+- [ ] 打包好的 ZIP：仓库根目录 npm run package 生成 dist/youtube-digest-v1.8.0.zip
   - 注意：商店不接受根目录直接打包，需要 zip 内包含 manifest.json（我们的脚本已满足）
-  - v1.7.3 的包现在有 27 个文件，SHA-256 以 `npm run package`
-    当次输出为准，不要抄旧记录
+  - 打包脚本会用 `scripts/verify-package.js` 把包里的每个文件和仓库里的那一份对一遍，
+    对不上就直接失败，所以这个包一定是从当前代码打的
+  - SHA-256 以 `npm run package` 当次输出为准，不要抄旧记录
 - [ ] 数据使用披露表单（Data use disclosure）：勾选项必须和「商品信息」里的说法一致，
   尤其是 Supadata 和三个 AI 服务商。这张表和隐私政策对不上是常见的打回原因。
 
@@ -39,6 +41,10 @@
   分别去了哪里、哪些东西留在设备上、每个权限用来做什么，都写在上面，中英文都有。
   仓库里另有一份完整政策：`PRIVACY.md`（英文，权威版）和 `PRIVACY.zh-CN.md`
   （中文便利译本），三者内容一致。
+- [ ] **线上这一页要跟仓库里的政策对齐。** 本轮改了退出登录、删除账号、
+      「删除全部笔记」、导出、账号上限、浏览器的名字、无字幕视频的 24 小时
+      记忆这几处说法，仓库里的两份政策已经改完，线上这一页还没改。改完，
+      三者才真的内容一致。
 - 商店表单里填 `https://ytd.panbo.space/privacy` 就行。
 
 ## 商品信息
@@ -61,7 +67,7 @@ Chrome Web Store 开发者后台的实际限制：
 | --- | --- | ---: | --- |
 | 名称 | `YouTube Digest: Transcript, Translation & AI Notes` | 50 | 通过（上限 75） |
 | 简短描述 | `Turn any YouTube video into a learning resource: bilingual transcripts, AI overviews, and timestamped notes.` | 108 | 通过（上限 132） |
-| 详细描述 | 见下 | 1941 | 通过（上限 16000） |
+| 详细描述 | 见下 | 2634 | 通过（上限 16000） |
 | `manifest.json` 的 description | `Turn YouTube videos into learning resources with transcripts, bilingual translation, AI overviews, and notes.` | 109 | 通过（上限 132），且与简短描述说的是同一件事 |
 | 名称里的促销词 | 无 | - | 通过 |
 | 名称里的 emoji | 无 | - | 通过 |
@@ -101,8 +107,8 @@ FEATURES
 • Build a vocabulary notebook from the transcript and review the words on a schedule
 • Read the transcript for free, straight out of the page you are watching
 • Keep a 30-day library of the videos you already read, so opening one again costs nothing
-• Export the transcript as a text file and your notes as Markdown
-• Sign in with GitHub to back up your notes and words, and read them on any device in the web dashboard
+• Export the transcript as a text file and copy your notes as Markdown
+• Sign in with GitHub to mirror your notes, words and review progress, and read them on any device in the web dashboard
 
 HOW TO USE
 1. Open a YouTube video that has captions
@@ -116,16 +122,23 @@ A key from DeepSeek, MiniMax, or OpenCode Go runs the AI features. You pay those
 providers directly. YouTube Digest does not sell credits or subscriptions, and
 never sees your keys.
 
-Your keys, settings, notes, and words stay in your Chrome profile. Only the notes
-and words you choose to back up are mirrored to this project's own sync service,
-linked to your GitHub account. There is no advertising, no analytics, and no
-telemetry. The privacy policy linked from this listing describes every data flow.
+Your keys, settings, notes, and words stay in your Chrome profile. When you sign
+in with GitHub, the notes, words and review progress you save are mirrored to
+your own account on this project's own sync service, linked to your GitHub
+account. Signing out stops the mirroring and removes this browser's copy.
+There is no advertising, no analytics, and no telemetry. The privacy policy
+linked from this listing describes every data flow.
 
-The extension works without any key: the transcript, the notes and the vocabulary
-all run on your own machine. One AI provider key (DeepSeek, MiniMax, or OpenCode
-Go) turns on the summary, the translation and the explanations, and the panel
-says which half is waiting for one. A Supadata key is optional and only used as a
-fallback when the page cannot be read.
+The extension works without any key: the transcript, the search, the notes and
+the library all run on your own machine. One AI provider key (DeepSeek, MiniMax,
+or OpenCode Go) turns on the summary, the translation, the explanations, the
+tidying of a transcript line into a note, and the extraction of words, and the
+panel says which half is waiting for one. A Supadata key is optional and only
+used as a fallback when the page cannot be read. The spaced review of your
+words needs a GitHub sign-in, because the review schedule is kept on the sync
+service. An account can hold 20,000 notes and words together; when the limit is
+reached the service refuses the new note and tells you how many are already
+there.
 ```
 
 **类别**：Productivity / Education
@@ -141,15 +154,15 @@ fallback when the page cannot be read.
 | --- | --- | --- |
 | 原文 / 简体中文 / 双语字幕 | 有 | 侧边栏顶部的 Original / 中文 / Bilingual |
 | 字幕搜索并逐个跳转 | 有 | Transcript 标签页的搜索框和上下按钮 |
-| AI 摘要 + 章节 + 重点引用 | 有 | Summary 标签页 |
-| 选中文本讲解 | 有 | 选中字幕后弹出的工具条里的 Explain |
+| AI 摘要 + 章节 + 重点引用 | 有 | Summary 标签页（需要 AI 服务商 Key） |
+| 选中文本讲解 | 有 | 选中字幕后弹出的工具条里的 Explain（需要 AI 服务商 Key） |
 | 调用前先显示这次要花多少钱 | 有 | Summary 标签页的费用提示 |
-| 带时间戳的笔记，可修改，可跳回视频 | 有 | Notes 标签页 |
-| 生词本 + 定期复习 | 有 | Words 标签页（复习在同一页） |
+| 带时间戳的笔记，可修改，可跳回视频 | 有 | Notes 标签页。面板里写的笔记一字不改地保存；视频页面的 Note 按钮才会请 AI 整理字幕 |
+| 生词本 + 定期复习 | 有，但各有一个前提 | Words 标签页（复习在同一页）。挑生词需要 AI 服务商 Key；复习需要 GitHub 登录，因为计划存在同步服务上 |
 | 30 天视频库 | 有 | Library 标签页 |
 | 导出字幕为文本文件 | 有 | Transcript 标签页的 Export |
-| 导出笔记为 Markdown | 有 | Notes 标签页的 Export Markdown |
-| GitHub 登录备份笔记和生词 | 有 | 设置页 / 侧边栏的登录按钮 |
+| 复制笔记为 Markdown | 有，但只复制到剪贴板，不生成文件 | Notes 标签页的 Export Markdown |
+| GitHub 登录后镜像笔记、生词和复习进度 | 有 | 设置页 / 侧边栏的登录按钮。退出登录会停止镜像并清除这台浏览器上的副本 |
 | 网页控制台 | 有 | `https://ytd.panbo.space`（Notes / Favorites / Vocabulary / Review / Export / Delete my account） |
 
 ## 截图清单
@@ -158,17 +171,18 @@ fallback when the page cannot be read.
 稳定可用的下载地址（README 里用的是相对路径，复制到别处贴不出来）。文件名里有
 空格，URL 里必须写成 `%20`。
 
-**5 张在位，尺寸对，但内容已经落后一个版本。** 都在 `store/` 目录，全部是
-1280x800（商店要的 16:10）。第五轮改过界面（时间戳统一成一颗药丸、列表改成
-真列表、语言切换改成单选组、费用说明挪到字幕页），这五张拍的是改之前的样子；
-上架前要用 `.review/` 这一轮新拍的图重做。详见下面的「拍不到的那几张」。
+**5 张在位，尺寸对，内容就是现在的产品。** 都在 `store/` 目录，全部是 1280x800
+（商店要的 16:10）。五张是**同一个视频**（演示图里那支 Sam Altman 的访谈），
+因为商品页如果一张图是这支视频、下一张是另一支，看起来像两次会话拼在一起。
+它们不是手工拼的，是脚本从现在的面板上拍下来再贴进演示图的，所以产品改了
+以后重跑两条命令就能重新生成，不会再落后一个版本。
 
 | 文件 | 拍的是什么 | 怎么来的 |
 | --- | --- | --- |
-| `store/01-summary.png` | YouTube 播放页 + 侧边栏 Summary 标签页：AI 摘要和章节 | 仓库根目录的 `YouTube Digest demo.jpg`（2660x1560，比例不对）。顶部补了 103px 的白边（那一行本来就是纯白，接缝看不出来），再缩到 1280x800 |
-| `store/02-bilingual.png` | 同一支视频，侧边栏 Transcript 标签页的双语字幕 | 同上，来源是 `YouTube Digest demo bilingual.jpg` |
-| `store/03-transcript.png` | 侧边栏 Transcript 标签页：搜索框、导出、从 0:02 开始的全字幕 | 真实浏览器里拍的（640x400 的视口，2 倍像素密度） |
-| `store/04-notes.png` | 侧边栏 Notes 标签页：一条带时间戳的笔记和它的操作按钮 | 同上 |
+| `store/01-summary.png` | YouTube 播放页 + 侧边栏 Summary 标签页：AI 摘要、章节、要点 | 面板由 `node scripts/panel-review.js --store` 拍（450x780，2 倍像素密度），再由 `node scripts/store-shots.js` 贴进仓库根目录的 `YouTube Digest demo.jpg`（2660x1560），整幅缩到 1280x800 |
+| `store/02-bilingual.png` | 同一支视频，侧边栏 Transcript 标签页的双语字幕 | 同上，底图是 `YouTube Digest demo bilingual.jpg` |
+| `store/03-notes.png` | 侧边栏 Notes 标签页：带时间戳的笔记和它的操作按钮 | 同上 |
+| `store/04-words.png` | 侧边栏 Words 标签页：复习卡片和生词本 | 同上 |
 | `store/05-library.png` | 侧边栏 Library 标签页：读过的视频 | 同上 |
 
 raw 地址（合并并推送之后才有效）：
@@ -176,8 +190,8 @@ raw 地址（合并并推送之后才有效）：
 ```text
 https://raw.githubusercontent.com/hibernate-pano/youtube-digest/main/store/01-summary.png
 https://raw.githubusercontent.com/hibernate-pano/youtube-digest/main/store/02-bilingual.png
-https://raw.githubusercontent.com/hibernate-pano/youtube-digest/main/store/03-transcript.png
-https://raw.githubusercontent.com/hibernate-pano/youtube-digest/main/store/04-notes.png
+https://raw.githubusercontent.com/hibernate-pano/youtube-digest/main/store/03-notes.png
+https://raw.githubusercontent.com/hibernate-pano/youtube-digest/main/store/04-words.png
 https://raw.githubusercontent.com/hibernate-pano/youtube-digest/main/store/05-library.png
 ```
 
@@ -186,30 +200,31 @@ https://raw.githubusercontent.com/hibernate-pano/youtube-digest/main/store/05-li
 
 ### 截图是怎么拍的（换机器重拍时照着做）
 
-浏览器的侧边栏没法直接截图，所以侧边栏是**当成一个标签页**打开的：画面里没有
-浏览器地址栏，看起来就是一个 640x400 的面板。视口用 640x400、像素密度 2，
-截图就是 1280x800。面板会跟着播放器的位置滚动，所以拍之前把字幕列表滚回顶部，
-把要拍的那张卡片滚到画面中间。
+```bash
+node scripts/panel-review.js --store   # 拍面板，每个标签页一张，写进 .review-store/
+node scripts/store-shots.js             # 贴进演示图，写出 store/ 里的五张
+node scripts/store-shots.js --check     # 重拍一遍跟仓库里的比，不一致就退出 1
+```
 
-前两张（`01`、`02`）不是这么拍的：它们是从仓库根目录那两张演示图裁出来的。
-那两张图是真实浏览器的整屏截图，比例是 1.71 而不是商店要的 1.6，横向裁哪边都会
-切掉东西（左边是 YouTube 的 logo，右边是面板的 Library 标签），所以改成在顶部
-补一条白边——那一行本来就是纯白，接缝看不出来。
+浏览器的侧边栏没法直接截图，所以侧边栏是**当成一个标签页**打开的：画面里没有
+浏览器地址栏，看起来就是一个面板。视口用 450x780、像素密度 2，拍出来正好是
+900x1560，和演示图里侧边栏那一栏的宽度一模一样（那一栏从 x=1760 开始，宽度
+900，是量出来的不是估出来的），所以贴进去不用缩放，字不会糊。
+
+演示图是 2660x1560，比例不是商店要的 16:10。整幅缩到 1280x800，上下各留一条
+白边：那一行本来就是纯白，接缝看不出来。侧边栏按自己 450x780 的版面画，
+标题、标签页、按钮都是现在这一版的。
 
 ### 拍不到的那几张
 
-- **生词本（Words 标签页）**：需要能用的 AI Key。当前存着的 Key 已经过期
-  （DeepSeek 报 401，OpenCode Go 报 `api_key_expired`），生词、摘要、翻译、
-  讲解这几条路现在都跑不起来。换一个能用的 Key 之后就能拍。
+商店最多 5 张，现在这 5 张已经把位置占满了。下面这些拍得到，但没地方放：
+
 - **设置页（Options）**：四个 Key 输入框（Supadata、DeepSeek、MiniMax、
   OpenCode Go），不是旧材料里写的「两个」。
 - **网页控制台（Dashboard）**：登录后的 Notes / Favorites / Vocabulary / Review，
   以及 Export 和 Delete my account 按钮。控制台不是扩展本身，但商店描述里提到了
   它，给一张更完整。
 - **视频页上的 Digest 按钮**：`.review/` 里没有这张。
-
-商店最多 5 张，现在这 5 张已经把位置占满了。生词本那张换到 AI Key 之后，
-替换掉第 5 张（资料库）就行。
 
 `.review/` 那 6 张是内部图：420x900 的竖图，尺寸商店不收，右上角还显示着
 GitHub 登录名。它们不参与上架。
@@ -221,7 +236,9 @@ GitHub 登录名。它们不参与上架。
     "Raises the local storage limit from Chrome's default 10 MB to unlimited, so the cached transcripts, translations, and summaries of long videos fit on the device. The data stays in your Chrome profile and is never sent anywhere."
 - 隐私政策页已包含数据导出/删除说明，满足商店对账号系统的要求
 - 无付费功能，无需商品内购买设置
-- 数据使用披露表单要如实勾选：同步服务会处理你的 GitHub 标识、笔记、生词和复习进度，这些都要勾
+- 数据使用披露表单要如实勾选：同步服务会处理你的 GitHub 标识、笔记、生词和复习进度，
+  这些都要勾；另外还有一次会话期间使用的浏览器随机 id，它会被发到服务端但只活在
+  那次会话里，表单里也要按实际处理情况如实填
   - 字幕现在是**从页面里读的**，不发给任何第三方。Supadata 那一项按「用户自己填了 Key、
     且页面读不到时才会发生」来勾，不要写成默认行为
 - 名称里的 `YouTube` 商标风险见上面「名称与描述的合规核对」
@@ -243,16 +260,21 @@ GitHub 登录名。它们不参与上架。
 诚实地列一遍，按重要性排：
 
 - [x] **截图**。5 张 1280x800 已经在 `store/` 目录里，商店的 5 个位置正好。
+      五张是同一个视频、同一版界面，由脚本从现在的面板生成（见上面的「截图是怎么拍的」）。
 - [x] **隐私政策 URL 的内容**。线上那一页已经扩写成完整政策：扩展部分（数据处理、
       数据流向、留在设备上的东西、权限用途）加上原来的同步服务部分，中英文都有。
+- [ ] **线上隐私页和仓库政策对齐**。这一轮改了退出登录、删除账号、「删除全部笔记」、
+      导出、账号上限、浏览器的名字、无字幕视频的 24 小时记忆这几处说法，仓库里的
+      `PRIVACY.md` 和 `PRIVACY.zh-CN.md` 已经改完，线上那一页还没改。
 - [x] **图标**。`store/icon128.png` 是 128x128 的 RGB PNG（没有 alpha 通道，
       商店拒绝带透明的图标）。`icons/icon128.png` 保持带透明，扩展自己的工具栏图标
       需要圆角。上架时用 `store/` 这一张。
 - [ ] **支持邮箱**。商店要求一个有人看的联系方式，仓库现在没有。
 - [ ] **`manifest.json` 的 `name`**。如果因为商标问题换商店名称，这个文件要同步改
       （不在本文档组的改动范围内）。
-- [x] **版本号**。`manifest.json` 和 `package.json` 已经一起 bump 到 **1.7.3**。
-- [ ] **重新打包**。`dist/youtube-digest-v1.7.3.zip` 是第五轮改界面**之前**
-      打的包，里面没有这一轮的修复。上架前在仓库根目录跑一次 `npm run package`，
-      用新生成的包。`tests/release.test.js` 现在会核对包里的文件就是白名单里那一份，
-      但它核对不了「这个包是不是当前代码打的」——所以这一步只能靠人。
+- [x] **版本号**。`manifest.json` 和 `package.json` 已经一起 bump 到 **1.8.0**，
+      两个 README 的更新说明里都写着这一版。
+- [ ] **重新打包**。`dist/` 里现在只有旧版本打的包。上架前在仓库根目录跑一次
+      `npm run package`，用新生成的 `dist/youtube-digest-v1.8.0.zip`。
+      打包脚本跑完会自己用 `scripts/verify-package.js` 把包里的每一个文件和仓库里
+      的那一份对一遍，对不上就直接失败；所以这个包一定是从当前代码打的。
