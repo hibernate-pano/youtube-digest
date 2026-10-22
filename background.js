@@ -538,18 +538,35 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.action === "saveNote") {
-    // Save a note at the current timestamp, or save the exact text the side
-    // panel already has - selected transcript text or a key quote.
-    handleSaveNote(
-      message.videoId,
-      message.timestamp,
-      message.videoTitle,
-      message.channelName,
-      message.selectedText,
-      message.quote,
-    )
-      .then(sendResponse)
-      .catch((err) => sendResponse({ success: false, error: err.message }));
+    // The note is about the video the page is showing. The page's own
+    // answer is a guess: YouTube swaps the page under the reader, so the
+    // title on the screen can still belong to the video that is leaving.
+    // The player knows which video it is showing, so the worker asks it,
+    // and the page's guess is only used when the player cannot be read.
+    //
+    // The tab the note comes from is the tab the video is on, and the
+    // subtitles are read out of it before a credit is spent.
+    (async () => {
+      try {
+        const tabId = sender.tab?.id || null;
+        const snapshot = tabId ? await readPlayerSnapshot(tabId) : null;
+        const moment = Number.isFinite(message.timestamp)
+          ? message.timestamp
+          : snapshot?.currentTime ?? 0;
+        const result = await handleSaveNote(
+          snapshot?.videoId || message.videoId,
+          moment,
+          snapshot?.title || message.videoTitle,
+          snapshot?.channelName || message.channelName,
+          message.selectedText,
+          message.quote,
+          tabId,
+        );
+        sendResponse(result);
+      } catch (err) {
+        sendResponse({ success: false, error: err.message });
+      }
+    })();
     return true;
   }
 
@@ -602,6 +619,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.action === "logoutGithub") {
     handleLogoutGithub()
+      .then(sendResponse)
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  // The settings page asks the service about the session and about the
+  // account through the background. The session is bound to this browser,
+  // and the browser is named by a header the background adds to every
+  // call, so a surface that asked the service on its own would have to
+  // remember that too.
+  if (message.action === "verifyGithubSession") {
+    handleVerifyGithubSession()
+      .then(sendResponse)
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (message.action === "deleteGithubAccount") {
+    handleDeleteGithubAccount()
       .then(sendResponse)
       .catch((err) => sendResponse({ success: false, error: err.message }));
     return true;
@@ -793,73 +829,72 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     debugLog("[YouTube Digest BG] Relay request:", message.payload?.action);
     (async () => {
       try {
-        // Query specifically for YouTube tabs to avoid side panel context issues
-        // Try multiple query strategies to find the right tab
-        let tabs = await chrome.tabs.query({
-          active: true,
-          lastFocusedWindow: true,
-        });
-        debugLog(
-          "[YouTube Digest BG] Active tab in last focused window:",
-          tabs.length,
-          tabs[0]?.url,
-        );
+        // The panel knows which tab it belongs to, and it says so in the
+        // message. A relay without a tab id may only go to the tab the user
+        // is looking at: a YouTube tab in the background is a different
+        // video, and answering from it puts another video's moment into
+        // the note.
+        const requestedTabId = Number.isInteger(message.tabId)
+          ? message.tabId
+          : null;
 
-        // If no YouTube tab found, try broader query
-        if (!tabs[0] || !tabs[0].url?.includes("youtube.com")) {
-          tabs = await chrome.tabs.query({
-            url: "https://www.youtube.com/*",
+        let targetTabId = requestedTabId;
+        if (targetTabId === null) {
+          const tabs = await chrome.tabs.query({
             active: true,
+            lastFocusedWindow: true,
           });
-          debugLog("[YouTube Digest BG] Active YouTube tabs:", tabs.length);
-        }
-
-        // Still nothing? Try any YouTube tab
-        if (!tabs[0]) {
-          tabs = await chrome.tabs.query({ url: "https://www.youtube.com/*" });
-          debugLog("[YouTube Digest BG] Any YouTube tabs:", tabs.length);
-        }
-
-        if (tabs[0]) {
           debugLog(
-            "[YouTube Digest BG] Sending to tab:",
-            tabs[0].id,
-            "URL:",
-            tabs[0].url,
+            "[YouTube Digest BG] Active tab in last focused window:",
+            tabs.length,
+            tabs[0]?.url,
           );
-          let response = await chrome.tabs.sendMessage(
-            tabs[0].id,
-            message.payload,
-          );
-
-          // For getVideoInfo, PREFER YouTube's own player data over the
-          // DOM scrape. The player's videoDetails is canonical: its `author`
-          // is always THIS video's channel and its `shortDescription` is the
-          // full text. The DOM scrape is unreliable — e.g. on a playlist page
-          // it grabbed the playlist owner's name ("Zara Zhang") instead of the
-          // real channel ("Replit and Stripe"), and its description is
-          // truncated while the box is collapsed. We fall back to the DOM
-          // only for fields the player didn't provide.
-          if (message.payload?.action === "getVideoInfo") {
-            const playerInfo = await getPlayerVideoDetails(tabs[0].id);
-            if (playerInfo) {
-              response = {
-                title: playerInfo.title || response?.title || "",
-                channelName:
-                  playerInfo.channelName || response?.channelName || "",
-                duration: playerInfo.duration || response?.duration || 0,
-                description:
-                  playerInfo.description || response?.description || "",
-              };
-            }
+          if (tabs[0]?.url?.includes("youtube.com")) {
+            targetTabId = tabs[0].id;
           }
+        }
 
-          debugLog("[YouTube Digest BG] Got response from content:", response);
-          sendResponse({ success: true, response });
-        } else {
+        if (targetTabId === null) {
           debugLog("[YouTube Digest BG] No YouTube tab found");
           sendResponse({ success: false, error: "No YouTube tab found" });
+          return;
         }
+
+        debugLog(
+          "[YouTube Digest BG] Sending to tab:",
+          targetTabId,
+          "URL:",
+          requestedTabId === null ? "the tab in front" : "the tab the panel named",
+        );
+        let response = await chrome.tabs.sendMessage(
+          targetTabId,
+          message.payload,
+        );
+
+        // For getVideoInfo, PREFER YouTube's own player data over the
+        // DOM scrape. The player's videoDetails is canonical: its `author`
+        // is always THIS video's channel and its `shortDescription` is the
+        // full text. The DOM scrape is unreliable — e.g. on a playlist page
+        // it grabbed the playlist owner's name ("Zara Zhang") instead of the
+        // real channel ("Replit and Stripe"), and its description is
+        // truncated while the box is collapsed. We fall back to the DOM
+        // only for fields the player didn't provide.
+        if (message.payload?.action === "getVideoInfo") {
+          const playerInfo = await readPlayerSnapshot(targetTabId);
+          if (playerInfo) {
+            response = {
+              title: playerInfo.title || response?.title || "",
+              channelName:
+                playerInfo.channelName || response?.channelName || "",
+              duration: playerInfo.duration || response?.duration || 0,
+              description:
+                playerInfo.description || response?.description || "",
+            };
+          }
+        }
+
+        debugLog("[YouTube Digest BG] Got response from content:", response);
+        sendResponse({ success: true, response });
       } catch (err) {
         console.error("[YouTube Digest BG] Relay error:", err.message);
         sendResponse({ success: false, error: err.message });
@@ -870,17 +905,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 /**
- * Reads the current video's full details straight from YouTube's player.
+ * Reads the video the page is showing, in one read.
  *
  * Content scripts live in an isolated world and can't touch the page's own
  * JavaScript. But with the "scripting" permission we can run a tiny function
  * in the page's MAIN world, where YouTube's player object lives. Its
  * getPlayerResponse() carries videoDetails with the FULL description —
- * unlike the DOM, which truncates it until the user clicks "...more".
+ * unlike the DOM, which truncates it until the user clicks "...more", and
+ * which names the playlist owner instead of the channel on a playlist page.
+ *
+ * Everything comes out of one read of the player on purpose. The DOM and the
+ * URL are read at their own moments, and YouTube swaps the page under the
+ * reader: a note can be filed under the next video while carrying the title
+ * of the one that is leaving. The player is one object that knows one video.
  *
  * Returns null on any failure so callers can fall back to DOM scraping.
+ *
+ * @param {number} tabId the YouTube tab to read
+ * @returns {Promise<{videoId: string, title: string, channelName: string, description: string, duration: number, currentTime: number|null}|null>}
  */
-async function getPlayerVideoDetails(tabId) {
+async function readPlayerSnapshot(tabId) {
   try {
     const results = await chrome.scripting.executeScript({
       target: { tabId },
@@ -890,11 +934,24 @@ async function getPlayerVideoDetails(tabId) {
           const player = document.getElementById("movie_player");
           const details = player?.getPlayerResponse?.()?.videoDetails;
           if (!details) return null;
+
+          // The player knows where it is. A player that cannot say is still
+          // showing a video, so the moment is unknown and stays unknown.
+          let currentTime = null;
+          try {
+            const seconds = player?.getCurrentTime?.();
+            if (Number.isFinite(seconds)) currentTime = Number(seconds);
+          } catch (error) {
+            // No position to report.
+          }
+
           return {
+            videoId: String(details.videoId || ""),
             title: details.title || "",
             channelName: details.author || "",
             description: details.shortDescription || "",
             duration: Number(details.lengthSeconds) || 0,
+            currentTime,
           };
         } catch (e) {
           return null;
@@ -952,12 +1009,13 @@ async function getPlayerVideoDetails(tabId) {
  * @param {number} tabId the YouTube tab to read
  * @returns {Promise<{state: string, videoId?: string, tracks?: Array<{baseUrl: string, languageCode: string, kind: string}>, usedUrl?: string|null}|null>}
  */
-async function readCaptionTracksFromTab(tabId) {
+async function readCaptionTracksFromTab(tabId, expectedVideoId = null) {
   try {
     const results = await chrome.scripting.executeScript({
       target: { tabId },
       world: "MAIN",
-      func: () => {
+      args: [expectedVideoId],
+      func: (wantedVideoId) => {
         try {
           // Every answer the page can give is collected, because the one
           // that carries the caption tracks is the one the page is really
@@ -982,21 +1040,52 @@ async function readCaptionTracksFromTab(tabId) {
           // The page has the player response inline before the player
           // object exists. A page that has not started playing yet is
           // exactly the case where the local path is most valuable.
+          //
+          // The inline script holds a JSON object, not a statement. Its
+          // first ";" is usually inside a string, so the end of the object
+          // is found by counting the braces instead.
+          const readInlineResponse = (text, start) => {
+            let depth = 0;
+            let inString = false;
+            let escaped = false;
+            for (let index = start; index < text.length; index += 1) {
+              const char = text[index];
+              if (inString) {
+                if (escaped) escaped = false;
+                else if (char === "\\") escaped = true;
+                else if (char === '"') inString = false;
+                continue;
+              }
+              if (char === '"') {
+                inString = true;
+                continue;
+              }
+              if (char === "{") {
+                depth += 1;
+                continue;
+              }
+              if (char === "}") {
+                depth -= 1;
+                if (depth !== 0) continue;
+                try {
+                  return JSON.parse(text.slice(start, index + 1));
+                } catch (error) {
+                  // A malformed inline script is not the one we want. Keep
+                  // looking: a page carries several of them.
+                  return null;
+                }
+              }
+            }
+            return null;
+          };
+
           const marker = "var ytInitialPlayerResponse = ";
           for (const script of document.querySelectorAll("script")) {
             const text = script.textContent || "";
             const index = text.indexOf(marker);
             if (index === -1) continue;
-            const start = index + marker.length;
-            const end = text.indexOf(";", start);
-            if (end === -1) continue;
-            try {
-              const parsed = JSON.parse(text.slice(start, end));
-              if (parsed) responses.push(parsed);
-            } catch (error) {
-              // A malformed inline script is not the one we want. Keep
-              // looking: a page carries several of them.
-            }
+            const parsed = readInlineResponse(text, index + marker.length);
+            if (parsed) responses.push(parsed);
           }
 
           const hasTracks = (response) => {
@@ -1006,13 +1095,21 @@ async function readCaptionTracksFromTab(tabId) {
             return Array.isArray(tracks) && tracks.length > 0;
           };
 
-          const playerResponse = responses.find(hasTracks) || null;
+          // A page carries responses for more than one video: the inline
+          // script still holds the previous one after a navigation. The
+          // response for the video that was asked for is the one that
+          // belongs to this read.
+          const isWanted = (response) =>
+            !wantedVideoId ||
+            String(response?.videoDetails?.videoId || "") === wantedVideoId;
+          const forThisVideo = responses.filter(isWanted);
+          const playerResponse = forThisVideo.find(hasTracks) || null;
 
           if (!playerResponse) {
             // No answer carries caption tracks. A page with no player
             // response at all is still loading; a page that knows which
             // video it is showing is showing a video without subtitles.
-            const anyResponse = responses[0] || null;
+            const anyResponse = forThisVideo[0] || responses[0] || null;
             if (!anyResponse) return { state: "no-response" };
             return {
               state: "no-tracks",
@@ -1354,9 +1451,10 @@ function buildTranscriptResult(chunks, language) {
     if (!cleanText) continue;
 
     const startSeconds = Math.floor((chunk.offset || 0) / 1000);
-    const minutes = Math.floor(startSeconds / 60);
-    const seconds = startSeconds % 60;
-    const timestamp = `${minutes}:${String(seconds).padStart(2, "0")}`;
+    // The same formatter the paid path and the note stamps use. A video
+    // longer than an hour has to say 1:30:00, and not 90:00: a chapter or
+    // a quote that points at 90:00 points at the wrong second.
+    const timestamp = YTD_SETTINGS.formatTimestamp(startSeconds);
 
     transcript.push({
       text: cleanText,
@@ -1500,11 +1598,11 @@ const RETRYABLE_LOCAL_READ_REASONS = new Set([
  * @param {string} expectedVideoId the video the caller wants
  * @returns {Promise<Object>} the transcript, or a failure with a reason
  */
-async function tryLocalTranscript(tabId, expectedVideoId) {
+async function tryLocalTranscript(tabId, expectedVideoId, options = {}) {
   if (!tabId) {
     return { success: false, reason: LOCAL_READ_REASONS.PAGE_NOT_READY };
   }
-  const captionTracks = await readCaptionTracksFromTab(tabId);
+  const captionTracks = await readCaptionTracksFromTab(tabId, expectedVideoId);
   if (!captionTracks || captionTracks.state === "no-response") {
     debugLog("[YouTube Digest BG] The page has no player response yet");
     return { success: false, reason: LOCAL_READ_REASONS.PAGE_NOT_READY };
@@ -1557,7 +1655,8 @@ async function tryLocalTranscript(tabId, expectedVideoId) {
       // How long the video may be given to start. YouTube asks the page
       // for the captions when the video starts playing, so a page that is
       // still showing an advertisement has nothing to read yet.
-      startTimeoutMs: YTD_SETTINGS.LOCAL_CAPTION_START_TIMEOUT_MS,
+      startTimeoutMs:
+        options.startTimeoutMs || YTD_SETTINGS.LOCAL_CAPTION_START_TIMEOUT_MS,
     });
     usedUrl = asked?.url || null;
     videoNotStarted = asked?.videoNotStarted === true;
@@ -2528,11 +2627,59 @@ function createNoteId() {
 }
 
 /**
+ * A note is saved while the user is watching. The page asks for the
+ * captions when the video plays, so a note must not wait long for a video
+ * that is not playing: the user is told to press play instead.
+ */
+const NOTE_LOCAL_START_TIMEOUT_MS = 2500;
+
+/**
+ * Reads the subtitles a note needs, from the page the note comes from.
+ *
+ * The page the user is looking at has the subtitles, and reading them there
+ * is free. A note must not spend a credit, and must not fail because no
+ * Supadata key is set, for words the page is already showing.
+ *
+ * @param {string} videoId the video the note is about
+ * @param {number|null} tabId the tab the note comes from, when there is one
+ * @returns {Promise<Object>} the transcript, or a failure
+ */
+async function readTranscriptForNote(videoId, tabId) {
+  if (tabId) {
+    const local = await tryLocalTranscript(tabId, videoId, {
+      startTimeoutMs: NOTE_LOCAL_START_TIMEOUT_MS,
+    });
+    if (local?.success) {
+      debugLog("[YouTube Digest BG] Note text read out of the page:", videoId);
+      return { ...local, source: "local" };
+    }
+    // The page asks for the captions when the video plays. Paying for them
+    // now would buy exactly what the page is about to hand over.
+    if (local?.reason === LOCAL_READ_REASONS.VIDEO_NOT_STARTED) {
+      return { success: false, error: "VIDEO_NOT_STARTED" };
+    }
+  }
+
+  const remote = await handleFetchTranscript(videoId);
+  if (remote.success) return { ...remote, source: "supadata" };
+  return remote;
+}
+
+/**
  * Saves a note at a timestamp. Exact text is stored directly.
  *
  * The side panel hands over the words it already has: the selected
  * transcript text or a key quote. Other note requests find the relevant
  * transcript line and clean it up.
+ *
+ * @param {string} videoId the video the note is about
+ * @param {number} timestamp the moment, in seconds
+ * @param {string} videoTitle the title of the video
+ * @param {string} channelName the channel of the video
+ * @param {string} selectedText the text the user selected, when there is any
+ * @param {string} quoteText the quote the panel picked, when there is one
+ * @param {number|null} tabId the tab the note comes from, when there is one
+ * @returns {Promise<Object>} the saved note, or a failure
  */
 async function handleSaveNote(
   videoId,
@@ -2541,6 +2688,7 @@ async function handleSaveNote(
   channelName,
   selectedText,
   quoteText,
+  tabId = null,
 ) {
   try {
     const canonicalVideoUrl = YTD_SETTINGS.canonicalYouTubeUrl(videoId);
@@ -2594,9 +2742,12 @@ async function handleSaveNote(
 
     // If no cached transcript, fetch it
     if (!transcript) {
-      const transcriptResult = await handleFetchTranscript(videoId);
+      const transcriptResult = await readTranscriptForNote(videoId, tabId);
       if (!transcriptResult.success) {
-        return { success: false, error: "Could not fetch transcript" };
+        return {
+          success: false,
+          error: transcriptResult.error || "Could not fetch transcript",
+        };
       }
       transcript = transcriptResult.transcript;
     }
@@ -3175,6 +3326,8 @@ globalThis.__YTD_TRANSLATION_TESTING__ = {
   transcriptFailureCacheKey,
   tryLocalTranscript,
   readCaptionTracksFromTab,
+  readPlayerSnapshot,
+  readTranscriptForNote,
   loadCaptionUrlInTab,
   captionUrlForTrack,
   pickCaptionTrack,

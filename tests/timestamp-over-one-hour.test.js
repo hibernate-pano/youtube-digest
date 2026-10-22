@@ -374,6 +374,22 @@ test("a note that comes back from the cloud carries the same stamp", () => {
   );
 });
 
+test("the subtitles read out of the page carry the hours part", () => {
+  const runtime = loadBackgroundRuntime();
+
+  // The subtitles that are read out of the page are free, so they are
+  // the ones a note is made of most of the time. Their markers are read
+  // by the model, and a marker in the old shape points at the wrong
+  // second of a video longer than an hour.
+  const result = runtime.buildTranscriptResult([LATE_CHUNK], "en");
+
+  assert.equal(
+    result.transcriptTextTimestamped,
+    `[${HOUR_STAMP}] the last thing the speaker says`,
+    "the marker the model reads is missing the hours part",
+  );
+});
+
 // ============================================================
 // The panel
 // ============================================================
@@ -663,6 +679,7 @@ test("every path that writes a stamp writes the same one", async () => {
     0,
   );
   const transcript = await runtime.handleFetchTranscript("videoA");
+  const pageTranscript = runtime.buildTranscriptResult([LATE_CHUNK], "en");
   const note = await runtime.handleSaveNote(
     "videoA",
     NINETY_MINUTES,
@@ -692,6 +709,8 @@ test("every path that writes a stamp writes the same one", async () => {
     "the chapter the panel shows": analysis.analysis.chapters[0].timestamp,
     "the quote the panel shows": analysis.analysis.keyQuotes[0].timestamp,
     "the marker the model reads": transcript.transcriptTextTimestamped,
+    "the marker the model reads from the page":
+      pageTranscript.transcriptTextTimestamped,
     "the duration the model is told": userPrompt.match(
       /VIDEO DURATION: (\S+)/,
     )[1],

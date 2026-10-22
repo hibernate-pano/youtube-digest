@@ -51,6 +51,10 @@ let ytdNoteLabel = null;
 let ytdNoteButtonTimer = null;
 let ytdNoteKeyboardListenerAdded = false;
 let ytdNoteButtonRetryTimer = null;
+let ytdNotePlayer = null;
+let ytdNotePlayerListeners = null;
+let ytdNotePlayerPositionAdded = false;
+let ytdNoteSelectedText = "";
 let ytdDigestButton = null;
 let ytdDigestLabel = null;
 let digestButtonObserver = null;
@@ -481,7 +485,7 @@ const PANEL_COPY = {
     digest: "Digest",
     opening: "Opening…",
     note: "Note",
-    saving: "Saving…",
+    saving: "Saving...",
     saved: "Saved",
     error: "Error",
     noteSaved: "Note saved",
@@ -497,15 +501,18 @@ const PANEL_COPY = {
       "This page does not look like a YouTube video. Open the video itself and try again.",
     saveFailed:
       "The extension could not reach the page. Try again in a moment.",
-    tryAgain: "Try again in a moment.",
+    tryAgain: "Try Again",
     savedAt: "Saved at {timestamp}.",
     savedToVideo: "The note was saved to this video.",
+    embedPageTitle: "This is an embedded player",
+    embedPageBody:
+      "YouTube Digest works on the page of the video itself. Open the video on YouTube to take notes on it.",
   },
   "zh-CN": {
     digest: "摘要",
     opening: "打开中…",
     note: "笔记",
-    saving: "保存中…",
+    saving: "保存中...",
     saved: "已保存",
     error: "出错",
     noteSaved: "笔记已保存",
@@ -521,9 +528,12 @@ const PANEL_COPY = {
     notAVideoPage:
       "这个页面看起来不是 YouTube 视频页，打开视频本身再试一次。",
     saveFailed: "扩展没能连上页面，过一会儿再试一次。",
-    tryAgain: "过一会儿再试一次。",
+    tryAgain: "重试",
     savedAt: "已保存在 {timestamp}。",
     savedToVideo: "笔记已经保存到这个视频。",
+    embedPageTitle: "这是嵌入式播放器",
+    embedPageBody:
+      "YouTube Digest 在视频自己的页面上工作。打开 YouTube 上的视频页就可以记笔记了。",
   },
 };
 
@@ -677,6 +687,15 @@ function init() {
   injectDigestButton();
   tryInjectNoteButton();
 
+  // An embedded player is a video on its own, and the page says nothing
+  // about the extension. A user who opens one and looks for the button
+  // has to be told where the button is.
+  if (window.location.pathname.startsWith("/embed/")) {
+    showToast(panelCopy("embedPageTitle"), panelCopy("embedPageBody"), {
+      id: "ytd-embed-hint",
+    });
+  }
+
   // Also set up an observer to handle YouTube's dynamic content loading
   // (YouTube is an SPA, so elements appear/disappear as you navigate)
   setupButtonObserver();
@@ -761,9 +780,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "getCurrentTime") {
     // Return the current video playback time (used by auto-scroll)
     const video = document.querySelector("video.html5-main-video");
+    if (!video) {
+      // A page with no video has no moment. Answering with zero would
+      // put a note at the start of a video the panel cannot even see.
+      sendResponse({ available: false, paused: true });
+      return false;
+    }
     sendResponse({
-      currentTime: video ? Math.floor(video.currentTime) : 0,
-      paused: video ? video.paused : true,
+      available: true,
+      currentTime: Math.floor(video.currentTime),
+      paused: video.paused,
     });
     return false;
   }
@@ -780,13 +806,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // The background tells the page when the language changes, because the
     // content script cannot watch storage itself.
     setPanelLanguage(message.language);
-    sendResponse({ success: true });
-    return false;
-  }
-
-  if (message.action === "showNoteSavedFeedback") {
-    // Show brief feedback that note was saved
-    showNoteSavedToast(message.note);
     sendResponse({ success: true });
     return false;
   }
@@ -1065,12 +1084,24 @@ function injectNoteButton() {
     return;
   }
 
-  // Ensure the player container has relative positioning for absolute children
+  // YouTube keeps the same player from one video to the next, so whatever
+  // was attached to the last one has to come off before this one is put
+  // up. A listener that is never removed runs once more for every video
+  // the user opens.
+  detachNoteButtonFromPlayer();
+
+  // The button floats over the player, so the player has to be the
+  // element it is positioned against. YouTube's own stylesheet already
+  // positions it, and an inline style outranks that stylesheet: writing
+  // one here would silence a change YouTube makes later. So it is only
+  // written when the player is not positioned at all, and it is taken
+  // back when the button goes.
   if (
-    window.getComputedStyle(playerContainer).position === "static" ||
+    window.getComputedStyle(playerContainer).position === "static" &&
     !playerContainer.style.position
   ) {
     playerContainer.style.position = "relative";
+    ytdNotePlayerPositionAdded = true;
   }
 
   debugLog("[YouTube Digest Content] Injecting note button");
@@ -1118,27 +1149,45 @@ function injectNoteButton() {
 
   // Show button when mouse enters or moves over the player.
   // Hide after 2 seconds of idle or when the mouse leaves.
-  playerContainer.addEventListener("mouseenter", () => {
+  //
+  // The handlers are kept, so they can be taken off again. An anonymous
+  // function cannot be removed, and one that stays on the player is
+  // called once more for every video the user opens.
+  const onPlayerEnter = () => {
     showNoteButton();
     resetNoteButtonTimer();
-  });
-
-  playerContainer.addEventListener("mousemove", () => {
+  };
+  const onPlayerMove = () => {
     showNoteButton();
     resetNoteButtonTimer();
-  });
-
-  playerContainer.addEventListener("mouseleave", () => {
+  };
+  const onPlayerLeave = () => {
     clearTimeout(ytdNoteButtonTimer);
     ytdNoteButtonTimer = null;
     hideNoteButton();
-  });
+  };
+
+  playerContainer.addEventListener("mouseenter", onPlayerEnter);
+  playerContainer.addEventListener("mousemove", onPlayerMove);
+  playerContainer.addEventListener("mouseleave", onPlayerLeave);
+  ytdNotePlayer = playerContainer;
+  ytdNotePlayerListeners = {
+    enter: onPlayerEnter,
+    move: onPlayerMove,
+    leave: onPlayerLeave,
+  };
 
   // Click handler — save the current moment as a note
   noteButton.addEventListener("click", async (e) => {
     e.preventDefault();
     e.stopPropagation();
     await saveCurrentNote();
+  });
+
+  // The click can take the selection away, so the words the user had
+  // highlighted are remembered when the button is pressed down.
+  noteButton.addEventListener("mousedown", () => {
+    ytdNoteSelectedText = readSelectedText();
   });
 
   playerContainer.appendChild(noteButton);
@@ -1149,6 +1198,37 @@ function injectNoteButton() {
   hideNoteButton();
 
   debugLog("[YouTube Digest Content] Note button injected");
+}
+
+/**
+ * Takes the note button off the player.
+ *
+ * YouTube keeps the same player element from one video to the next, so
+ * the mouse listeners have to be taken off with it: a listener that is
+ * never removed is called once more for every video the user opens.
+ *
+ * The position style is taken back as well. It was ours, and an inline
+ * style outranks YouTube's own stylesheet, so leaving it behind would
+ * keep a decision that is not ours on YouTube's element.
+ */
+function detachNoteButtonFromPlayer() {
+  const player = ytdNotePlayer;
+  const listeners = ytdNotePlayerListeners;
+  ytdNotePlayer = null;
+  ytdNotePlayerListeners = null;
+
+  if (!player) return;
+
+  if (listeners && typeof player.removeEventListener === "function") {
+    player.removeEventListener("mouseenter", listeners.enter);
+    player.removeEventListener("mousemove", listeners.move);
+    player.removeEventListener("mouseleave", listeners.leave);
+  }
+
+  if (ytdNotePlayerPositionAdded) {
+    player.style.position = "";
+    ytdNotePlayerPositionAdded = false;
+  }
 }
 
 /**
@@ -1201,6 +1281,12 @@ function handleNoteKeyboardShortcut(e) {
   if (!window.location.pathname.includes("/watch")) return;
   if (e.key !== "n" && e.key !== "N") return;
 
+  // YouTube has shortcuts of its own, and Shift+N is one of them: it
+  // skips to the next video. A shortcut of ours that cannot be told
+  // apart from YouTube's own would take the next video and leave a note
+  // behind on the one that is leaving. So only the plain key is ours.
+  if (e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return;
+
   // Ignore if the user is typing in an input/textarea/contenteditable
   const active = document.activeElement;
   if (
@@ -1212,14 +1298,35 @@ function handleNoteKeyboardShortcut(e) {
     return;
   }
 
-  // Prevent YouTube's own "n" shortcut (e.g. next video in playlist)
+  // The page must not act on the key either. stopPropagation() cannot
+  // stop YouTube's own handler, which was registered first, so the key
+  // is only kept from the browser's own shortcuts.
   e.preventDefault();
-  e.stopPropagation();
 
   // Show brief visual feedback on the button, then save
   showNoteButton();
   resetNoteButtonTimer();
   saveCurrentNote();
+}
+
+/**
+ * Reads the text the user has selected on the page.
+ *
+ * A note about a sentence the user highlighted is about that sentence,
+ * and the words are already there: reading the whole transcript to get
+ * them would cost a credit and would replace them with the model's idea
+ * of the line.
+ *
+ * @returns {string} the selected text, or an empty string
+ */
+function readSelectedText() {
+  try {
+    const selection = window.getSelection?.();
+    const text = selection ? String(selection.toString() || "") : "";
+    return text.replace(/\s+/g, " ").trim().slice(0, 3000);
+  } catch (err) {
+    return "";
+  }
 }
 
 /**
@@ -1255,6 +1362,12 @@ async function saveCurrentNote() {
   const currentTime = Math.max(0, Math.floor(video.currentTime) - 3);
   const videoInfo = extractVideoInfo();
 
+  // The text the user highlighted, when there is any. The click on the
+  // button can take the selection away, so what was selected when the
+  // button was pressed down is remembered as well.
+  const selectedText = ytdNoteSelectedText || readSelectedText();
+  ytdNoteSelectedText = "";
+
   setNoteButtonState("saving", panelCopy("saving"));
 
   try {
@@ -1264,6 +1377,7 @@ async function saveCurrentNote() {
       timestamp: currentTime,
       videoTitle: videoInfo.title,
       channelName: videoInfo.channelName,
+      selectedText: selectedText,
     });
 
     if (result.success) {
@@ -1281,10 +1395,19 @@ async function saveCurrentNote() {
     } else {
       setNoteButtonState("error", panelCopy("error"));
       console.error("[YouTube Digest] Save note error:", result.error);
-      showToast(
-        panelCopy("couldNotSaveNote"),
-        panelCopy("tryAgain"),
-      );
+      if (result.error === "VIDEO_NOT_STARTED") {
+        // The page asks for the subtitles when the video plays, and the
+        // note is about a moment the video has not reached yet.
+        showToast(
+          panelCopy("couldNotSaveNote"),
+          panelCopy("videoNotPlaying"),
+        );
+      } else {
+        showToast(
+          panelCopy("couldNotSaveNote"),
+          panelCopy("tryAgain"),
+        );
+      }
     }
   } catch (err) {
     setNoteButtonState("error", panelCopy("error"));
@@ -1329,7 +1452,11 @@ function showToast(
     ${footerHtml}
   `;
 
-  document.body.appendChild(toast);
+  // A fullscreen video is the top layer of the page: anything outside it
+  // is not shown at all. The toast has to go in with the video, or the
+  // user who went fullscreen never learns that the note was saved.
+  const host = document.fullscreenElement || document.body;
+  host.appendChild(toast);
 
   // Auto-dismiss after 5 seconds
   if (dismissAfter > 0) {
@@ -1385,6 +1512,31 @@ function showNoteSavedToast(note) {
 // ============================================================
 
 /**
+ * Reads the description of the video.
+ *
+ * The description is in the inline expander under the video. Two other
+ * elements look like it: the box around the expander also holds the line
+ * with the view count, and the head of the page carries an element with
+ * the same name. Reading either of them gives a note about the view
+ * count, so they are left alone here.
+ *
+ * @returns {string} the description, or an empty string
+ */
+function readDescriptionText() {
+  const expanded = document.querySelector(
+    "#description-inline-expander #expanded yt-attributed-string",
+  );
+  const expandedText = expanded?.textContent?.trim() || "";
+  if (expandedText) return expandedText;
+
+  const snippet = document.querySelector(
+    "#description-inline-expander #snippet-text, " +
+      "ytd-text-inline-expander #snippet yt-attributed-string",
+  );
+  return snippet?.textContent?.trim() || "";
+}
+
+/**
  * Reads the video title, channel name, and description directly from YouTube's page.
  * These are just sitting in the HTML — we grab them from the DOM elements.
  */
@@ -1402,19 +1554,11 @@ function extractVideoInfo() {
   // Video duration from the video element
   const videoElement = document.querySelector("video.html5-main-video");
 
-  // Video description — YouTube has this in a few possible places
-  const descriptionElement = document.querySelector(
-    "#description-inner, " +
-      "ytd-watch-metadata #description yt-attributed-string, " +
-      "#description yt-formatted-string, " +
-      "ytd-expander#description yt-attributed-string",
-  );
-
   return {
     title: titleElement?.textContent?.trim() || "",
     channelName: channelElement?.textContent?.trim() || "",
     duration: videoElement?.duration || 0,
-    description: descriptionElement?.textContent?.trim() || "",
+    description: readDescriptionText(),
   };
 }
 
@@ -1477,6 +1621,10 @@ document.addEventListener("yt-navigate-finish", () => {
 
   const existingNoteButton = document.getElementById("ytd-note-button");
   if (existingNoteButton) existingNoteButton.remove();
+
+  // The player is still the same element, and it still carries the mouse
+  // listeners of the video that is leaving.
+  detachNoteButtonFromPlayer();
 
   // Reset note button state
   ytdNoteButton = null;
