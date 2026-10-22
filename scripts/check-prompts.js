@@ -12,16 +12,25 @@
  * This module is the release gate's copy of that parser.
  * `tests/prompt-fences.test.js` drives the real `loadPromptSection()` and
  * compares it with `parsePromptSection()` here, so the two cannot drift.
+ *
+ * The gate also reads the names the other way round. The worker asks for a
+ * section by name, and some of those names are chosen while it runs, so a
+ * file and the code could drift apart without any call showing it. A
+ * section the code does not name is a section the code cannot read, and
+ * the name the code does use is missing from the file: the feature breaks
+ * in the browser and the gate says nothing. So every section of a prompt
+ * file has to be named by the code.
  */
 
 const fs = require("node:fs");
 const path = require("node:path");
 
 /**
- * Sections that document the placeholders of a prompt file instead of
- * holding a prompt. They are the only sections allowed to have no fence.
+ * Sections that document the placeholders or the output of a prompt file
+ * instead of holding a prompt. They are the only sections allowed to have
+ * no fence, and the only ones the code is not expected to ask for.
  */
-const PROMPT_DOCUMENTATION_SECTIONS = new Set(["Variables"]);
+const PROMPT_DOCUMENTATION_SECTIONS = new Set(["Variables", "Output format"]);
 
 /**
  * Reads one section of a prompt file, exactly like the runtime does.
@@ -80,7 +89,8 @@ function listPromptSections(markdown) {
  *
  * The scan mirrors the call sites: `loadPromptSection("<file>", "<heading>")`.
  * A heading that is computed at runtime (the translation prompts pick one of
- * two sections) is not listed here, but the per-file check below covers it.
+ * two sections) is not listed here, so the per-file check covers it: a
+ * section the code does not name is a section the code cannot read.
  *
  * @param {string} source the JavaScript that loads the prompts.
  * @returns {{file: string, heading: string}[]}
@@ -96,19 +106,47 @@ function collectRequiredSections(source) {
 }
 
 /**
+ * Whether the production code names this prompt section.
+ *
+ * The worker asks for a section by its name. Some of the names are written
+ * in the call, but the translation prompts pick theirs while they run, so
+ * the code and the file can drift apart without the call ever showing it:
+ * a renamed heading passed the gate and then threw "Prompt section not
+ * found" in the browser on every translation.
+ *
+ * @param {{source: string}[]} sources the production code.
+ * @param {string} heading the name of the section.
+ * @returns {boolean} true when the code uses this name.
+ */
+function namesSection(sources, heading) {
+  if (!Array.isArray(sources)) {
+    // The check is the one thing that catches a renamed section, so it may
+    // not be skipped by a caller that forgot to pass the code along.
+    throw new Error("the prompt check needs the production code to compare the names with");
+  }
+  const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`(["'])${escaped}\\1`);
+  return sources.some((entry) => pattern.test(entry.source));
+}
+
+/**
  * Checks the prompt documents.
  *
- * Two rules:
+ * Three rules:
  * 1. every section the production code asks for must exist and carry a
  *    parseable code fence;
  * 2. every other section of a prompt file must carry one too, unless it is
- *    a documentation section.
+ *    a documentation section;
+ * 3. every section that is not documentation must be named by the code.
+ *    A section the code never names is a section the code cannot read, and
+ *    the name the code does use is missing from the file.
  *
  * @param {{file: string, markdown: string}[]} documents the prompt files.
  * @param {{file: string, heading: string}[]} required the sections the code asks for.
+ * @param {{file: string, source: string}[]} sources the production code.
  * @returns {string[]} the problems found, empty when the prompts are fine.
  */
-function validatePromptDocuments(documents, required) {
+function validatePromptDocuments(documents, required, sources) {
   const problems = [];
   const byFile = new Map(documents.map((doc) => [doc.file, doc]));
 
@@ -133,6 +171,12 @@ function validatePromptDocuments(documents, required) {
       } catch (error) {
         problems.push(
           `${document.file}#${section.heading} has no readable code fence`,
+        );
+      }
+      if (!namesSection(sources, section.heading)) {
+        problems.push(
+          `${document.file}#${section.heading} is not the name the code asks for, ` +
+            "so the code is looking for a section this file does not have",
         );
       }
     }
@@ -167,7 +211,7 @@ function readPromptProject(root) {
     }));
 
   const required = sources.flatMap((entry) => collectRequiredSections(entry.source));
-  return { documents, required };
+  return { documents, required, sources };
 }
 
 function main(argv) {
@@ -177,8 +221,8 @@ function main(argv) {
       ? path.resolve(__dirname, "..")
       : path.resolve(argv[rootIndex + 1] || ".");
 
-  const { documents, required } = readPromptProject(root);
-  const problems = validatePromptDocuments(documents, required);
+  const { documents, required, sources } = readPromptProject(root);
+  const problems = validatePromptDocuments(documents, required, sources);
 
   if (problems.length > 0) {
     for (const problem of problems) {
@@ -200,6 +244,7 @@ module.exports = {
   parsePromptSection,
   listPromptSections,
   collectRequiredSections,
+  namesSection,
   validatePromptDocuments,
   readPromptProject,
   PROMPT_DOCUMENTATION_SECTIONS,

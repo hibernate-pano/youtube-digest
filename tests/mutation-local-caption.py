@@ -217,7 +217,7 @@ MUTATIONS = [
         ],
     },
     {
-        "name": "M9 the video the page is showing is not checked",
+        "name": "M9 the video the page is showing is not checked -> a page that never catches up does not blame the video",
         "file": "background.js",
         "hunks": [
             (
@@ -228,7 +228,7 @@ MUTATIONS = [
         "expect": [
             (
                 "local-transcript.test.js",
-                "the captions of a different video are not used",
+                "a page that never catches up does not blame the video",
             ),
         ],
     },
@@ -554,8 +554,10 @@ MUTATIONS = [
         "file": "background.js",
         "hunks": [
             (
-                """      startTimeoutMs: YTD_SETTINGS.LOCAL_CAPTION_START_TIMEOUT_MS,""",
-                """      startTimeoutMs: 100,""",
+                """      startTimeoutMs:
+        options.startTimeoutMs || YTD_SETTINGS.LOCAL_CAPTION_START_TIMEOUT_MS,""",
+                """      startTimeoutMs:
+        options.startTimeoutMs || 100,""",
             )
         ],
         "expect": [

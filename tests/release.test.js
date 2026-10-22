@@ -6,6 +6,8 @@ const path = require("node:path");
 const root = path.resolve(__dirname, "..");
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
 
+const { loadBackgroundHelpers } = require("./helpers/background-harness.js");
+
 /**
  * True for a host that lives on the user's own machine.
  *
@@ -389,24 +391,155 @@ test("runtime has no source-file credential dependency or retired model", () => 
   assert.match(runtime, /deepseek-v4-flash/);
 });
 
-test("background reconciles side-panel state after navigation commits", () => {
-  const background = read("background.js");
+/**
+ * The side panel follows the tab the user is on.
+ *
+ * The worker listens for tab updates and decides, from the update itself,
+ * whether the panel has to move. A title or a favicon says nothing about
+ * where the user is, so it must not move anything: a panel that opens and
+ * closes while the user reads is a panel the user cannot look at.
+ *
+ * The worker is run here, not read: a test that matches the source proves
+ * that the words are still there, not that the panel behaves.
+ */
+function recordPanelCalls(rejectTabClose = false) {
+  const calls = [];
+  return {
+    calls,
+    sidePanel: {
+      setPanelBehavior() {},
+      close: async (options) => {
+        calls.push(["close", options]);
+        if (rejectTabClose && options.tabId) {
+          throw new Error("Global panel");
+        }
+      },
+      setOptions: async (options) => calls.push(["setOptions", options]),
+    },
+  };
+}
 
-  assert.match(
+/** Lets the worker's own promises settle. */
+function settle() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+/** Fires every tab listener the worker registered, the way Chrome does. */
+function fireTabUpdate(background, tabId, changeInfo, tab) {
+  for (const listener of background.tabUpdatedListeners) {
+    listener(tabId, changeInfo, tab);
+  }
+}
+
+test("a title change on its own does not move the side panel", async () => {
+  const { calls, sidePanel } = recordPanelCalls();
+  const background = loadBackgroundHelpers({ sidePanel });
+
+  fireTabUpdate(
     background,
-    /function getNavigationUrl\(changeInfo, tab\)[\s\S]*changeInfo\.status !== "loading"[\s\S]*changeInfo\.status !== "complete"[\s\S]*tab\.pendingUrl \|\| tab\.url/,
+    17,
+    { title: "A video with a new name" },
+    {
+      id: 17,
+      url: "https://www.youtube.com/watch?v=abc123",
+      windowId: 4,
+    },
   );
-  assert.match(
-    background,
-    /chrome\.tabs\.onUpdated\.addListener\(\(tabId, changeInfo, tab\)[\s\S]*getNavigationUrl\(changeInfo, tab\)[\s\S]*updatePanelForTab\(tabId, url, tab\.windowId\)/,
+  await settle();
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(calls)),
+    [],
+    "a title says nothing about where the user is, so the panel must stay",
   );
-  assert.match(
+});
+
+test("a navigation away from YouTube closes the panel and disables it", async () => {
+  const { calls, sidePanel } = recordPanelCalls();
+  const background = loadBackgroundHelpers({ sidePanel });
+
+  fireTabUpdate(
     background,
-    /function closePanelForTab\(tabId, windowId\)[\s\S]*chrome\.sidePanel\.close\(\{ tabId \}\)[\s\S]*chrome\.sidePanel\.close\(\{ windowId \}\)/,
+    17,
+    { url: "https://example.com/somewhere-else", status: "loading" },
+    { id: 17, url: "https://example.com/somewhere-else", windowId: 4 },
   );
-  assert.match(
+  await settle();
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(calls)),
+    [
+      ["close", { tabId: 17 }],
+      ["setOptions", { tabId: 17, enabled: false }],
+    ],
+    "the panel has to be closed before it is disabled, or Chrome opens it again",
+  );
+});
+
+test("a global panel is closed by window when the tab close is rejected", async () => {
+  const { calls, sidePanel } = recordPanelCalls(true);
+  const background = loadBackgroundHelpers({ sidePanel });
+
+  fireTabUpdate(
     background,
-    /await closePanelForTab\(tabId, windowId\);[\s\S]*setOptions\(\{ tabId, enabled: false \}\)/,
+    17,
+    { url: "https://example.com/somewhere-else", status: "loading" },
+    { id: 17, url: "https://example.com/somewhere-else", windowId: 4 },
+  );
+  await settle();
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(calls)),
+    [
+      ["close", { tabId: 17 }],
+      ["close", { windowId: 4 }],
+      ["setOptions", { tabId: 17, enabled: false }],
+    ],
+    "Chrome 145 and later reject a tab id for a global panel",
+  );
+});
+
+test("a navigation to YouTube opens the panel for that tab", async () => {
+  const { calls, sidePanel } = recordPanelCalls();
+  const background = loadBackgroundHelpers({ sidePanel });
+
+  fireTabUpdate(
+    background,
+    17,
+    { url: "https://www.youtube.com/watch?v=abc123", status: "loading" },
+    { id: 17, url: "https://www.youtube.com/watch?v=abc123", windowId: 4 },
+  );
+  await settle();
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(calls)),
+    [["setOptions", { tabId: 17, path: "sidepanel.html", enabled: true }]],
+    "the panel has to be enabled for the tab the user is on",
+  );
+});
+
+test("the panel follows the tab the user switched to", async () => {
+  const { calls, sidePanel } = recordPanelCalls();
+  const background = loadBackgroundHelpers({
+    sidePanel,
+    tabs: {
+      get: async () => ({
+        id: 23,
+        url: "https://www.youtube.com/watch?v=def456",
+        windowId: 4,
+      }),
+    },
+  });
+
+  for (const listener of background.tabActivatedListeners) {
+    listener({ tabId: 23, windowId: 4 });
+  }
+  await settle();
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(calls)),
+    [["setOptions", { tabId: 23, path: "sidepanel.html", enabled: true }]],
+    "the tab the user switched to is the tab the panel belongs to",
   );
 });
 

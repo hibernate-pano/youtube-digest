@@ -71,6 +71,42 @@ jobs:
         env:
           YTD_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres_test
 
+  mutation:
+    name: Prove the tests catch broken behaviour
+    runs-on: ubuntu-latest
+    # Each script breaks one piece of the extension on purpose and waits for
+    # the test that guards it to go red. They take minutes, not seconds, and
+    # they change the same files while they run, so they are given a job of
+    # their own with room to finish.
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+
+      # The scripts run the test suite, and the panel suite drives the real
+      # panel in a real DOM, so jsdom has to be there.
+      - name: Install extension test dependencies
+        run: npm ci
+
+      # One script after another. Every script edits the source files it
+      # breaks and puts them back, so two of them running at the same time
+      # would hand each other a half-mutated tree and prove nothing. The
+      # shell stops at the first script that fails: a mutation that nobody
+      # noticed is the failure this job exists to catch.
+      - name: Run the mutation scripts in order
+        run: |
+          for script in tests/mutation-*.py; do
+            echo "::group::$script"
+            python3 "$script"
+            echo "::endgroup::"
+          done
+
   release-check:
     name: Validate public extension package
     runs-on: ubuntu-latest

@@ -105,11 +105,14 @@ function makeScratchRoot(mutate = () => {}) {
 // ============================================================
 
 test("the release gate accepts every prompt file that ships", () => {
-  const { documents, required } = checker.readPromptProject(root);
+  const { documents, required, sources } = checker.readPromptProject(root);
 
   assert.ok(documents.length >= 5, "the extension ships several prompt files");
   assert.ok(required.length >= 8, "the worker asks for several prompt sections");
-  assert.deepEqual(checker.validatePromptDocuments(documents, required), []);
+  assert.deepEqual(
+    checker.validatePromptDocuments(documents, required, sources),
+    [],
+  );
 });
 
 test("the release gate runs as a command and passes on the shipped prompts", () => {
@@ -147,7 +150,7 @@ test("the release gate rejects a prompt file whose first fence is gone", () => {
 });
 
 test("the release gate rejects a prompt section the code asks for but that is gone", () => {
-  const { documents, required } = checker.readPromptProject(root);
+  const { documents, required, sources } = checker.readPromptProject(root);
   const broken = documents.map((document) =>
     document.file === "vocabulary.md"
       ? {
@@ -157,15 +160,42 @@ test("the release gate rejects a prompt section the code asks for but that is go
       : document,
   );
 
-  const problems = checker.validatePromptDocuments(broken, required);
+  const problems = checker.validatePromptDocuments(broken, required, sources);
   assert.ok(
     problems.some((problem) => problem.includes("vocabulary.md#System prompt")),
     `the renamed section must be reported, got: ${problems.join(" | ")}`,
   );
 });
 
+test("the release gate rejects a prompt section the code names while it runs", () => {
+  // The translation prompts do not name their section in the call: they
+  // choose one of two while they run. Renaming the section in the file used
+  // to pass the gate, and every translation in the browser then failed with
+  // "Prompt section not found".
+  const { documents, required, sources } = checker.readPromptProject(root);
+  const broken = documents.map((document) =>
+    document.file === "translation.md"
+      ? {
+          file: document.file,
+          markdown: document.markdown.replace(
+            "## Transcript batch translation",
+            "## Transcript batch",
+          ),
+        }
+      : document,
+  );
+
+  const problems = checker.validatePromptDocuments(broken, required, sources);
+  assert.ok(
+    problems.some((problem) =>
+      problem.includes("translation.md#Transcript batch is not the name"),
+    ),
+    `the renamed section must be reported, got: ${problems.join(" | ")}`,
+  );
+});
+
 test("the release gate rejects a prompt file with a malformed fence", () => {
-  const { documents, required } = checker.readPromptProject(root);
+  const { documents, required, sources } = checker.readPromptProject(root);
   const broken = documents.map((document) =>
     document.file === "vocabulary.md"
       ? {
@@ -177,7 +207,7 @@ test("the release gate rejects a prompt file with a malformed fence", () => {
       : document,
   );
 
-  const problems = checker.validatePromptDocuments(broken, required);
+  const problems = checker.validatePromptDocuments(broken, required, sources);
   assert.ok(
     problems.length > 0,
     "a fence that never closes must be reported",
