@@ -300,41 +300,9 @@ if ((${#javascript_files[@]} > 0)); then
   fi
 fi
 
-node - "${credential_scan_files[@]}" <<'NODE'
-const fs = require("fs");
-
-const patterns = [
-  ["private key block", /-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----/g],
-  ["OpenAI-style key", /\bsk-[A-Za-z0-9_-]{20,}\b/g],
-  ["Supadata-style key", /\bsd_[A-Za-z0-9_-]{16,}\b/g],
-  ["GitHub token", /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b/g],
-  ["GitHub fine-grained token", /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g],
-  ["Google API key", /\bAIza[0-9A-Za-z_-]{30,}\b/g],
-  ["Slack token", /\bxox[baprs]-[0-9A-Za-z-]{20,}\b/g],
-  ["AWS access key", /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g],
-  [
-    "credential assignment",
-    /\b(?:api[_-]?key|secret|access[_-]?token|auth[_-]?token)\b\s*[:=]\s*["'][^"'\s]{16,}["']/gi,
-  ],
-];
-
-let found = false;
-for (const file of process.argv.slice(2)) {
-  if (!/\.(?:js|json|html|css|md|txt|yml|yaml|sh)$/i.test(file) && file !== "LICENSE") {
-    continue;
-  }
-  const text = fs.readFileSync(file, "utf8");
-  for (const [label, pattern] of patterns) {
-    pattern.lastIndex = 0;
-    if (pattern.test(text)) {
-      console.error(`possible ${label} found in publishable repository file: ${file}`);
-      found = true;
-    }
-  }
-}
-
-if (found) process.exit(1);
-NODE
+# The scan lives in its own program so a test can plant a secret in a
+# scratch file and watch it fail. A gate that cannot fail is not a gate.
+node scripts/scan-credentials.js "${credential_scan_files[@]}"
 
 log "Release checks passed (${#release_files[@]} allowlisted files)."
 

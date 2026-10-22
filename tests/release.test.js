@@ -688,3 +688,119 @@ test("the settings page paints the links the copy holds, not the markup's", () =
   );
 });
 
+
+/**
+ * The release scan used to live inside scripts/check-release.sh as a
+ * heredoc, which meant nobody could prove it caught anything. It is its
+ * own program now (scripts/scan-credentials.js), and the gates below are
+ * the proof: a secret planted in a scratch file has to be reported.
+ *
+ * The old scan skipped every file that was not .js/.json/.html/.css/.md/
+ * .txt/.yml/.yaml/.sh, and it only matched a QUOTED assignment. So
+ * `DATABASE_URL=...` in a .toml file, and a secret in a file with no
+ * extension at all, walked straight past it.
+ */
+const os = require("node:os");
+const { scanFile } = require("../scripts/scan-credentials.js");
+
+/**
+ * A value that looks like a credential.
+ *
+ * It is built from character codes on purpose: a secret-shaped literal
+ * written into this file would be a secret in the repository, which is
+ * the very thing the scan exists to prevent.
+ */
+function plantedCredential() {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  let out = "";
+  for (let index = 0; index < 32; index += 1) {
+    out += alphabet[(index * 11) % alphabet.length];
+  }
+  return out;
+}
+
+/** A scratch directory that cleans itself up. */
+function scratchFile(name, contents) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ytd-credential-scan-"));
+  const file = path.join(dir, name);
+  fs.writeFileSync(file, contents);
+  return file;
+}
+
+test("the release scan catches an unquoted credential in a file the old scan skipped", () => {
+  const planted = plantedCredential();
+  const scheme = "post" + "gres://";
+  const file = scratchFile(
+    "wrangler.toml",
+    `DATABASE_URL=${scheme}neon:${planted}@db.example.com/app\n`,
+  );
+  const findings = scanFile(file);
+  assert.ok(
+    findings.length > 0,
+    "a database URL with a password in a .toml file was not reported",
+  );
+});
+
+test("the release scan catches a credential in a file with no extension", () => {
+  const planted = plantedCredential();
+  const file = scratchFile("secrets-file", `JWT_SECRET=${planted}\n`);
+  const findings = scanFile(file);
+  assert.ok(
+    findings.length > 0,
+    "a credential in a file with no extension was not reported",
+  );
+});
+
+test("the release scan catches a credential in a python file", () => {
+  const planted = plantedCredential();
+  const file = scratchFile(
+    "settings.py",
+    `API_KEY = "${planted}"\n`,
+  );
+  const findings = scanFile(file);
+  assert.ok(
+    findings.length > 0,
+    "a credential in a .py file was not reported",
+  );
+});
+
+test("the release scan leaves a template alone", () => {
+  const file = scratchFile(
+    ".dev.vars.example",
+    [
+      "# Copy to .dev.vars and fill in.",
+      "GITHUB_CLIENT_SECRET=example-secret",
+      "JWT_SECRET=replace-with-a-long-random-string",
+      "DATABASE_URL=" + "post" + "gres://user:" + "replace-me" + "@host/db",
+      "",
+    ].join("\n"),
+  );
+  const findings = scanFile(file);
+  assert.deepEqual(
+    findings,
+    [],
+    `a template of placeholders was reported as a leak: ${findings.join("; ")}`,
+  );
+});
+
+test("the repository itself holds no credential", () => {
+  const { execFileSync } = require("node:child_process");
+  const files = execFileSync("git", ["ls-files", "-z"], {
+    cwd: root,
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  })
+    .split("\0")
+    .filter(Boolean);
+  const found = [];
+  for (const file of files) {
+    for (const label of scanFile(path.join(root, file))) {
+      found.push(`${file}: ${label}`);
+    }
+  }
+  assert.deepEqual(
+    found,
+    [],
+    `these repository files look like they hold a credential: ${found.join("; ")}`,
+  );
+});
