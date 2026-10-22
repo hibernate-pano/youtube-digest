@@ -683,6 +683,13 @@ body {
   font-weight: 500;
   color: var(--accent);
   background: var(--accent-dim);
+  /* The chip is a chip, not a button the browser drew. A button carries a
+     border of its own, and the border the browser drew was a grey groove
+     around a pill: the one element in the panel that looked like it came
+     from somewhere else. The rule owns the whole chip, so no renderer has
+     to write a border into the markup to get one. */
+  border: 0;
+  cursor: pointer;
   border-radius: var(--r-pill);
   padding: 3px 8px;
   /* Wide enough for "1:30:00" - seven monospace characters - and the same
@@ -694,13 +701,13 @@ body {
   white-space: nowrap;
 }
 
-/* The transcript renderer writes its own background and its own alignment
-   into the markup of the button, and an inline style beats a rule. The chip
-   needs both of them, so these two declarations win until the inline style
-   goes. */
+/* The transcript chip sits in a flex row, and a flex item is stretched to
+   the height of the row unless it says otherwise. Left alone, the stamp
+   grew into an oval on every long line. The transcript row is the only
+   place a stamp has to say where it sits in the row; everywhere else the
+   chip is in a line of text and keeps its own height. */
 .transcript-time {
-  background: var(--accent-dim) !important;
-  text-align: center !important;
+  align-self: flex-start;
 }
 
 /* ============================================================

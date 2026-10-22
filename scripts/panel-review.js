@@ -313,10 +313,10 @@ function makeChrome() {
  * not a small problem: `chrome.tabs.onActivated.addListener(...)` sits at the
  * top level of sidepanel.js, so a stub without it throws during script
  * evaluation, every later `const` in the file stays in its temporal dead
- * zone, and the panel renders the "API Keys Missing" error screen instead
- * of the product. That is exactly what happened: the first version of this
- * stub did not have `chrome.tabs.onActivated`, so every screenshot in the
- * repository was a picture of an error message.
+ * zone, and the panel renders its error screen instead of the product.
+ * That is exactly what happened: the first version of this stub did not
+ * have `chrome.tabs.onActivated`, so every screenshot in the repository
+ * was a picture of an error message.
  *
  * Keep this list in step with the panel. When the panel starts using a new
  * chrome API, add it here — and the gate below will tell you when you
@@ -421,8 +421,8 @@ function buildChromeStub(payload) {
             };
           case "checkConfig":
             // The panel must be able to get past its own configuration gate,
-            // otherwise every tab renders the "API Keys Missing" dead end
-            // and the review photographs an error screen.
+            // otherwise every tab renders the error screen and the review
+            // photographs an error screen instead of the product.
             //
             // `hasAiKey: false` is a state a real user is in: the free half
             // of the product works without a key, and the panel says which
@@ -730,6 +730,54 @@ const READ_CONTRAST = () => {
 };
 
 /**
+ * Reads the timestamp chips.
+ *
+ * A timestamp is the one control that shows up in four places, and the
+ * panel is supposed to draw it as one pill everywhere. It did not: the
+ * transcript chip was a real button, so it carried the border the browser
+ * gives a button, and the stamp the reader sees most often was a grey
+ * groove around a pill. The stylesheet owns the chip now, and this gate
+ * measures what the browser painted, so the groove cannot come back
+ * unnoticed.
+ *
+ * The height is measured too. The transcript chip sits in a flex row, and
+ * a flex item that says nothing about itself is stretched to the height of
+ * the row, which turned the stamp into an oval on every long line.
+ */
+const READ_CHIPS = () => {
+  const problems = [];
+  const chips = document.querySelectorAll(
+    ".chapter-timestamp, .quote-timestamp, .note-timestamp, .transcript-time, .word-timestamp",
+  );
+  for (const chip of chips) {
+    const style = window.getComputedStyle(chip);
+    if (style.display === "none" || style.visibility === "hidden") continue;
+    if (chip.offsetParent === null && style.position !== "fixed") continue;
+    const label = (chip.textContent || "").trim() || "the timestamp";
+    const border = parseFloat(style.borderTopWidth) || 0;
+    if (border > 0) {
+      problems.push(
+        `The timestamp "${label}" is painted with a ${border}px border. ` +
+          `The chip carries its own shape; a border around it is the ` +
+          `browser's, not the design's.`,
+      );
+    }
+    // A stamp is one line tall. A chip that is taller than its own text is
+    // a chip that has been stretched into something else.
+    const fontSize = parseFloat(style.fontSize) || 0;
+    const height = chip.getBoundingClientRect().height;
+    if (fontSize && height > fontSize * 2.4) {
+      problems.push(
+        `The timestamp "${label}" is ${Math.round(height)}px tall. ` +
+          `A stamp is one line, so it belongs under ` +
+          `${Math.round(fontSize * 2.4)}px here.`,
+      );
+    }
+  }
+  return problems;
+};
+
+/**
  * Opens the panel with a given configuration.
  *
  * The panel is opened in its own browser context because the configuration
@@ -950,6 +998,10 @@ async function main() {
       await page.waitForTimeout(220);
       const problems = await page.evaluate(READ_LAYOUT);
       for (const problem of problems) {
+        failures.push(`At ${width}px, on the ${tab} tab: ${problem}`);
+      }
+      const chipProblems = await page.evaluate(READ_CHIPS);
+      for (const problem of chipProblems) {
         failures.push(`At ${width}px, on the ${tab} tab: ${problem}`);
       }
     }
