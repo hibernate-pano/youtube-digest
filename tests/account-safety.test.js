@@ -138,3 +138,165 @@ test("two notes saved at the same time do not lose one", async () => {
     "the note of the first save must survive the second one",
   );
 });
+
+/* ============================================================
+   The storage that holds the user's keys.
+
+   The YouTube page is not a trusted context, so the extension locks its
+   storage away from it. That lock is the reason the page cannot read the
+   API keys. The call can fail, and a failure that only reaches the
+   console is a failure the user never hears about - so the worker has to
+   be able to say that the storage is open.
+   ============================================================ */
+
+/**
+ * Loads the service worker in a sandbox whose storage lock can be made to
+ * fail.
+ *
+ * The shared harness always lets the call succeed, and the whole point of
+ * these tests is the call that fails, so the worker is loaded here.
+ */
+function loadWorker({
+  storageMock = createStorageMock({}),
+  setAccessLevelImpl = () => Promise.resolve(),
+  fetchImpl = async () => ({ ok: true, status: 200, json: async () => ({}) }),
+} = {}) {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const vm = require("node:vm");
+  const root = path.resolve(__dirname, "..");
+  const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
+
+  const messageListeners = [];
+  const listeners = { addListener() {} };
+  const sandbox = {
+    console,
+    URL,
+    TextDecoder,
+    TextEncoder,
+    AbortController,
+    crypto: globalThis.crypto,
+    setTimeout: () => 0,
+    clearTimeout: () => {},
+    fetch: fetchImpl,
+    importScripts() {},
+    chrome: {
+      storage: {
+        local: {
+          setAccessLevel: setAccessLevelImpl,
+          get: (key) => storageMock.get(key),
+          set: (values) => storageMock.set(values),
+          remove: (keys) => storageMock.remove(keys),
+        },
+        onChanged: { addListener() {} },
+      },
+      action: { onClicked: listeners },
+      sidePanel: {
+        setPanelBehavior() {},
+        setOptions: () => Promise.resolve(),
+        open: () => Promise.resolve(),
+      },
+      runtime: {
+        onInstalled: listeners,
+        onMessage: {
+          addListener(listener) {
+            messageListeners.push(listener);
+          },
+        },
+        openOptionsPage() {},
+        getURL: (resourcePath) => `chrome-extension://test/${resourcePath}`,
+        sendMessage: () => Promise.resolve({ success: true }),
+      },
+      tabs: {
+        onUpdated: { addListener() {} },
+        onActivated: { addListener() {} },
+        query: async () => [],
+        sendMessage: async () => {},
+        create: async () => ({ id: 1 }),
+      },
+    },
+    // The real settings module, with only the network host swapped for
+    // the test double.
+    YTD_SETTINGS: {
+      ...require("../settings.js"),
+      SERVER_BASE_URL: "https://sync.test",
+    },
+  };
+  sandbox.globalThis = sandbox;
+  // cloud-sync.js is imported by background.js through importScripts; the
+  // test sandbox stubs importScripts, so it is loaded explicitly first.
+  vm.runInNewContext(read("cloud-sync.js"), sandbox);
+  vm.runInNewContext(read("background.js"), sandbox);
+  return { sandbox, messageListeners };
+}
+
+/** Sends a message through the worker's router and waits for the answer. */
+function askWorker(messageListeners, message) {
+  return new Promise((resolve) => {
+    const keepGoing = messageListeners[0](message, {}, resolve);
+    if (keepGoing !== true) resolve(undefined);
+  });
+}
+
+test("the worker says the storage could not be locked away from the YouTube page", async () => {
+  const { messageListeners } = loadWorker({
+    setAccessLevelImpl: () =>
+      Promise.reject(new Error("This browser cannot restrict storage access.")),
+  });
+
+  const answer = await askWorker(messageListeners, {
+    action: "getStorageIsolation",
+  });
+
+  assert.equal(answer.success, true);
+  assert.equal(
+    answer.restricted,
+    false,
+    "the worker says the storage is locked when the lock failed",
+  );
+});
+
+test("the worker says the storage is locked when it is", async () => {
+  const { messageListeners } = loadWorker();
+
+  const answer = await askWorker(messageListeners, {
+    action: "getStorageIsolation",
+  });
+
+  assert.equal(answer.success, true);
+  assert.equal(answer.restricted, true);
+});
+
+test("Delete all notes reaches the account through the worker", async () => {
+  const calls = [];
+  const storageMock = createStorageMock({
+    ytd_github_session: {
+      token: "jwt-token",
+      login: "alice",
+      githubId: 1001,
+      savedAt: 1,
+    },
+  });
+  const { messageListeners } = loadWorker({
+    storageMock,
+    fetchImpl: async (url, options) => {
+      calls.push({ url: String(url), options: options || {} });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ ok: true, deleted: 4 }),
+      };
+    },
+  });
+
+  const answer = await askWorker(messageListeners, { action: "deleteAllNotes" });
+
+  assert.equal(answer.success, true, JSON.stringify(answer));
+  assert.equal(answer.deleted, 4);
+  const deletions = calls.filter(
+    (call) => (call.options.method || "GET") === "DELETE",
+  );
+  assert.equal(deletions.length, 1, "the account was never asked to delete the notes");
+  assert.match(deletions[0].url, /\/api\/notes$/);
+  assert.equal(deletions[0].options.headers.Authorization, "Bearer jwt-token");
+});

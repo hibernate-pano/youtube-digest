@@ -62,7 +62,11 @@ function loadCloudSync({ fetchImpl, storage = {} } = {}) {
             Object.assign(storage, patch);
           },
           async remove(key) {
-            delete storage[key];
+            // The real storage takes a list of keys as well as a single
+            // one, and the deletion of an account removes a list.
+            for (const name of Array.isArray(key) ? key : [key]) {
+              delete storage[name];
+            }
           },
         },
       },
@@ -530,5 +534,279 @@ test("a delete that is older than the note is dropped before the merge", async (
     plain(storage.ytd_notes_1001.map((note) => note.text)),
     ["the note again"],
     "the note the user re-created was eaten by the stale delete",
+  );
+});
+
+/* ============================================================
+   What an account leaves on this device.
+
+   The device holds more than the notes and the words: it holds the queues
+   of deletes that have not reached the server yet, and those queues carry
+   the user's own text. A sign-out that leaves them behind hands the next
+   person who opens the browser the sentences of the person who was here
+   before.
+   ============================================================ */
+
+test("signing out takes the account's notes, words and queued deletes with it", async () => {
+  const storage = {
+    ytd_github_session: SESSION,
+    ytd_notes_1001: [localNote("note_1", "alice's note", "uuid-alice", OLD)],
+    ytd_vocabulary_1001: [{ id: "vocab_1", term: "a word" }],
+    ytd_notes_dropped_1001: { total: 3 },
+    ytd_vocabulary_dropped_1001: { total: 2 },
+    ytd_pending_deletes_1001: [{ clientId: "note_1", deletedAt: OLD }],
+    ytd_pending_vocab_deletes_1001: [
+      { key: "vocab_1", term: "a word", sentence: "the user's own sentence" },
+    ],
+    // Another account on the same device. It is not this account's to
+    // delete.
+    ytd_notes_2002: [localNote("note_2", "bob's note", "uuid-bob", OLD)],
+    ytd_pending_vocab_deletes_2002: [
+      { key: "vocab_2", term: "another word", sentence: "another sentence" },
+    ],
+  };
+  const { sandbox } = loadCloudSync({
+    storage,
+    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({}) }),
+  });
+
+  await sandbox.handleLogoutGithub();
+
+  assert.equal(storage.ytd_github_session, undefined, "the session stayed");
+  for (const key of [
+    "ytd_notes_1001",
+    "ytd_vocabulary_1001",
+    "ytd_notes_dropped_1001",
+    "ytd_vocabulary_dropped_1001",
+    "ytd_pending_deletes_1001",
+    "ytd_pending_vocab_deletes_1001",
+  ]) {
+    assert.equal(
+      storage[key],
+      undefined,
+      `${key} was left on the device after the sign-out`,
+    );
+  }
+  assert.ok(storage.ytd_notes_2002, "another account's notes were deleted");
+  assert.ok(
+    storage.ytd_pending_vocab_deletes_2002,
+    "another account's words were deleted",
+  );
+});
+
+test("signing out of an account that is not there leaves the device alone", async () => {
+  const storage = {
+    ytd_notes: [{ id: "note-1" }],
+    ytd_vocabulary: [{ id: "word-1" }],
+  };
+  const { sandbox } = loadCloudSync({
+    storage,
+    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({}) }),
+  });
+
+  await sandbox.handleLogoutGithub();
+
+  assert.ok(storage.ytd_notes, "the notes saved while signed out were deleted");
+  assert.ok(storage.ytd_vocabulary, "the words saved while signed out were deleted");
+});
+
+test("re-authenticating an expired session keeps the account's data on the device", async () => {
+  // The user signs back into the same account. The dead token is dropped,
+  // but the account's notes and words are still theirs: a
+  // re-authentication is not a deletion.
+  const storage = {
+    ytd_github_session: SESSION,
+    ytd_sync_expired: true,
+    ytd_notes_1001: [localNote("note_1", "alice's note", "uuid-alice", OLD)],
+    ytd_vocabulary_1001: [{ id: "vocab_1", term: "a word" }],
+    ytd_pending_deletes_1001: [{ clientId: "note_1", deletedAt: OLD }],
+  };
+  const { sandbox, calls } = loadCloudSync({
+    storage,
+    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({}) }),
+  });
+
+  const result = await sandbox.handleStartGithubLogin();
+
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.equal(
+    result.replacedExpiredSession,
+    true,
+    "the expired session was not the one being replaced",
+  );
+  assert.equal(
+    storage.ytd_github_session,
+    undefined,
+    "the dead token was kept",
+  );
+  assert.ok(storage.ytd_notes_1001, "the account's notes were thrown away");
+  assert.ok(storage.ytd_vocabulary_1001, "the account's words were thrown away");
+  assert.ok(
+    storage.ytd_pending_deletes_1001,
+    "the account's queued deletes were thrown away",
+  );
+  assert.equal(
+    calls.filter((call) => (call.options.method || "GET") === "DELETE").length,
+    0,
+    "the re-authentication deleted something on the server",
+  );
+});
+
+/* ============================================================
+   "Delete all notes" has to reach the account.
+
+   A note that is only removed from this device comes back with the next
+   sync, because the account still has it. The account is asked to delete
+   its notes first.
+   ============================================================ */
+
+test("deleting all notes asks the account to delete them", async () => {
+  const storage = {
+    ytd_github_session: SESSION,
+    ytd_notes_1001: [localNote("note_1", "the note", "uuid-note_1", OLD)],
+  };
+  const { sandbox, calls } = loadCloudSync({
+    storage,
+    fetchImpl: async (url, options) => {
+      if ((options.method || "GET") === "DELETE") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ ok: true, deleted: 12 }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ notes: [] }) };
+    },
+  });
+
+  const result = await sandbox.handleDeleteAllNotes();
+
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.equal(result.deleted, 12, "the account did not say how many notes it deleted");
+  const deletions = requestsOf(calls, "DELETE");
+  assert.equal(deletions.length, 1, "the account was never asked to delete the notes");
+  assert.match(deletions[0].url, /\/api\/notes$/);
+  assert.equal(
+    deletions[0].options.headers.Authorization,
+    "Bearer jwt-token",
+    "the request carried no session token",
+  );
+});
+
+test("a delete the account refuses does not claim that the notes are gone", async () => {
+  const storage = {
+    ytd_github_session: SESSION,
+    ytd_notes_1001: [localNote("note_1", "the note", "uuid-note_1", OLD)],
+  };
+  const { sandbox } = loadCloudSync({
+    storage,
+    fetchImpl: async () => {
+      throw new Error("the network is down");
+    },
+  });
+
+  const result = await sandbox.handleDeleteAllNotes();
+
+  assert.equal(result.success, false, "a failed delete was reported as a success");
+  assert.match(result.error, /network is down/);
+  // The notes are still in the account, so the device keeps them: a note
+  // that is only removed here comes back with the next sync.
+  assert.equal(
+    storage.ytd_notes_1001.length,
+    1,
+    "the notes were removed from the device while the account still had them",
+  );
+});
+
+test("deleting all notes without a session is refused", async () => {
+  const storage = { ytd_notes: [{ id: "note-1" }] };
+  const { sandbox, calls } = loadCloudSync({
+    storage,
+    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({}) }),
+  });
+
+  const result = await sandbox.handleDeleteAllNotes();
+
+  assert.equal(result.success, false);
+  assert.equal(requestsOf(calls, "DELETE").length, 0);
+});
+
+/* ============================================================
+   The first sign-in has to say what it moved.
+   ============================================================ */
+
+test("the first sign-in reports how many notes and words moved into the account", async () => {
+  const storage = {
+    ytd_notes: [{ id: "note-1", text: "a note" }],
+    ytd_vocabulary: [{ id: "vocab-1", term: "a word" }],
+  };
+  const { sandbox } = loadCloudSync({
+    storage,
+    fetchImpl: async (url, options) => {
+      if (String(url).endsWith("/api/me")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ user: { id: "1", githubId: 1001, login: "alice" } }),
+        };
+      }
+      if ((options.method || "GET") === "POST") {
+        return {
+          ok: true,
+          status: 201,
+          json: async () => ({ note: { id: "uuid-1" }, vocabulary: { id: "uuid-2" } }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ notes: [], vocabulary: [] }),
+      };
+    },
+  });
+
+  const nonce = await sandbox.startPendingLogin();
+  const result = await sandbox.completeGithubLogin("token-alice", null, nonce);
+
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.equal(result.importedNotes, 1, "the sign-in did not say how many notes moved");
+  assert.equal(result.importedWords, 1, "the sign-in did not say how many words moved");
+  // The counts are kept on the device as well: the settings page may not
+  // have been open when the sign-in finished.
+  const report = storage.ytd_import_report;
+  assert.ok(report, "nothing was written down about the import");
+  assert.equal(report.notes, 1);
+  assert.equal(report.words, 1);
+});
+
+test("a sign-in that moved nothing says nothing", async () => {
+  const storage = {};
+  const { sandbox } = loadCloudSync({
+    storage,
+    fetchImpl: async (url) => {
+      if (String(url).endsWith("/api/me")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ user: { id: "1", githubId: 1001, login: "alice" } }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ notes: [], vocabulary: [] }),
+      };
+    },
+  });
+
+  const nonce = await sandbox.startPendingLogin();
+  const result = await sandbox.completeGithubLogin("token-alice", null, nonce);
+
+  assert.equal(result.importedNotes, 0);
+  assert.equal(result.importedWords, 0);
+  assert.equal(
+    storage.ytd_import_report,
+    undefined,
+    "a sign-in that moved nothing left a report behind",
   );
 });

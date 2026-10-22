@@ -27,11 +27,24 @@ const debugLog = (...args) => {
 
 // Prevent the YouTube content script from reading API keys or cached data.
 // Side panel, options, and service-worker contexts remain trusted.
-chrome.storage.local
-  .setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" })
-  .catch((error) =>
-    console.warn("[YouTube Digest] Could not restrict storage access:", error),
-  );
+//
+// The call can fail: a browser that does not allow it, or a profile that
+// refuses it. The failure is kept, because the settings page has to be able
+// to tell the user that the keys on this device are not locked away from
+// the page. The user did not cause it, so the page says it in one calm
+// sentence instead of blaming them.
+const storageIsolation = { restricted: true };
+const storageIsolationReady = (async () => {
+  try {
+    if (typeof chrome.storage.local.setAccessLevel !== "function") {
+      throw new Error("This browser cannot restrict storage access.");
+    }
+    await chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" });
+  } catch (error) {
+    storageIsolation.restricted = false;
+    console.warn("[YouTube Digest] Could not restrict storage access:", error);
+  }
+})();
 
 /**
  * The YouTube content script is not a trusted context: it cannot read
@@ -629,6 +642,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     handleLogoutGithub()
       .then(sendResponse)
       .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  // "Delete all notes" has to reach the account as well: a note that is
+  // only removed from this device comes back with the next sync. The
+  // session is bound to this browser, so the request is made here.
+  if (message.action === "deleteAllNotes") {
+    handleDeleteAllNotes()
+      .then(sendResponse)
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  // The settings page asks whether the storage is locked away from the
+  // YouTube page. The answer is a plain yes or no, and the page turns it
+  // into one sentence.
+  if (message.action === "getStorageIsolation") {
+    storageIsolationReady
+      .then(() =>
+        sendResponse({ success: true, restricted: storageIsolation.restricted }),
+      )
+      .catch(() => sendResponse({ success: true, restricted: false }));
     return true;
   }
 
@@ -3317,6 +3352,7 @@ globalThis.__YTD_TRANSLATION_TESTING__ = {
   fullSyncNotes,
   handleGetGithubSession,
   handleLogoutGithub,
+  handleDeleteAllNotes,
   completeGithubLogin,
   startPendingLogin,
   consumePendingLoginNonce,

@@ -61,7 +61,17 @@ const YTD_OPTIONS = (() => {
       githubLogout: "Sign out",
       githubLoginFailed: "GitHub sign-in failed. Please try again.",
       githubSessionExpired: "Your session expired. Sign in again.",
-      githubSignedOut: "Signed out. Your local data stays on this device.",
+      githubSignedOut:
+        "Signed out. There is no account data on this device to remove.",
+      githubSignedOutWithAccount:
+        "Signed out. The notes and words of your account were removed from this device. Your account still holds them on the sync service.",
+      logoutUnsyncedConfirm: ({ notes, words }) => {
+        const parts = [];
+        if (notes > 0) parts.push(`${notes} note${notes === 1 ? "" : "s"}`);
+        if (words > 0) parts.push(`${words} word${words === 1 ? "" : "s"}`);
+        const one = notes + words === 1;
+        return `This device holds ${parts.join(" and ")} that your account has never received. Signing out deletes ${one ? "it" : "them"} from this browser for good. Sign out anyway?`;
+      },
       githubDeleteAccount: "Delete my account",
       githubDeleteAccountConfirm:
         "Delete your account and ALL notes, words, and review progress? This cannot be undone.",
@@ -69,6 +79,8 @@ const YTD_OPTIONS = (() => {
         "Really delete everything, on the server and on this device? This is permanent.",
       githubDeleteAccountDeleted:
         "Account deleted. Your notes and words were removed from this device too.",
+      githubDeleteAccountNotSignedIn:
+        "You are not signed in, so there is no account to delete.",
       githubDeleteAccountFailed: "Could not delete the account: {message}",
       localRemix: "Local remix",
       customizationTitle: "Want to use another AI model?",
@@ -103,14 +115,29 @@ const YTD_OPTIONS = (() => {
       addSupadataKey: "Add a Supadata API key.",
       addAiKey: "Add the API key of your chosen AI provider.",
       saved: "Saved. Reopen YouTube Digest to use these settings.",
+      savedWithoutAiKey:
+        "Saved. Add the API key of your chosen AI provider to use the AI features.",
       saveFailed: "Could not save settings. Please try again.",
+      storageIsolationFailed:
+        "This browser could not lock the extension's storage, so the YouTube page may be able to read your API keys.",
+      importedToAccount: ({ notes, words }) => {
+        const parts = [];
+        if (notes > 0) parts.push(`${notes} note${notes === 1 ? "" : "s"}`);
+        if (words > 0) parts.push(`${words} word${words === 1 ? "" : "s"}`);
+        return `Moved ${parts.join(" and ")} saved while signed out into your account.`;
+      },
       copying: "Copying…",
       promptCopied: "Edited prompt copied.",
       copyFailed:
         "Could not copy the prompt. Select the prompt text and copy it manually.",
       clearedDigests: ({ count }) =>
         `Cleared ${count} cached digest${count === 1 ? "" : "s"}.`,
-      notesDeleted: "Deleted all saved notes.",
+      notesDeletedSignedIn: ({ count }) =>
+        `Deleted ${count} note${count === 1 ? "" : "s"} in your account, and the notes on this device.`,
+      notesDeletedSignedOut: ({ count }) =>
+        `Deleted ${count} note${count === 1 ? "" : "s"} on this device.`,
+      notesDeleteFailed: ({ message }) =>
+        `Could not delete the notes in your account: ${message}. Nothing was deleted.`,
       resetConfirm:
         "Delete API keys, cached digests, translations, and saved notes from this Chrome profile?",
       allDataDeleted: "All YouTube Digest data was deleted.",
@@ -172,7 +199,15 @@ const YTD_OPTIONS = (() => {
       githubLogout: "退出登录",
       githubLoginFailed: "GitHub 登录失败，请重试。",
       githubSessionExpired: "登录已过期，请重新登录。",
-      githubSignedOut: "已退出登录。本地数据仍保留在这台设备上。",
+      githubSignedOut: "已退出登录。这台设备上没有需要清除的账号数据。",
+      githubSignedOutWithAccount:
+        "已退出登录。这台设备上属于你账号的笔记和单词已清除；同步服务上的账号数据仍然保留。",
+      logoutUnsyncedConfirm: ({ notes, words }) => {
+        const parts = [];
+        if (notes > 0) parts.push(`${notes} 条笔记`);
+        if (words > 0) parts.push(`${words} 个单词`);
+        return `这台设备上有 ${parts.join("和")}还没有到达你的账号。退出登录会把它们从浏览器中永久删除。确定要退出登录吗？`;
+      },
       githubDeleteAccount: "删除我的账号",
       githubDeleteAccountConfirm:
         "确定删除你的账号以及全部笔记、单词和复习进度吗？此操作无法撤销。",
@@ -180,6 +215,7 @@ const YTD_OPTIONS = (() => {
         "真的要删除所有数据吗？服务器上和这台设备上的都会删掉，此操作是永久的。",
       githubDeleteAccountDeleted:
         "账号已删除。这台设备上的笔记和单词也一并清除了。",
+      githubDeleteAccountNotSignedIn: "你当前没有登录，没有可删除的账号。",
       githubDeleteAccountFailed: "无法删除账号：{message}",
       localRemix: "本地改造",
       customizationTitle: "想使用其他 AI 模型？",
@@ -213,12 +249,24 @@ const YTD_OPTIONS = (() => {
       addSupadataKey: "请添加 Supadata API 密钥。",
       addAiKey: "请添加你所选 AI 服务的 API 密钥。",
       saved: "已保存。请重新打开 YouTube Digest 以使用这些设置。",
+      savedWithoutAiKey: "已保存。请添加你所选 AI 服务的 API 密钥以使用 AI 功能。",
       saveFailed: "无法保存设置，请重试。",
+      storageIsolationFailed:
+        "这个浏览器没能锁住扩展的存储，YouTube 页面可能读得到你的 API 密钥。",
+      importedToAccount: ({ notes, words }) => {
+        const parts = [];
+        if (notes > 0) parts.push(`${notes} 条笔记`);
+        if (words > 0) parts.push(`${words} 个单词`);
+        return `已将退出登录时保存的 ${parts.join("和")} 移入你的账号。`;
+      },
       copying: "正在复制…",
       promptCopied: "已复制编辑后的提示词。",
       copyFailed: "无法复制提示词。请选中提示词文本并手动复制。",
       clearedDigests: ({ count }) => `已清除 ${count} 条缓存摘要。`,
-      notesDeleted: "已删除全部已保存的笔记。",
+      notesDeletedSignedIn: ({ count }) =>
+        `已删除账号中的 ${count} 条笔记，以及这台设备上的笔记。`,
+      notesDeletedSignedOut: ({ count }) => `已删除这台设备上的 ${count} 条笔记。`,
+      notesDeleteFailed: ({ message }) => `无法删除账号中的笔记：${message}。没有删除任何笔记。`,
       resetConfirm:
         "要从当前 Chrome 个人资料中删除 API 密钥、缓存摘要、翻译和已保存的笔记吗？",
       allDataDeleted: "已删除全部 YouTube Digest 数据。",
@@ -485,6 +533,10 @@ const YTD_OPTIONS = (() => {
     const statusStates = new Map();
     const promptDrafts = createPromptDrafts();
     let currentLanguage = "en";
+    // True when the browser could not lock the extension's storage away
+    // from the YouTube page. The user did not cause it, so the page says it
+    // in one calm sentence and keeps it on screen while the page is open.
+    let storageIsolationFailed = false;
 
     function selectedProviderId() {
       const checked = providerRadios.find((radio) => radio.checked);
@@ -561,6 +613,7 @@ const YTD_OPTIONS = (() => {
       const session = stored[settingsApi.GITHUB_SESSION_KEY];
       if (!session || !session.token) {
         renderGithubSignedOut();
+        await showImportReport();
         return;
       }
       renderGithubSignedIn(session.login || "GitHub");
@@ -595,6 +648,37 @@ const YTD_OPTIONS = (() => {
       } catch (_error) {
         // Server unreachable: keep the cached identity and stay signed in.
       }
+      await showImportReport();
+    }
+
+    /**
+     * Tells the user what the first sign-in moved into the account.
+     *
+     * The import carries the notes and words that were saved while signed
+     * out into the account, and the privacy policy promises that nothing
+     * leaves the device while signed out. So the move has to be said out
+     * loud, with the numbers.
+     *
+     * The counts are read from the device rather than from the message
+     * that announced the sign-in, because the settings page may not have
+     * been open when the sign-in finished. The report is read once: a
+     * number the user has seen does not need to be said again.
+     */
+    async function showImportReport() {
+      let stored;
+      try {
+        stored = await storage.get(settingsApi.IMPORT_REPORT_STORAGE_KEY);
+      } catch (_error) {
+        return;
+      }
+      const report = stored[settingsApi.IMPORT_REPORT_STORAGE_KEY];
+      if (!report) return;
+      const notes = Number(report.notes) || 0;
+      const words = Number(report.words) || 0;
+      await storage.remove(settingsApi.IMPORT_REPORT_STORAGE_KEY);
+      // Nothing moved, so there is nothing to say.
+      if (notes <= 0 && words <= 0) return;
+      setStatus(githubStatus, "importedToAccount", { notes, words });
     }
 
     async function startGithubLogin() {
@@ -611,12 +695,81 @@ const YTD_OPTIONS = (() => {
       // shows the result.
     }
 
+    /**
+     * Counts the items of the account that have never reached it.
+     *
+     * A note or a word with no cloud id is one the account has never seen.
+     * It exists only on this device, so a sign-out deletes its last copy.
+     */
+    async function unsyncedAccountItems(githubId) {
+      if (!githubId) return { notes: 0, words: 0 };
+      const noteKey = settingsApi.notesStorageKey(githubId);
+      const wordKey = settingsApi.vocabularyStorageKey(githubId);
+      let stored;
+      try {
+        stored = await storage.get([noteKey, wordKey]);
+      } catch (_error) {
+        return { notes: 0, words: 0 };
+      }
+      const unsynced = (key) => {
+        const items = stored[key];
+        if (!Array.isArray(items)) return 0;
+        return items.filter((item) => item && !item.cloudId).length;
+      };
+      return { notes: unsynced(noteKey), words: unsynced(wordKey) };
+    }
+
+    /**
+     * Signs out of the account.
+     *
+     * The sign-out is not only the end of the session: the account's notes
+     * and words leave this device with it. A shared browser is the reason.
+     * The next person who opens the panel would otherwise read the notes
+     * of the person who was here before, without ever signing in.
+     *
+     * One case needs a word first: an item that never reached the account
+     * exists only on this device, so signing out deletes its last copy.
+     * That is the right thing to do on a shared browser, but the user has
+     * to be asked before it happens, because it cannot be undone.
+     *
+     * The background does the work, because the registry that knows which
+     * keys hold the account's data lives with it. The page checks that the
+     * session is really gone and finishes the job itself when it is not.
+     */
     async function logoutGithub() {
-      await withSessionLock(() =>
-        storage.remove(settingsApi.GITHUB_SESSION_KEY),
-      );
+      const stored = await storage.get(settingsApi.GITHUB_SESSION_KEY);
+      const session = stored[settingsApi.GITHUB_SESSION_KEY];
+      const wasSignedIn = !!(session && session.token);
+      const githubId = session && session.githubId;
+
+      const unsynced = await unsyncedAccountItems(githubId);
+      if (unsynced.notes + unsynced.words > 0) {
+        const confirmed = root.confirm(
+          translate(currentLanguage, "logoutUnsyncedConfirm", unsynced),
+        );
+        if (!confirmed) return;
+      }
+
+      try {
+        await root.chrome.runtime.sendMessage({ action: "logoutGithub" });
+      } catch (_error) {
+        // The background could not be reached. The page does the same work.
+      }
+      const after = await storage.get(settingsApi.GITHUB_SESSION_KEY);
+      if (after[settingsApi.GITHUB_SESSION_KEY]) {
+        // The session is still here, so the sign-out did not happen.
+        if (githubId) {
+          await settingsApi.clearAccountScopedStorage(githubId, storage);
+        }
+        await withSessionLock(() =>
+          storage.remove(settingsApi.GITHUB_SESSION_KEY),
+        );
+      }
       renderGithubSignedOut();
-      setStatus(githubStatus, "githubSignedOut");
+      setStatus(
+        githubStatus,
+        wasSignedIn ? "githubSignedOutWithAccount" : "githubSignedOut",
+      );
     }
 
     /**
@@ -637,7 +790,7 @@ const YTD_OPTIONS = (() => {
       const session = stored[settingsApi.GITHUB_SESSION_KEY];
       if (!session || !session.token) {
         renderGithubSignedOut();
-        setStatus(githubStatus, "githubSignedOut");
+        setStatus(githubStatus, "githubDeleteAccountNotSignedIn");
         return;
       }
       const confirmed = root.confirm(
@@ -671,27 +824,31 @@ const YTD_OPTIONS = (() => {
       }
 
       // The account is gone from the server, so the local copy of its data
-      // goes too. The keys are named after the account, so exactly that
-      // account's notes and words are removed - another account's data on
-      // the same device is left alone.
-      const githubId = session.githubId;
-      const keys = [];
-      if (githubId) {
-        keys.push(settingsApi.notesStorageKey(githubId));
-        keys.push(settingsApi.vocabularyStorageKey(githubId));
-        keys.push(settingsApi.notesDroppedKey(githubId));
-        keys.push(settingsApi.vocabularyDroppedKey(githubId));
-      }
+      // goes too. The registry knows every key the account left on this
+      // device: its notes, its words, the two drop notices and the two
+      // queues of deletes that had not reached the server yet. The queue of
+      // word deletes carries the user's own sentences, so a queue left
+      // behind is a sentence the user can still read after the account is
+      // gone.
+      //
       // The buckets that hold what was written while signed out are on the
       // disk as well, and they are not named after the account. They are
       // the user's notes and words too, so "delete my account" has to take
       // them with it: the button promises that everything on this device
       // goes, and a sentence left behind is a sentence the user can still
       // read.
-      keys.push(settingsApi.NOTES_STORAGE_KEY);
-      keys.push(settingsApi.VOCABULARY_STORAGE_KEY);
+      const githubId = session.githubId;
       await withSessionLock(async () => {
-        if (keys.length) await storage.remove(keys);
+        if (githubId) {
+          await settingsApi.clearAccountScopedStorage(githubId, storage);
+        }
+        await storage.remove([
+          settingsApi.NOTES_STORAGE_KEY,
+          settingsApi.VOCABULARY_STORAGE_KEY,
+          // The report of what the first sign-in moved into the account
+          // describes an account that no longer exists.
+          settingsApi.IMPORT_REPORT_STORAGE_KEY,
+        ]);
         await storage.remove(settingsApi.GITHUB_SESSION_KEY);
       });
       renderGithubSignedOut();
@@ -699,10 +856,33 @@ const YTD_OPTIONS = (() => {
     }
 
     function renderStatus(element) {
+      if (element === saveStatus) {
+        renderSaveStatus();
+        return;
+      }
       const state = statusStates.get(element);
       element.textContent = state
         ? translate(currentLanguage, state.key, state.params)
         : "";
+    }
+
+    /**
+     * Draws the status of the save area.
+     *
+     * The storage notice lives here as well, because it is a condition of
+     * the page and not of one action: a save that says "Saved" must not
+     * hide the fact that the keys on this device are not locked away from
+     * the YouTube page.
+     */
+    function renderSaveStatus() {
+      const state = statusStates.get(saveStatus);
+      const saved = state
+        ? translate(currentLanguage, state.key, state.params)
+        : "";
+      const notice = storageIsolationFailed
+        ? translate(currentLanguage, "storageIsolationFailed")
+        : "";
+      saveStatus.textContent = [saved, notice].filter(Boolean).join(" ");
     }
 
     function setStatus(element, key, params = {}) {
@@ -802,6 +982,46 @@ const YTD_OPTIONS = (() => {
         applyLanguage("en");
       }
       await loadSettings();
+      // The next steps are shown whenever the page is showing. A user who
+      // has no AI key yet never saved anything, and the guide is what
+      // tells them that pressing "n" on a video saves a note - a shortcut
+      // that works without any key at all.
+      showSetupGuide();
+      await checkStorageIsolation();
+    }
+
+    /**
+     * Shows the next steps.
+     */
+    function showSetupGuide() {
+      const guide = doc.getElementById("setupGuide");
+      if (guide) guide.hidden = false;
+    }
+
+    /**
+     * Asks the background whether the storage is locked away from the
+     * YouTube page.
+     *
+     * The call that locks it can fail, and a failure that only reaches the
+     * console is a failure the user never hears about. The page says it in
+     * one sentence: the user did not cause it, so it is not an alarm, just
+     * a fact about this browser.
+     */
+    async function checkStorageIsolation() {
+      let result;
+      try {
+        result = await root.chrome.runtime.sendMessage({
+          action: "getStorageIsolation",
+        });
+      } catch (_error) {
+        // The background could not be asked, so nothing is known and
+        // nothing is claimed.
+        return;
+      }
+      if (result && result.restricted === false) {
+        storageIsolationFailed = true;
+        renderSaveStatus();
+      }
     }
 
     async function saveSettings(event) {
@@ -816,22 +1036,23 @@ const YTD_OPTIONS = (() => {
         supadataApiKey: supadataApiKeyInput.value,
       });
 
-      // The Supadata key is a fallback, not a requirement: the subtitles are
-      // read out of the YouTube page itself, and the key is only used when
-      // that fails. The AI key is what the summary and the translation
-      // need, so that is the one the settings page insists on.
-      if (!selectedProviderKey(settings)) {
-        setStatus(saveStatus, "addAiKey");
-        return;
-      }
-
       try {
+        // Everything the user typed is saved. The Supadata key is a
+        // fallback, the provider is a choice and the language is a
+        // preference: none of them needs an AI key. The AI key is what the
+        // summary and the translation need, so a missing one is reported
+        // after the save - not instead of it. Refusing the whole save
+        // threw away the key the user had just pasted, and with it the
+        // language they had chosen.
         await storage.set({ [settingsApi.STORAGE_KEY]: settings });
-        setStatus(saveStatus, "saved");
-        const guide = doc.getElementById("setupGuide");
-        if (guide) guide.hidden = false;
       } catch (_error) {
         setStatus(saveStatus, "saveFailed");
+        return;
+      }
+      if (selectedProviderKey(settings)) {
+        setStatus(saveStatus, "saved");
+      } else {
+        setStatus(saveStatus, "savedWithoutAiKey");
       }
     }
 
@@ -861,12 +1082,55 @@ const YTD_OPTIONS = (() => {
       // (see YTD_SETTINGS.notesStorageKey). Removing only the signed-out
       // key left every note of a signed-in user in place while the UI
       // reported that they were gone.
+      //
+      // The notes of a signed-in user are also in the account, and a note
+      // that is only removed here comes back with the next sync. So the
+      // account is asked to delete its notes first, and the device is
+      // cleaned afterwards. If the account cannot do it, nothing is
+      // deleted and the user is told: a note that comes back is worse than
+      // a note that stays with a clear message.
+      const stored = await storage.get(settingsApi.GITHUB_SESSION_KEY);
+      const session = stored[settingsApi.GITHUB_SESSION_KEY];
+      const signedIn = !!(session && session.token);
+      let deletedInAccount = 0;
+      if (signedIn) {
+        let result;
+        try {
+          result = await root.chrome.runtime.sendMessage({
+            action: "deleteAllNotes",
+          });
+        } catch (error) {
+          setStatus(dataStatus, "notesDeleteFailed", {
+            message: error.message,
+          });
+          return;
+        }
+        if (!result || result.success !== true) {
+          setStatus(dataStatus, "notesDeleteFailed", {
+            message:
+              (result && result.error) ||
+              "HTTP " + ((result && result.status) || "unknown"),
+          });
+          return;
+        }
+        deletedInAccount = Number(result.deleted) || 0;
+      }
       const all = await storage.get(null);
       const keys = Object.keys(all).filter((key) =>
         settingsApi.isNotesStorageKey(key),
       );
+      const count = keys.reduce((sum, key) => {
+        const value = all[key];
+        return sum + (Array.isArray(value) ? value.length : 0);
+      }, 0);
       if (keys.length) await storage.remove(keys);
-      setStatus(dataStatus, "notesDeleted");
+      if (signedIn) {
+        setStatus(dataStatus, "notesDeletedSignedIn", {
+          count: deletedInAccount,
+        });
+        return;
+      }
+      setStatus(dataStatus, "notesDeletedSignedOut", { count });
     }
 
     async function resetAllData() {
@@ -922,6 +1186,8 @@ const YTD_OPTIONS = (() => {
       resetAllData,
       loadOptions,
       startGithubLogin,
+      logoutGithub,
+      saveSettings,
       deleteGithubAccount,
     };
   }
