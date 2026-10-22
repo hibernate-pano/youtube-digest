@@ -96,7 +96,7 @@ const YTD_OPTIONS = (() => {
       deleteNotes: "Delete all notes",
       resetData: "Reset extension data",
       footer:
-        'Read <a href="PRIVACY.md" target="_blank">PRIVACY.md</a> in the repository for the complete data-flow description.',
+        'Read the <a href="https://ytd.panbo.space/privacy" target="_blank" rel="noopener">privacy policy</a> for the complete data-flow description.',
       migrationWarning:
         "Custom provider settings were removed safely. Your Supadata key was kept, but the AI key was cleared. Enter the API key of your chosen AI provider to continue.",
       saving: "Saving…",
@@ -206,7 +206,7 @@ const YTD_OPTIONS = (() => {
       deleteNotes: "删除全部笔记",
       resetData: "重置扩展数据",
       footer:
-        '完整数据流说明请参阅仓库中的 <a href="PRIVACY.md" target="_blank">PRIVACY.md</a>。',
+        '完整数据流说明请参阅 <a href="https://ytd.panbo.space/privacy?lang=zh-CN" target="_blank" rel="noopener">隐私政策</a>。',
       migrationWarning:
         "已安全移除自定义服务设置。Supadata 密钥已保留，AI 密钥已清除。请输入你所选 AI 服务的 API 密钥以继续使用。",
       saving: "正在保存…",

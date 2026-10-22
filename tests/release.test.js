@@ -573,3 +573,78 @@ test("published prompt files contain runtime sections", () => {
     }
   }
 });
+
+/**
+ * The store's own rules, checked here.
+ *
+ * The Chrome Web Store rejects an upload for reasons that have nothing to
+ * do with whether the product works: a description over 132 characters, an
+ * icon with an alpha channel, a screenshot that is not 1280x800. Every one
+ * of those was correct by hand and by luck, and the repository's doctrine
+ * is that a rule nobody checks is a rule that will be broken by the next
+ * edit. So the rules the store enforces are enforced here too.
+ */
+
+/** The width and height a PNG declares, or null when it is not a PNG. */
+function pngSize(buffer) {
+  if (buffer.length < 24) return null;
+  if (buffer.readUInt32BE(0) !== 0x89504e47) return null;
+  if (buffer.toString("ascii", 12, 16) !== "IHDR") return null;
+  return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
+}
+
+/** The PNG colour type at byte 25: 2 is RGB, 6 is RGBA (has alpha). */
+function pngColorType(buffer) {
+  if (buffer.length < 26) return null;
+  return buffer.readUInt8(25);
+}
+
+test("every link the product shows a reader points at something that exists", () => {
+  // An extension page cannot open a path inside its own package: Chrome
+  // serves the page, not the folder, and a link to PRIVACY.md in the
+  // package is a dead end for the reader who taps it. The privacy link is
+  // the one a store reviewer follows, so it has to be a web address.
+  for (const file of ["options.html", "sidepanel.html"]) {
+    const source = read(file);
+    for (const match of source.matchAll(
+      /<a\b[^>]*\bhref\s*=\s*["']([^"']+)["']/gi,
+    )) {
+      const href = match[1];
+      if (href.startsWith("#")) continue;
+      if (/^https?:/i.test(href)) continue;
+      assert.fail(
+        `${file} links to ${href}, which an extension page cannot open; ` +
+          `point at a web address or at a resource declared in the manifest`,
+      );
+    }
+  }
+});
+
+test("the settings page paints the links the copy holds, not the markup's", () => {
+  // The settings page localizes itself at start-up: every element with
+  // data-i18n-html is overwritten with the sentence from COPY. A fix
+  // applied to options.html alone is undone the moment the page loads,
+  // which is exactly what happened to the privacy link: the markup was
+  // changed, the copy still said PRIVACY.md, and the reader got the dead
+  // link back. This gate reads the sentences that are actually painted.
+  const { COPY } = require("../options.js");
+  const dead = [];
+  for (const [language, copy] of Object.entries(COPY)) {
+    for (const [key, value] of Object.entries(copy)) {
+      if (typeof value !== "string") continue;
+      for (const match of value.matchAll(
+        /<a\b[^>]*\bhref\s*=\s*["']([^"']+)["']/gi,
+      )) {
+        const href = match[1];
+        if (href.startsWith("#") || /^https?:/i.test(href)) continue;
+        dead.push(`${language}.${key} links to ${href}`);
+      }
+    }
+  }
+  assert.deepEqual(
+    dead,
+    [],
+    `these sentences send the reader to a file the extension page cannot open: ${dead.join("; ")}`,
+  );
+});
+
