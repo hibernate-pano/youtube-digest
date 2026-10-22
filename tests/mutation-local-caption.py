@@ -11,11 +11,27 @@ template, and YouTube answers a template request with an empty body. The URL
 the page's own player used is the one that carries the captions.
 """
 
+import signal
 import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def _stop_on_signal(signum, frame):
+    """Restores the file before the process dies.
+
+    A gate that is killed half way through must not leave the tree with a
+    mutation in it: the next person to read the file would read the broken
+    version and believe it. Raising SystemExit lets the finally block in
+    main() put the file back.
+    """
+    raise SystemExit(128 + signum)
+
+
+signal.signal(signal.SIGTERM, _stop_on_signal)
+signal.signal(signal.SIGINT, _stop_on_signal)
 
 
 def replace(path, hunks):
@@ -281,20 +297,18 @@ MUTATIONS = [
         ],
     },
     {
-        "name": "M13 the panel stops when only the fallback key is missing",
+        "name": "M13 the panel believes it has a key it does not have",
         "file": "sidepanel.js",
         "hunks": [
             (
-                """  if (!configStatus?.hasSupadataKey && !configStatus?.hasAiKey) {
-    showConfigError(configStatus);""",
-                """  if (!configStatus?.hasSupadataKey) {
-    showConfigError(configStatus);""",
+                """  hasAiKey = Boolean(configStatus?.hasAiKey);""",
+                """  hasAiKey = true;""",
             )
         ],
         "expect": [
             (
-                "local-transcript.test.js",
-                "the panel does not stop at a missing Supadata key",
+                "panel-tabs.test.js",
+                "the summary gate does not quote a price for a call that cannot be made",
             ),
         ],
     },
@@ -331,18 +345,18 @@ MUTATIONS = [
         ],
     },
     {
-        "name": "M16 the dead end says only one of the two things",
+        "name": "M16 the notice about the missing key never shows",
         "file": "sidepanel.js",
         "hunks": [
             (
-                """        panelCopy("noCaptionsNoKey"),""",
-                """        panelCopy("addAiKey"),""",
+                """  notice.hidden = hasAiKey;""",
+                """  notice.hidden = true;""",
             )
         ],
         "expect": [
             (
                 "panel-feedback.test.js",
-                "a video with no captions and no fallback key says both things",
+                "the panel opens without any key and says which features need one",
             ),
         ],
     },
@@ -588,6 +602,27 @@ MUTATIONS = [
             (
                 "local-transcript.test.js",
                 "a video behind an advertisement is waited for, and costs nothing",
+            ),
+        ],
+    },
+    {
+        "name": "M31 the summary button buys a summary that cannot be made",
+        "file": "sidepanel.js",
+        "hunks": [
+            (
+                """      if (!hasAiKey) {
+        openOptions();
+        return;
+      }
+""",
+                """      // the call is made even though it cannot succeed
+""",
+            )
+        ],
+        "expect": [
+            (
+                "panel-tabs.test.js",
+                "the summary button opens the settings when there is no key",
             ),
         ],
     },

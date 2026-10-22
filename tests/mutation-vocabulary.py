@@ -11,11 +11,27 @@ mutation here targets a way of losing a word that the panel would have
 made reachable.
 """
 
+import signal
 import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def _stop_on_signal(signum, frame):
+    """Restores the file before the process dies.
+
+    A gate that is killed half way through must not leave the tree with a
+    mutation in it: the next person to read the file would read the broken
+    version and believe it. Raising SystemExit lets the finally block in
+    main() put the file back.
+    """
+    raise SystemExit(128 + signum)
+
+
+signal.signal(signal.SIGTERM, _stop_on_signal)
+signal.signal(signal.SIGINT, _stop_on_signal)
 
 VOCAB_TEST = "vocabulary-lifecycle.test.js"
 
