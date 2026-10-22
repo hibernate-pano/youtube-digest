@@ -107,6 +107,40 @@ jobs:
             echo "::endgroup::"
           done
 
+  review:
+    name: Look at the product in a real browser
+    runs-on: ubuntu-latest
+    # The visual gates open the panel and the settings page in a real
+    # browser and read what is painted: a label on two lines, a colour
+    # below contrast, a tab that does not load. They are the only gates
+    # that can see a layout fault, and until now they only ran on the
+    # machine of whoever remembered to run them.
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+
+      - name: Install extension test dependencies
+        run: npm ci
+
+      # Playwright ships no browser on its own. The gates prefer the
+      # installed Chrome, and this job has Chrome on the runner already;
+      # the downloaded build is the fallback for the machines that do not.
+      - name: Install the fallback browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Review the panel
+        run: node scripts/panel-review.js
+
+      - name: Review the settings page
+        run: node scripts/options-review.js
+
   release-check:
     name: Validate public extension package
     runs-on: ubuntu-latest

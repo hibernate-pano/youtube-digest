@@ -599,6 +599,46 @@ function pngColorType(buffer) {
   return buffer.readUInt8(25);
 }
 
+test("the store description fits in the 132 characters the listing allows", () => {
+  const manifest = JSON.parse(read("manifest.json"));
+  const length = [...manifest.description].length;
+  assert.ok(
+    length <= 132,
+    `the manifest description the store shows is ${length} characters; the limit is 132`,
+  );
+});
+
+test("the store icon is opaque, because the store rejects one with alpha", () => {
+  const icon = fs.readFileSync(path.join(root, "store/icon128.png"));
+  const size = pngSize(icon);
+  assert.ok(size, "store/icon128.png is not a PNG");
+  assert.equal(size.width, 128, "the store icon is not 128 pixels wide");
+  assert.equal(size.height, 128, "the store icon is not 128 pixels tall");
+  assert.equal(
+    pngColorType(icon),
+    2,
+    "the store icon has an alpha channel; the store rejects that",
+  );
+});
+
+test("the store screenshots are the size the store accepts", () => {
+  const storeDir = path.join(root, "store");
+  const shots = fs
+    .readdirSync(storeDir)
+    .filter((name) => /^\d\d-.*\.png$/.test(name));
+  assert.ok(shots.length > 0, "store/ has no numbered screenshots");
+  assert.ok(
+    shots.length <= 5,
+    `store/ has ${shots.length} screenshots; the store shows at most 5`,
+  );
+  for (const name of shots) {
+    const size = pngSize(fs.readFileSync(path.join(storeDir, name)));
+    assert.ok(size, `store/${name} is not a PNG`);
+    assert.equal(size.width, 1280, `store/${name} is not 1280 pixels wide`);
+    assert.equal(size.height, 800, `store/${name} is not 800 pixels tall`);
+  }
+});
+
 test("every link the product shows a reader points at something that exists", () => {
   // An extension page cannot open a path inside its own package: Chrome
   // serves the page, not the folder, and a link to PRIVACY.md in the
