@@ -154,6 +154,150 @@ test("Supadata receives a canonical YouTube URL", () => {
   );
   assert.throws(
     () => settings.canonicalYouTubeUrl('"><script>'),
-    /Invalid YouTube video ID/,
+    /Invalid YouTube video ID/,  );
+});
+
+// ============================================================
+// The registry of what an account leaves on this device
+// ============================================================
+
+/**
+ * A storage that behaves like chrome.storage.local: it takes a list of
+ * keys as well as a single one, and it copies what it keeps.
+ */
+function createStorageFake(initial = {}) {
+  const values = { ...initial };
+  return {
+    values,
+    async get(keys) {
+      if (keys === null) return { ...values };
+      const requested = Array.isArray(keys) ? keys : [keys];
+      const out = {};
+      for (const key of requested) {
+        if (Object.hasOwn(values, key)) out[key] = values[key];
+      }
+      return out;
+    },
+    async set(items) {
+      Object.assign(values, items);
+    },
+    async remove(keys) {
+      for (const key of Array.isArray(keys) ? keys : [keys]) {
+        delete values[key];
+      }
+    },
+  };
+}
+
+test("the registry knows every key an account left on this device", () => {
+  // The notes, the words, the two drop notices, the two queues of
+  // deletes that have not reached the server yet, and the two cursors that
+  // say how far the device has seen the account. A key that is missing
+  // here is data the user believes is gone and is not.
+  assert.deepEqual(settings.accountScopedStorageKeys("1001"), [
+    "ytd_notes_1001",
+    "ytd_vocabulary_1001",
+    "ytd_notes_dropped_1001",
+    "ytd_vocabulary_dropped_1001",
+    "ytd_pending_deletes_1001",
+    "ytd_pending_vocab_deletes_1001",
+    "ytd_sync_cursor_notes_1001",
+    "ytd_sync_cursor_vocabulary_1001",
+  ]);
+});
+
+test("the queues of deletes that have not reached the server are named after the account", () => {
+  // The key strings are the ones the sync layer has always written, so the
+  // queue the extension is looking for is the queue that is really there.
+  assert.equal(
+    settings.pendingDeletesStorageKey("1001"),
+    "ytd_pending_deletes_1001",
   );
+  assert.equal(settings.pendingDeletesStorageKey(""), "ytd_pending_deletes");
+  assert.equal(
+    settings.pendingVocabDeletesStorageKey("1001"),
+    "ytd_pending_vocab_deletes_1001",
+  );
+  assert.equal(
+    settings.pendingVocabDeletesStorageKey(undefined),
+    "ytd_pending_vocab_deletes",
+  );
+});
+
+test("clearing an account's data removes the queues that hold the user's own sentences", async () => {
+  const storage = createStorageFake({
+    ytd_notes_1001: [{ id: "note-1" }],
+    ytd_vocabulary_1001: [{ id: "word-1" }],
+    ytd_notes_dropped_1001: { total: 1 },
+    ytd_vocabulary_dropped_1001: { total: 1 },
+    ytd_pending_deletes_1001: [{ clientId: "note-1", deletedAt: 1 }],
+    ytd_pending_vocab_deletes_1001: [
+      { key: "word-1", term: "a word", sentence: "the user's own sentence" },
+    ],
+    // Another account on the same device: not this account's to delete.
+    ytd_notes_2002: [{ id: "note-2" }],
+    ytd_pending_vocab_deletes_2002: [
+      { key: "word-2", term: "another word", sentence: "another sentence" },
+    ],
+  });
+
+  const removed = await settings.clearAccountScopedStorage("1001", storage);
+
+  assert.deepEqual(removed, settings.accountScopedStorageKeys("1001"));
+  // The queues carry the user's own text, so they are named here rather
+  // than only checked through the registry: a registry that forgot them
+  // must not make this test forget them too.
+  assert.ok(
+    removed.includes("ytd_pending_deletes_1001"),
+    "the queue of note deletes was not removed",
+  );
+  assert.ok(
+    removed.includes("ytd_pending_vocab_deletes_1001"),
+    "the queue of word deletes was not removed",
+  );
+  for (const key of [
+    "ytd_notes_1001",
+    "ytd_vocabulary_1001",
+    "ytd_notes_dropped_1001",
+    "ytd_vocabulary_dropped_1001",
+    "ytd_pending_deletes_1001",
+    "ytd_pending_vocab_deletes_1001",
+  ]) {
+    assert.equal(
+      storage.values[key],
+      undefined,
+      `${key} was left on the device after the account was deleted`,
+    );
+  }
+  assert.ok(storage.values.ytd_notes_2002, "another account's notes were deleted");
+  assert.ok(
+    storage.values.ytd_pending_vocab_deletes_2002,
+    "another account's words were deleted",
+  );
+});
+
+test("the ownership record keeps the entries of the other accounts", async () => {
+  // The record is global, but the ownership is per account. Only this
+  // account's entries may go.
+  const storage = createStorageFake({
+    ytd_vocabulary_claim: { ids: { w1: "1001", w2: "1001", w3: "2002" } },
+    ytd_notes_claim: { ids: { n1: "1001", n2: "2002" } },
+  });
+
+  await settings.clearAccountScopedStorage("1001", storage);
+
+  assert.deepEqual(storage.values.ytd_vocabulary_claim, {
+    ids: { w3: "2002" },
+  });
+  assert.deepEqual(storage.values.ytd_notes_claim, { ids: { n2: "2002" } });
+});
+
+test("an ownership record that belongs to nobody else is removed entirely", async () => {
+  const storage = createStorageFake({
+    ytd_vocabulary_claim: { ids: { w1: "1001" } },
+  });
+
+  await settings.clearAccountScopedStorage("1001", storage);
+
+  assert.equal(storage.values.ytd_vocabulary_claim, undefined);
 });

@@ -308,6 +308,11 @@ async function handleUpdateNote(noteId, text) {
       found.text = cleanText;
       found.rawText = cleanText;
       found.updatedAt = Date.now();
+      // The edit is on this device and the service may not have it yet.
+      // The mark is what tells the next sync that this row still has to be
+      // sent, even when the service asks for a delta and does not mention
+      // the row at all.
+      found.dirty = true;
       await writeLocalNotes(namespace, notes);
       return found;
     });
@@ -340,6 +345,10 @@ async function handleUpdateNote(noteId, text) {
             starredDirty: false,
           });
         }
+        // The service has the edit now, so the row is no longer waiting to
+        // be sent. When the request failed the mark stays, and the next
+        // sync sends the row.
+        await patchStoredItem(namespace, noteId, { dirty: false });
       } catch (error) {
         reportSyncSessionExpired(error);
         console.warn("[YouTube Digest] Note update cloud sync failed:", error.message);
@@ -920,9 +929,25 @@ async function reconcileStoredList(namespace, mergedItems, keyOf, options) {
     const items = current[namespace] || [];
     const merged = new Map();
     for (const item of mergedItems) merged.set(keyOf(item), item);
+    // The rows the merge decided to leave out. They are not "unseen": they
+    // are gone, and keeping them would bring back what the user deleted on
+    // another device.
+    const dropped = new Map();
+    for (const item of settings.drop || []) dropped.set(keyOf(item), item);
     // The items the merge never saw were saved while it was running, so
     // they are the newest ones and go first.
-    const unseen = items.filter((item) => !merged.has(keyOf(item)));
+    const unseen = items.filter((item) => {
+      const key = keyOf(item);
+      if (merged.has(key)) return false;
+      const gone = dropped.get(key);
+      if (!gone) return true;
+      // The row was on the device before the merge and the merge dropped
+      // it. If it changed since the merge read it, the user wrote it again
+      // while the sync was running, and that copy stays.
+      const now = Number(item.updatedAt) || Number(item.createdAt) || 0;
+      const before = Number(gone.updatedAt) || Number(gone.createdAt) || 0;
+      return now > before;
+    });
     const mergedOnly = mergedItems.filter((item) =>
       items.some((existing) => keyOf(existing) === keyOf(item)),
     );
@@ -950,18 +975,6 @@ async function reconcileStoredList(namespace, mergedItems, keyOf, options) {
 }
 
 /**
- * Storage key for the deletes that have not reached the server yet.
- *
- * The key is scoped to the account the notes belong to, exactly like the
- * notes namespace: a delete recorded for one account must never be applied
- * to another account's note.
- */
-function pendingDeletesStorageKey(githubId) {
-  const id = String(githubId || "").trim();
-  return id ? "ytd_pending_deletes_" + id : "ytd_pending_deletes";
-}
-
-/**
  * Reads the deletes that have not reached the server yet.
  *
  * They live in chrome.storage.local, so they survive a restart: the device
@@ -971,7 +984,7 @@ function pendingDeletesStorageKey(githubId) {
  * @returns {Promise<Array<{clientId: string, deletedAt: number}>>}
  */
 async function readPendingDeletes(githubId) {
-  const key = pendingDeletesStorageKey(githubId);
+  const key = YTD_SETTINGS.pendingDeletesStorageKey(githubId);
   try {
     const stored = await chrome.storage.local.get(key);
     const entries = stored[key];
@@ -991,7 +1004,7 @@ async function readPendingDeletes(githubId) {
  * @param {Array<{clientId: string, deletedAt: number}>} entries
  */
 async function writePendingDeletes(githubId, entries) {
-  const key = pendingDeletesStorageKey(githubId);
+  const key = YTD_SETTINGS.pendingDeletesStorageKey(githubId);
   try {
     await setStorageWithRecovery({ [key]: entries });
   } catch (error) {
@@ -1244,6 +1257,281 @@ function mergeNoteForSync(local, cloud, winner) {
 }
 
 /**
+ * The number of rows the service hands out in one page.
+ *
+ * The client uses it as a safety net for a service that does not say whether
+ * it left rows out: a list that reaches this length may have been cut, and a
+ * cut list must never be trusted.
+ */
+const SYNC_PAGE_ROWS = 5000;
+
+/**
+ * Reads the cursor of one collection: the moment the device last saw the
+ * account whole.
+ *
+ * @param {string|number} githubId the account the cursor belongs to.
+ * @param {string} scope "notes" or "vocabulary".
+ * @returns {Promise<string>} the ISO timestamp, or an empty string when the
+ *   device has never synced this collection.
+ */
+async function readSyncCursor(githubId, scope) {
+  const key = YTD_SETTINGS.syncCursorStorageKey(githubId, scope);
+  try {
+    const stored = await chrome.storage.local.get(key);
+    const value = stored[key];
+    if (typeof value !== "string" || !value) return "";
+    // A cursor that cannot be read is worse than no cursor at all: it would
+    // ask the service for the wrong window and quietly lose a change.
+    if (Number.isNaN(Date.parse(value))) return "";
+    return value;
+  } catch (error) {
+    return "";
+  }
+}
+
+/**
+ * Writes the cursor of one collection.
+ *
+ * The cursor is only written when the device is sure it has seen everything
+ * up to that moment. A cursor that moves too far hides the changes that
+ * happened in between, and those changes are gone for good.
+ *
+ * @param {string|number} githubId the account the cursor belongs to.
+ * @param {string} scope "notes" or "vocabulary".
+ * @param {string} iso the moment the device last saw the account whole.
+ * @returns {Promise<void>}
+ */
+async function writeSyncCursor(githubId, scope, iso) {
+  if (!iso || Number.isNaN(Date.parse(iso))) return;
+  const key = YTD_SETTINGS.syncCursorStorageKey(githubId, scope);
+  try {
+    await chrome.storage.local.set({ [key]: iso });
+  } catch (error) {
+    // The cursor is an optimization: without it the next sync pulls the
+    // whole list again, which is slower but not wrong.
+  }
+}
+
+/**
+ * Asks the service what changed since a moment.
+ *
+ * The answer is used only when it can be trusted. Three things make it
+ * untrustworthy, and all three end the same way: the device pulls the whole
+ * list instead.
+ *
+ * - The service does not know the route. An older service answers 404, and
+ *   the device must keep working against it.
+ * - The answer does not have the shape of a delta. A body that is not a
+ *   delta is not a delta.
+ * - The service says it left rows out. A delta that is missing rows cannot
+ *   say what is missing: a note deleted on another device would simply not
+ *   be in the delta, and the device would keep it and push it back.
+ *
+ * @param {object} session the signed-in session.
+ * @param {string} since the ISO moment the device last saw the account.
+ * @returns {Promise<{notes: object[], vocabulary: object[], deleted: object, serverTime: string}|{expired: boolean, error: Error}|null>}
+ *   the delta, an expired session, or null when the device has to pull the
+ *   whole list.
+ */
+async function fetchSyncDelta(session, since) {
+  let data = null;
+  try {
+    data = await cloudFetch("/api/sync?since=" + encodeURIComponent(since), {
+      token: session.token,
+    });
+  } catch (error) {
+    // A dead session is not a reason to pull the whole list: it is a reason
+    // to tell the user their session is over.
+    if (isSyncSessionExpired(error)) return { expired: true, error };
+    // The route is not deployed on this service (404) or it refuses the
+    // method (405). The device falls back to the full list.
+    console.info(
+      "[YouTube Digest] The service has no delta endpoint yet, pulling the whole list:",
+      error.message,
+    );
+    return null;
+  }
+  if (!data || !Array.isArray(data.notes) || !Array.isArray(data.vocabulary)) {
+    return null;
+  }
+  const deleted = data.deleted && typeof data.deleted === "object" ? data.deleted : {};
+  const deletedNotes = Array.isArray(deleted.notes) ? deleted.notes : [];
+  const deletedVocabulary = Array.isArray(deleted.vocabulary) ? deleted.vocabulary : [];
+  const truncated = data.truncated;
+  if (truncated && typeof truncated === "object") {
+    const cut =
+      truncated.notes === true ||
+      truncated.vocabulary === true ||
+      truncated.deletedNotes === true ||
+      truncated.deletedVocabulary === true;
+    if (cut) {
+      // The delta says it is not the whole truth. The device does not
+      // advance its cursor and pulls the whole list instead.
+      console.warn(
+        "[YouTube Digest] The service left rows out of the delta, pulling the whole list.",
+      );
+      return null;
+    }
+  } else {
+    // The service does not say whether it left rows out. A delta that is
+    // as long as a whole page may have been cut, so it is not trusted.
+    const longest = Math.max(
+      data.notes.length,
+      data.vocabulary.length,
+      deletedNotes.length,
+      deletedVocabulary.length,
+    );
+    if (longest >= SYNC_PAGE_ROWS) return null;
+  }
+  return {
+    notes: data.notes,
+    vocabulary: data.vocabulary,
+    deleted: { notes: deletedNotes, vocabulary: deletedVocabulary },
+    serverTime: typeof data.serverTime === "string" ? data.serverTime : "",
+  };
+}
+
+/**
+ * True when the row on this device holds a change the service has not seen.
+ *
+ * The mark is set when the user writes and cleared when the service has the
+ * row. It is what tells a delta apart from a whole list: a row the delta
+ * does not mention may still hold a change that only exists here.
+ *
+ * @param {object} item the row.
+ * @returns {boolean} true when the row still has to be sent.
+ */
+function isLocallyDirty(item) {
+  return !!item && item.dirty === true;
+}
+
+/**
+ * True when a row the delta did not mention still has to be sent.
+ *
+ * The delta says what changed on the service. A row that is not in it did
+ * not change there, so the only change that can be waiting is the one made
+ * on this device: the edit the user typed, or the favorite they toggled.
+ * Both are marked, and both are cleared once the service has them.
+ *
+ * @param {object} item the row.
+ * @returns {boolean} true when the row still has to be sent.
+ */
+function localRowNeedsPush(item) {
+  if (!item) return false;
+  if (isLocallyDirty(item)) return true;
+  return isStarredDirty(item);
+}
+
+/**
+ * How many rows one push carries.
+ *
+ * The service refuses a batch that holds more than this, and it says so in
+ * the answer. The client splits the rows itself rather than learning the
+ * limit by being refused.
+ */
+const SYNC_BATCH_ITEMS = 200;
+
+/**
+ * Sends the rows to the service.
+ *
+ * The batch route carries many rows in one request. A service that does not
+ * have it answers 404, and the rows are sent one by one instead: the rows
+ * arrive either way, only slower. A batch that is refused for any other
+ * reason falls back to the single requests too, so one row the service does
+ * not like cannot hold up the others.
+ *
+ * @param {object} session the signed-in session.
+ * @param {object[]} rows the rows to send.
+ * @param {object} options the routes and the shapes of the two collections.
+ * @returns {Promise<{taken: Array<{item: object, cloudId: string, payload: object}>, failed: Set<string>}>}
+ *   the rows the service took and the rows it refused.
+ */
+async function pushRowsToCloud(session, rows, options) {
+  const {
+    pushPath,
+    toCloudPayload,
+    cloudIdOf,
+    batchKeyOfItem,
+    batchKeyOfResponse,
+    batchField,
+    keyOfLocal,
+  } = options;
+  const taken = [];
+  const failed = new Set();
+  if (!rows || !rows.length) return { taken, failed };
+  const payloads = rows.map((row) => toCloudPayload(row));
+  for (let start = 0; start < rows.length; start += SYNC_BATCH_ITEMS) {
+    const chunk = rows.slice(start, start + SYNC_BATCH_ITEMS);
+    const chunkPayloads = payloads.slice(start, start + SYNC_BATCH_ITEMS);
+    let batched = false;
+    // One row is one request either way, so a single row is sent on its
+    // own: the batch route is only worth the extra round trip when it
+    // carries more than one row.
+    if (chunk.length > 1) {
+      try {
+        const body = { notes: [], vocabulary: [] };
+        body[batchField] = chunkPayloads;
+        const answer = await cloudFetch("/api/sync", {
+          method: "POST",
+          token: session.token,
+          body,
+        });
+        const pushed = (answer && answer.pushed) || {};
+        const entries = Array.isArray(pushed[batchField]) ? pushed[batchField] : [];
+        const reported = new Set();
+        for (const entry of entries) {
+          const key = batchKeyOfResponse(entry);
+          reported.add(key);
+          const row = chunk.find((candidate) => batchKeyOfItem(candidate) === key);
+          if (!row) continue;
+          const index = chunk.indexOf(row);
+          taken.push({
+            item: row,
+            cloudId: String(entry.id || ""),
+            payload: chunkPayloads[index],
+          });
+        }
+        // The service says which rows it has. A row it does not mention is
+        // not on the service, and it is sent again on its own: an answer
+        // that quietly drops rows would lose them.
+        batched = chunk.every((row) => reported.has(batchKeyOfItem(row)));
+      } catch (error) {
+        if (isSyncSessionExpired(error)) throw error;
+        // The service may not have the batch route, or it may refuse this
+        // batch. Either way the rows are sent one by one.
+        if (error.status !== 404 && error.status !== 405) {
+          console.info(
+            "[YouTube Digest] The batch push was refused, sending the rows one by one:",
+            error.message,
+          );
+        }
+        batched = false;
+      }
+    }
+    if (batched) continue;
+    const sent = new Set(taken.map((entry) => batchKeyOfItem(entry.item)));
+    for (let index = 0; index < chunk.length; index += 1) {
+      const item = chunk[index];
+      const payload = chunkPayloads[index];
+      if (sent.has(batchKeyOfItem(item))) continue;
+      try {
+        const pushed = await cloudFetch(pushPath, {
+          method: "POST",
+          token: session.token,
+          body: payload,
+        });
+        taken.push({ item, cloudId: cloudIdOf(pushed), payload });
+      } catch (error) {
+        if (isSyncSessionExpired(error)) throw error;
+        failed.add(keyOfLocal(item));
+        console.warn("[YouTube Digest] Sync push failed (kept locally):", error.message);
+      }
+    }
+  }
+  return { taken, failed };
+}
+
+/**
  * Generic collection merge shared by notes and vocabulary. Semantics:
  * - Cloud rows come down; on a conflict the newest edit wins.
  * - Local rows that were never synced (no cloudId yet) are kept and queued
@@ -1261,22 +1549,51 @@ function mergeNoteForSync(local, cloud, winner) {
  * pulled down - that is exactly what brings a deleted note back - and a
  * local copy that is still there is a note the user re-created after the
  * delete, which the push then confirms to the server.
+ *
+ * `partial` says that the cloud list is only what changed, not the whole
+ * account. Then a row that is missing from it did not change on the server:
+ * it stays as it is here instead of being read as a deletion. `remoteDeletes`
+ * names the rows the service says were deleted somewhere else, and those
+ * are the only ones that leave the device.
  */
 function mergeCollectionsForSync(
   localItems,
   cloudItems,
-  { keyOfLocal, keyOfCloud, toLocal, clock, mergeItem, tombstones },
+  {
+    keyOfLocal,
+    keyOfCloud,
+    toLocal,
+    clock,
+    mergeItem,
+    tombstones,
+    partial,
+    remoteDeletes,
+    localNeedsPush,
+  },
 ) {
   const deleted = tombstones instanceof Map ? tombstones : new Map();
+  const deletedElsewhere = remoteDeletes instanceof Set ? remoteDeletes : new Set();
   const cloudByKey = new Map();
   for (const cloud of cloudItems || []) {
     const key = keyOfCloud(cloud);
     if (key) cloudByKey.set(key, cloud);
   }
   const merged = new Map();
+  // The rows the merge decided to leave out on purpose. The list that is
+  // written back has to know about them: a row that is simply missing from
+  // the merge looks like a row that was saved while the merge was running,
+  // and it would be kept for that reason. These rows leave the device.
+  const dropped = [];
   for (const local of localItems || []) {
     const key = keyOfLocal(local);
     if (!key) continue;
+    // The account deleted this row on another device. The server keeps the
+    // mark for 30 days, so a device that still holds the row cannot bring
+    // it back; the local copy goes with it.
+    if (deletedElsewhere.has(key)) {
+      dropped.push(local);
+      continue;
+    }
     if (deleted.has(key)) {
       // The user deleted this note on this device and the delete has not
       // reached the server yet. The cloud copy is not merged in: that is
@@ -1304,16 +1621,27 @@ function mergeCollectionsForSync(
           push: true,
           updatedAt: writtenAt,
         });
+      } else {
+        // The note was deleted on this device and the delete has not
+        // reached the server yet: it goes away, just like a note deleted
+        // elsewhere.
+        dropped.push(local);
       }
-      // else: the note was deleted on this device and is not on the
-      // device any more: it goes away, just like a note deleted elsewhere.
       continue;
     }
     const cloud = cloudByKey.get(key);
     if (cloud) {
       const cloudMs = new Date(cloud.updatedAt).getTime();
       const localMs = Number(local.updatedAt) || Number(local.createdAt) || 0;
-      const winner = resolveConflictWinner(cloudMs, localMs, clock);
+      // In a delta, a row that was not written on this device belongs to
+      // the service: the copy here is the same copy, and the timestamps
+      // would call it a tie and send it back on every single sync. A row
+      // that was written here is measured as before, because then the two
+      // sides really can differ.
+      const winner =
+        partial && !isLocallyDirty(local)
+          ? "cloud"
+          : resolveConflictWinner(cloudMs, localMs, clock);
       if (winner === "hold") {
         // Keep the local copy, do not push it and do not replace it with
         // the cloud copy: with an untrustworthy clock neither side can be
@@ -1346,8 +1674,21 @@ function mergeCollectionsForSync(
         push: true,
         updatedAt: Number(local.updatedAt) || Number(local.createdAt) || 0,
       });
+    } else if (partial) {
+      // The cloud list is only what changed. A row that is not in it did
+      // not change on the server, so it stays as it is here. It is pushed
+      // only when this device still holds a change the server has not
+      // seen: the edit the user typed, or the favorite they toggled.
+      merged.set(key, {
+        source: "local",
+        item: local,
+        push: localNeedsPush ? localNeedsPush(local) === true : false,
+        updatedAt: Number(local.updatedAt) || Number(local.createdAt) || 0,
+      });
+    } else {
+      // Synced before but missing from the cloud: deleted elsewhere.
+      dropped.push(local);
     }
-    // else: synced before but missing from the cloud -> deleted elsewhere.
   }
   for (const cloud of cloudByKey.values()) {
     const key = keyOfCloud(cloud);
@@ -1369,11 +1710,12 @@ function mergeCollectionsForSync(
     mergedItems.push(entry.item);
     if (entry.push) toPush.push(entry.item);
   }
-  return { mergedItems, toPush };
+  return { mergedItems, toPush, dropped };
 }
 
-function mergeNotesForSync(localNotes, cloudNotes, clock, tombstones) {
+function mergeNotesForSync(localNotes, cloudNotes, clock, tombstones, options) {
   return mergeCollectionsForSync(localNotes, cloudNotes, {
+    ...(options || {}),
     keyOfLocal: (item) => (item && item.id ? String(item.id) : ""),
     keyOfCloud: (item) => (item && item.clientId ? String(item.clientId) : ""),
     toLocal: cloudToLocalNote,
@@ -1408,6 +1750,15 @@ async function deleteNoteFromCloud(session, noteId) {
  * merge (newest wins, deletions propagate), push local-only items while
  * recording their cloudId, write back locally. Never touches the signed-out
  * namespace, so accounts stay isolated.
+ *
+ * The pull is a delta when the device knows how far it has seen the
+ * account, and the whole list when it does not. That is the difference
+ * between an account with twenty notes and an account with twenty thousand:
+ * the panel waits for the answer either way, but the answer is either a
+ * handful of rows or the whole account.
+ *
+ * @param {string} scope "notes" or "vocabulary": the collection, and the
+ *   cursor that belongs to it.
  */
 async function runFullSync({
   namespaceFor,
@@ -1422,29 +1773,104 @@ async function runFullSync({
   tombstones,
   onPushed,
   localCap,
+  scope,
+  keyOfDeleted,
+  batchKeyOfItem,
+  batchKeyOfResponse,
 }) {
   const session = await getGithubSession();
   if (!session) return { success: true, synced: false, reason: "not signed in" };
   const namespace = namespaceFor(session);
   const local = await readLocal(namespace);
   let cloud = [];
+  // A delta says what changed. A whole list says everything, and a row that
+  // is missing from it was deleted somewhere else.
+  let partial = false;
+  const remoteDeletes = new Set();
+  // The moment the device has seen the account whole. It is only written
+  // when the answer really was the whole truth.
+  let nextCursor = "";
+  const cursor = await readSyncCursor(session.githubId, scope);
+  if (cursor) {
+    const delta = await fetchSyncDelta(session, cursor);
+    if (delta && delta.expired) {
+      await reportSyncSessionExpired(delta.error);
+      return {
+        success: false,
+        error: delta.error.message,
+        status: delta.error.status,
+        code: delta.error.code,
+        expired: true,
+      };
+    }
+    if (delta) {
+      cloud = Array.isArray(delta[scope]) ? delta[scope] : [];
+      partial = true;
+      for (const entry of (delta.deleted && delta.deleted[scope]) || []) {
+        const key = keyOfDeleted ? keyOfDeleted(entry) : "";
+        if (key) remoteDeletes.add(key);
+      }
+      nextCursor = delta.serverTime;
+    }
+  }
+  if (!partial) {
+    try {
+      const data = await cloudFetch(fetchPath, { token: session.token });
+      // The server accepted our token, so any earlier expiry is stale.
+      await clearSyncSessionExpired();
+      // The list is named by the endpoint: the notes live under "notes" and
+      // the words under "vocabulary". Picking the wrong one is not a small
+      // mistake - an empty array is truthy, so "data.notes || data.vocabulary"
+      // would silently hand the notes list to the vocabulary sync.
+      cloud = pickCloud(data);
+      // The list is the whole truth only when the service says so. A list it
+      // says it cut is not the account, and the cursor must not move past
+      // the rows that were left out.
+      if (data && data.truncated !== true && typeof data.serverTime === "string") {
+        nextCursor = data.serverTime;
+      }
+    } catch (error) {
+      // The pull is the one step that decides whether syncing works at all, so
+      // its failure is returned with the reason code intact: the caller can tell
+      // a dead token (re-login prompt) from a transient failure (stay quiet).
+      // The latch is persisted here too, not only on the fire-and-forget mirror
+      // writes: the panel re-reads it from storage on the next open, so a signal
+      // that lived only in this return value would be lost by the time the user
+      // could act on it.
+      await reportSyncSessionExpired(error);
+      return {
+        success: false,
+        error: error.message,
+        status: error.status,
+        code: error.code,
+        expired: isSyncSessionExpired(error),
+      };
+    }
+  }
+  // The pull carried the server's clock, so the offset between the device
+  // clock and the server clock is known before the merge happens.
+  const clock = await readClockContext();
+  const { mergedItems, toPush, dropped } = merge(local, cloud, clock, tombstones, {
+    partial,
+    remoteDeletes,
+    localNeedsPush: localRowNeedsPush,
+  });
+  // The items whose upload failed. They exist on this device and nowhere
+  // else, so the device's limit must not drop them.
+  const failedPushes = new Set();
+  let pushed = { taken: [], failed: failedPushes };
   try {
-    const data = await cloudFetch(fetchPath, { token: session.token });
-    // The server accepted our token, so any earlier expiry is stale.
-    await clearSyncSessionExpired();
-    // The list is named by the endpoint: the notes live under "notes" and
-    // the words under "vocabulary". Picking the wrong one is not a small
-    // mistake - an empty array is truthy, so "data.notes || data.vocabulary"
-    // would silently hand the notes list to the vocabulary sync.
-    cloud = pickCloud(data);
+    pushed = await pushRowsToCloud(session, toPush, {
+      pushPath,
+      toCloudPayload,
+      cloudIdOf,
+      batchKeyOfItem,
+      batchKeyOfResponse,
+      batchField: scope,
+      keyOfLocal,
+    });
   } catch (error) {
-    // The pull is the one step that decides whether syncing works at all, so
-    // its failure is returned with the reason code intact: the caller can tell
-    // a dead token (re-login prompt) from a transient failure (stay quiet).
-    // The latch is persisted here too, not only on the fire-and-forget mirror
-    // writes: the panel re-reads it from storage on the next open, so a signal
-    // that lived only in this return value would be lost by the time the user
-    // could act on it.
+    // A dead session is not a row that failed: it is the end of the round.
     await reportSyncSessionExpired(error);
     return {
       success: false,
@@ -1454,43 +1880,28 @@ async function runFullSync({
       expired: isSyncSessionExpired(error),
     };
   }
-  // The pull carried the server's clock, so the offset between the device
-  // clock and the server clock is known before the merge happens.
-  const clock = await readClockContext();
-  const { mergedItems, toPush } = merge(local, cloud, clock, tombstones);
-  // The items whose upload failed. They exist on this device and nowhere
-  // else, so the device's limit must not drop them.
-  const failedPushes = new Set();
-  for (const item of toPush) {
-    try {
-      const payload = toCloudPayload(item);
-      const pushed = await cloudFetch(pushPath, {
-        method: "POST",
-        token: session.token,
-        body: payload,
-      });
-      const cloudId = cloudIdOf(pushed);
-      if (cloudId) {
-        // Remember the server id so future merges treat it as synced and
-        // deletions elsewhere propagate instead of resurrecting.
-        const target = mergedItems.find((candidate) => keyOfLocal(candidate) === keyOfLocal(item));
-        if (target) target.cloudId = cloudId;
-      }
-      if (payload.starred !== undefined && typeof item.starred === "boolean") {
-        // The server confirmed the favorite flag, so it becomes the
-        // baseline a later local change is measured against.
-        item.starredSynced = item.starred;
-        item.starredDirty = false;
-      }
-      // The note is on the server again, so the delete that is still on
-      // its way is stale: it must not be applied to the note the user
-      // re-created.
-      if (onPushed) onPushed(item);
-    } catch (error) {
-      reportSyncSessionExpired(error);
-      failedPushes.add(keyOfLocal(item));
-      console.warn("[YouTube Digest] Sync push failed (kept locally):", error.message);
+  for (const key of pushed.failed) failedPushes.add(key);
+  for (const row of pushed.taken) {
+    const item = row.item;
+    if (row.cloudId) {
+      // Remember the server id so future merges treat it as synced and
+      // deletions elsewhere propagate instead of resurrecting.
+      const target = mergedItems.find((candidate) => keyOfLocal(candidate) === keyOfLocal(item));
+      if (target) target.cloudId = row.cloudId;
     }
+    if (row.payload.starred !== undefined && typeof item.starred === "boolean") {
+      // The server confirmed the favorite flag, so it becomes the
+      // baseline a later local change is measured against.
+      item.starredSynced = item.starred;
+      item.starredDirty = false;
+    }
+    // The service has this row now, so the mark that says "this device
+    // still holds a change" is cleared.
+    item.dirty = false;
+    // The note is on the server again, so the delete that is still on
+    // its way is stale: it must not be applied to the note the user
+    // re-created.
+    if (onPushed) onPushed(item);
   }
   // The merge was computed from a list that was read before the upload, so
   // the user may have saved something in the meantime. The merged list is
@@ -1501,7 +1912,16 @@ async function runFullSync({
     recordDropped: localCap.recordDropped,
     label: localCap.label,
     protect: failedPushes,
+    // The rows the merge decided to leave out: they leave the device too.
+    drop: dropped,
   });
+  // The device has seen the account whole up to this moment, so the cursor
+  // may move. It is written after the rows are on the device: a cursor that
+  // moves before the rows are written would hide the changes that happened
+  // in between, and those changes are gone for good.
+  if (nextCursor) {
+    await writeSyncCursor(session.githubId, scope, nextCursor);
+  }
   return { success: true, synced: true, count: written.length };
 }
 
@@ -1530,6 +1950,12 @@ async function fullSyncNotes() {
     pickCloud: (data) => (data && Array.isArray(data.notes) ? data.notes : []),
     readLocal: readLocalNotes,
     merge: mergeNotesForSync,
+    // The collection this sync is about. It names the cursor that belongs
+    // to this sync and the half of the batch that carries these rows.
+    scope: "notes",
+    keyOfDeleted: (entry) => String((entry && entry.clientId) || ""),
+    batchKeyOfItem: (item) => String((item && item.id) || ""),
+    batchKeyOfResponse: (entry) => String((entry && entry.clientId) || ""),
     tombstones,
     // The device keeps a limited number of notes. The limit belongs to the
     // store, so the merge hands it over instead of keeping its own.
@@ -1628,11 +2054,72 @@ async function handleDeleteGithubAccount() {
   return { success: true };
 }
 
+/**
+ * Signs out of the account.
+ *
+ * The token is not the only thing that leaves: the account's data on this
+ * device goes with it. A shared browser is the reason - the next person
+ * who opens the panel would otherwise read the notes and the words of the
+ * person who was here before, without ever signing in.
+ *
+ * The keys are named after the account, so only that account's data is
+ * removed. Another account's data on the same device is left alone: it
+ * belongs to somebody else, and this is not their sign-out.
+ *
+ * The copy on the server is not touched. The account still holds it, and
+ * signing in again brings the device back in line with it.
+ */
 async function handleLogoutGithub() {
+  const session = await getGithubSession();
+  if (session) {
+    await YTD_SETTINGS.clearAccountScopedStorage(
+      session.githubId,
+      chrome.storage.local,
+    );
+  }
   await chrome.storage.local.remove(YTD_SETTINGS.GITHUB_SESSION_KEY);
   // Drop the latch too: a signed-out account has no expired session to report.
   await chrome.storage.local.remove(YTD_SETTINGS.SYNC_EXPIRED_KEY);
-  return { success: true };
+  return { success: true, removedAccountData: !!session };
+}
+
+/**
+ * Deletes every note of the signed-in account, on the server.
+ *
+ * The device's copy is not enough: a note that is only removed here comes
+ * back with the next sync, because the account still has it. So the
+ * account is asked to delete its notes first, and the device is cleaned
+ * afterwards.
+ *
+ * The queued deletes are dropped as well: the notes they are about are
+ * gone from the account, so there is nothing left for them to do.
+ */
+async function handleDeleteAllNotes() {
+  const session = await getGithubSession();
+  if (!session) return { success: false, error: "Not signed in." };
+  try {
+    const data = await cloudFetch("/api/notes", {
+      method: "DELETE",
+      token: session.token,
+    });
+    const deleted = Number(data && data.deleted);
+    await chrome.storage.local.remove(
+      YTD_SETTINGS.pendingDeletesStorageKey(session.githubId),
+    );
+    return {
+      success: true,
+      deleted: Number.isFinite(deleted) && deleted > 0 ? deleted : 0,
+    };
+  } catch (error) {
+    // The notes are still in the account, so the caller must not claim that
+    // they are gone: it keeps them on the device and says what failed.
+    return {
+      success: false,
+      error: error.message,
+      status: error.status,
+      code: error.code,
+    };
+  }
 }
 // ============================================================
 // VOCABULARY + REVIEWS
@@ -1653,31 +2140,16 @@ async function writeLocalVocabulary(namespace, items) {
 }
 
 /**
- * Storage key for the record of which account owns which word from the
- * signed-out bucket.
- *
- * The same rule as the notes: a word belongs to exactly one account. Once
- * an account has taken a word it is never handed to another one, so a
- * failed upload cannot make another learner inherit words that were
- * written under a different account.
- */
-const VOCABULARY_CLAIM_KEY = "ytd_vocabulary_claim";
-
-/**
  * Reads the claim record: which account owns which word id.
  *
  * @returns {Promise<Record<string, string>>} word id -> account id.
  */
 async function readVocabularyClaim() {
   try {
-    const result = await chrome.storage.local.get(VOCABULARY_CLAIM_KEY);
-    const claim = result[VOCABULARY_CLAIM_KEY];
-    if (!claim || typeof claim !== "object" || !claim.ids) return {};
-    const owners = {};
-    for (const [id, owner] of Object.entries(claim.ids)) {
-      owners[String(id)] = String(owner);
-    }
-    return owners;
+    const result = await chrome.storage.local.get(
+      YTD_SETTINGS.VOCABULARY_CLAIM_KEY,
+    );
+    return YTD_SETTINGS.claimOwners(result[YTD_SETTINGS.VOCABULARY_CLAIM_KEY]);
   } catch (error) {
     return {};
   }
@@ -1685,7 +2157,9 @@ async function readVocabularyClaim() {
 
 async function writeVocabularyClaim(owners) {
   try {
-    await setStorageWithRecovery({ [VOCABULARY_CLAIM_KEY]: { ids: owners } });
+    await setStorageWithRecovery({
+      [YTD_SETTINGS.VOCABULARY_CLAIM_KEY]: YTD_SETTINGS.claimRecord(owners),
+    });
     return true;
   } catch (error) {
     // The claim is the safety net that keeps another account from picking
@@ -1813,6 +2287,19 @@ async function migrateLegacyBucket({
 }
 
 /**
+ * How many items the last import moved into the account.
+ *
+ * The import is a side effect of the sign-in, and the user has to be told
+ * what it moved: the privacy policy promises that nothing leaves the device
+ * while signed out, so a first sign-in that quietly carries the notes into
+ * the account has to say so out loud.
+ *
+ * The count is kept here so the sign-in can read it without changing the
+ * calls the sync layer has always made.
+ */
+const lastImportCounts = { notes: 0, words: 0 };
+
+/**
  * Imports the words that were saved while signed out into the account that
  * is signing in now.
  *
@@ -1826,7 +2313,7 @@ async function migrateLegacyBucket({
 async function migrateLegacyLocalVocabulary(githubId) {
   const accountId = String(githubId || "").trim();
   if (!accountId) return 0;
-  return migrateLegacyBucket({
+  const moved = await migrateLegacyBucket({
     accountId,
     label: "words",
     bucketKey: YTD_SETTINGS.VOCABULARY_STORAGE_KEY,
@@ -1836,6 +2323,35 @@ async function migrateLegacyLocalVocabulary(githubId) {
     readBucket: readLocalVocabulary,
     writeBucket: writeLocalVocabulary,
   });
+  lastImportCounts.words = moved;
+  return moved;
+}
+
+/**
+ * Writes down what the import moved into the account.
+ *
+ * The settings page may not be open when the sign-in finishes, so the
+ * counts are kept on the device until a surface reads them. A report with
+ * nothing in it is not written: a sign-in that moved nothing has nothing
+ * to say, and an old report is not thrown away by it.
+ */
+async function writeImportReport(notes, words) {
+  const report = {
+    notes: Number(notes) || 0,
+    words: Number(words) || 0,
+    at: Date.now(),
+  };
+  if (report.notes <= 0 && report.words <= 0) return;
+  try {
+    await setStorageWithRecovery({
+      [YTD_SETTINGS.IMPORT_REPORT_STORAGE_KEY]: report,
+    });
+  } catch (error) {
+    console.warn(
+      "[YouTube Digest] The report of the imported notes could not be stored:",
+      error.message,
+    );
+  }
 }
 
 function localVocabToCloudPayload(item) {
@@ -1899,8 +2415,9 @@ function mergeVocabularyItem(local, cloud, winner) {
  * sentence, so that pair is what says whether the two sides are talking
  * about the same word.
  */
-function mergeVocabularyForSync(localWords, cloudWords, clock, tombstones) {
+function mergeVocabularyForSync(localWords, cloudWords, clock, tombstones, options) {
   return mergeCollectionsForSync(localWords, cloudWords, {
+    ...(options || {}),
     keyOfLocal: vocabKey,
     keyOfCloud: vocabKey,
     toLocal: cloudVocabToLocal,
@@ -1935,6 +2452,12 @@ async function fullSyncVocabulary() {
     pickCloud: (data) => (data && Array.isArray(data.vocabulary) ? data.vocabulary : []),
     readLocal: readLocalVocabulary,
     merge: mergeVocabularyForSync,
+    // The collection this sync is about. It names the cursor that belongs
+    // to this sync and the half of the batch that carries these rows.
+    scope: "vocabulary",
+    keyOfDeleted: (entry) => vocabKey(entry || {}),
+    batchKeyOfItem: (item) => vocabKey(item || {}),
+    batchKeyOfResponse: (entry) => vocabKey(entry || {}),
     tombstones,
     // The device keeps a limited number of words, the same way it keeps a
     // limited number of notes.
@@ -1984,6 +2507,10 @@ async function handleSaveVocabulary(entry) {
       createdAt: now,
       updatedAt: now,
       cloudId: "",
+      // The word was captured here, so the service may not have it yet. The
+      // mark is what tells the next sync to send it even when the service
+      // asks for a delta and does not mention the word at all.
+      dirty: true,
     };
     await withNamespaceLock(namespace, async () => {
       const items = await readLocalVocabulary(namespace);
@@ -2033,7 +2560,7 @@ async function handleSaveVocabulary(entry) {
           (pushed && pushed.vocabulary && pushed.vocabulary.id) || item.cloudId;
         // Only this word is written back: another word may have been saved
         // while the upload was running.
-        await patchStoredItem(namespace, item.id, { cloudId });
+        await patchStoredItem(namespace, item.id, { cloudId, dirty: false });
       } catch (error) {
         reportSyncSessionExpired(error);
         console.warn("[YouTube Digest] Vocabulary cloud save failed:", error.message);
@@ -2058,18 +2585,6 @@ async function handleGetVocabulary() {
 }
 
 /**
- * Storage key for the word deletes that have not reached the server yet.
- *
- * Scoped to the account the words belong to, exactly like the notes
- * namespace: a delete recorded for one account must never be applied to
- * another account's word.
- */
-function pendingVocabDeletesStorageKey(githubId) {
-  const id = String(githubId || "").trim();
-  return id ? "ytd_pending_vocab_deletes_" + id : "ytd_pending_vocab_deletes";
-}
-
-/**
  * Reads the word deletes that have not reached the server yet.
  *
  * @param {string|number} githubId the account the deletes belong to.
@@ -2077,7 +2592,7 @@ function pendingVocabDeletesStorageKey(githubId) {
  *   cloudId: string, deletedAt: number}>>}
  */
 async function readPendingVocabDeletes(githubId) {
-  const key = pendingVocabDeletesStorageKey(githubId);
+  const key = YTD_SETTINGS.pendingVocabDeletesStorageKey(githubId);
   try {
     const stored = await chrome.storage.local.get(key);
     const entries = stored[key];
@@ -2097,7 +2612,7 @@ async function readPendingVocabDeletes(githubId) {
 }
 
 async function writePendingVocabDeletes(githubId, entries) {
-  const key = pendingVocabDeletesStorageKey(githubId);
+  const key = YTD_SETTINGS.pendingVocabDeletesStorageKey(githubId);
   try {
     await setStorageWithRecovery({ [key]: entries });
   } catch (error) {
@@ -2392,16 +2907,18 @@ async function updateLocalVocabularyStatus(status, cloudId) {
 
 
 /**
- * Storage key for the record of which account owns which note from the
- * signed-out bucket.
+ * The record of which account owns which note from the signed-out bucket.
  *
  * The bucket is cleared as soon as it is imported, so a failed upload can
  * never leave it behind for the next account to inherit. This record is the
  * safety net for the case where that clear did not happen (a storage
  * error, an interrupted write): those notes are already spoken for and
  * must not be imported by a second account.
+ *
+ * The key and the shape of the record live in the settings registry, so
+ * the surface that deletes an account can prune this account's entries
+ * with the same rule it prunes everything else with.
  */
-const NOTES_CLAIM_KEY = "ytd_notes_claim";
 
 /**
  * Reads the claim record: which account owns which note id.
@@ -2410,14 +2927,8 @@ const NOTES_CLAIM_KEY = "ytd_notes_claim";
  */
 async function readNotesClaim() {
   try {
-    const result = await chrome.storage.local.get(NOTES_CLAIM_KEY);
-    const claim = result[NOTES_CLAIM_KEY];
-    if (!claim || typeof claim !== "object" || !claim.ids) return {};
-    const owners = {};
-    for (const [id, owner] of Object.entries(claim.ids)) {
-      owners[String(id)] = String(owner);
-    }
-    return owners;
+    const result = await chrome.storage.local.get(YTD_SETTINGS.NOTES_CLAIM_KEY);
+    return YTD_SETTINGS.claimOwners(result[YTD_SETTINGS.NOTES_CLAIM_KEY]);
   } catch (error) {
     return {};
   }
@@ -2425,7 +2936,9 @@ async function readNotesClaim() {
 
 async function writeNotesClaim(owners) {
   try {
-    await setStorageWithRecovery({ [NOTES_CLAIM_KEY]: { ids: owners } });
+    await setStorageWithRecovery({
+      [YTD_SETTINGS.NOTES_CLAIM_KEY]: YTD_SETTINGS.claimRecord(owners),
+    });
     return true;
   } catch (error) {
     // The claim is the safety net that keeps another account from picking
@@ -2460,7 +2973,7 @@ async function writeNotesClaim(owners) {
 async function migrateLegacyLocalNotes(githubId) {
   const accountId = String(githubId || "").trim();
   if (!accountId) return 0;
-  return migrateLegacyBucket({
+  const moved = await migrateLegacyBucket({
     accountId,
     label: "notes",
     bucketKey: YTD_SETTINGS.NOTES_STORAGE_KEY,
@@ -2470,6 +2983,8 @@ async function migrateLegacyLocalNotes(githubId) {
     readBucket: readLocalNotes,
     writeBucket: writeLocalNotes,
   });
+  lastImportCounts.notes = moved;
+  return moved;
 }
 
 /**
@@ -2617,6 +3132,7 @@ async function completeGithubLogin(token, tabId, nonce) {
     // interrupted import leaves them somewhere they can still be found. A
     // failed import must not undo the sign-in: the session is already
     // stored, and the notes stay in the bucket for the next sign-in.
+    lastImportCounts.notes = 0;
     try {
       await migrateLegacyLocalNotes(user.githubId);
     } catch (error) {
@@ -2625,12 +3141,14 @@ async function completeGithubLogin(token, tabId, nonce) {
         error.message,
       );
     }
+    const importedNotes = lastImportCounts.notes;
     const sync = await fullSyncNotes();
     // The words follow the same road as the notes: they are imported into
     // the account namespace first, so a failed upload keeps them on the
     // device and out of reach of the next account, and then they are
     // mirrored to the cloud. A word that stays on the device only is a word
     // that is lost with the device, so this is not optional.
+    lastImportCounts.words = 0;
     try {
       await migrateLegacyLocalVocabulary(user.githubId);
       await fullSyncVocabulary();
@@ -2640,10 +3158,22 @@ async function completeGithubLogin(token, tabId, nonce) {
         error.message,
       );
     }
+    const importedWords = lastImportCounts.words;
+    // The import moved the user's own notes and words from the device into
+    // the account. The user has to be told how many: the privacy policy
+    // promises that nothing leaves the device while signed out, so a first
+    // sign-in that carries their work into the account says so out loud.
+    await writeImportReport(importedNotes, importedWords);
     chrome.runtime
-      .sendMessage({ action: "githubLoginChanged", login: user.login, sync })
+      .sendMessage({
+        action: "githubLoginChanged",
+        login: user.login,
+        sync,
+        importedNotes,
+        importedWords,
+      })
       .catch(() => {});
-    return sync;
+    return { ...sync, importedNotes, importedWords };
   } catch (error) {
     console.warn("[YouTube Digest] Login completion failed:", error.message);
     chrome.runtime

@@ -12,8 +12,13 @@ var YTD_SETTINGS = (() => {
    * Cloud sync backend (GitHub account sync for notes, vocabulary, and
    * review progress). This is the Cloudflare Worker URL; the extension never
    * holds OAuth secrets — it only stores the bearer token issued after login.
-   * Local development: set this to "http://localhost:8787" and run
-   * "npm run dev" inside server/.
+   *
+   * Local development: run "npm run dev" inside server/ (wrangler dev, which
+   * listens on port 8787), point this at "http://localhost:8787", and add
+   * "http://localhost:8787/*" to the host permissions in manifest.json.
+   * Both changes are for your machine only. A build that points at
+   * localhost cannot reach the account service at all, and the extension
+   * would quietly keep every note on the device.
    */
   const SERVER_BASE_URL = "https://ytd.panbo.space";
   const GITHUB_SESSION_KEY = "ytd_github_session";
@@ -301,6 +306,228 @@ var YTD_SETTINGS = (() => {
     const id = String(githubId || "").trim();
     return id ? `${VOCABULARY_DROPPED_KEY}_${id}` : VOCABULARY_DROPPED_KEY;
   }
+
+  /**
+   * Where the note deletes that have not reached the server yet are kept.
+   *
+   * A delete is an intent: it is written on the device first and sent to
+   * the server later, so a delete that failed does not bring the note back.
+   * The queue is scoped to the account the note belongs to, exactly like
+   * the notes namespace: a delete recorded for one account must never be
+   * applied to another account's note.
+   *
+   * The key lives here because the settings page has to be able to remove
+   * the queue when the account is deleted or the user signs out. When the
+   * rule lived only in the sync layer, "delete my account" left the queue
+   * on the disk - and the queue holds the user's own text.
+   */
+  const PENDING_DELETES_STORAGE_KEY = "ytd_pending_deletes";
+
+  function pendingDeletesStorageKey(githubId) {
+    const id = String(githubId || "").trim();
+    return id
+      ? `${PENDING_DELETES_STORAGE_KEY}_${id}`
+      : PENDING_DELETES_STORAGE_KEY;
+  }
+
+  /**
+   * Where the word deletes that have not reached the server yet are kept.
+   *
+   * Same rule as the note queue, and the same reason the key lives here:
+   * the entries carry the user's own word and sentence text, so they have
+   * to go when the account goes.
+   */
+  const PENDING_VOCAB_DELETES_STORAGE_KEY = "ytd_pending_vocab_deletes";
+
+  function pendingVocabDeletesStorageKey(githubId) {
+    const id = String(githubId || "").trim();
+    return id
+      ? `${PENDING_VOCAB_DELETES_STORAGE_KEY}_${id}`
+      : PENDING_VOCAB_DELETES_STORAGE_KEY;
+  }
+
+  /**
+   * Where the moment of the last successful sync is kept.
+   *
+   * The sync service can answer "what changed since this moment", and the
+   * answer is a few rows instead of the whole account. The moment is the
+   * server's own clock, so the next question starts exactly where the last
+   * answer stopped.
+   *
+   * It belongs to the account, like every other thing the account leaves on
+   * this device: a cursor from one account must never be read as the cursor
+   * of another one, and it goes when the account goes.
+   */
+  const SYNC_CURSOR_STORAGE_KEY = "ytd_sync_cursor";
+
+  /**
+   * The two collections that are synced, and the scope each cursor belongs
+   * to.
+   *
+   * The notes and the words are synced by two different calls, and each of
+   * them may run without the other. One cursor for both would mean that a
+   * sync of the notes moved the cursor past the words, and the words that
+   * changed in the meantime would never arrive: the delta asks for what
+   * changed since the cursor, and the cursor had already moved past them.
+   */
+  const SYNC_CURSOR_SCOPES = ["notes", "vocabulary"];
+
+  /**
+   * The storage key of one account's cursor for one collection.
+   *
+   * @param {string|number} githubId the account the cursor belongs to.
+   * @param {string} [scope] "notes" or "vocabulary".
+   * @returns {string} the storage key.
+   */
+  function syncCursorStorageKey(githubId, scope) {
+    const id = String(githubId || "").trim();
+    const part = String(scope || "").trim();
+    if (!part) {
+      return id ? `${SYNC_CURSOR_STORAGE_KEY}_${id}` : SYNC_CURSOR_STORAGE_KEY;
+    }
+    return id
+      ? `${SYNC_CURSOR_STORAGE_KEY}_${part}_${id}`
+      : `${SYNC_CURSOR_STORAGE_KEY}_${part}`;
+  }
+
+  /**
+   * The records of which account owns which item saved while signed out.
+   *
+   * A note or a word belongs to exactly one account: once an account has
+   * taken an item it is never handed to another one, so a failed upload
+   * cannot make another learner inherit what was written under a different
+   * account.
+   *
+   * Each record is global - one key for the whole device - but it holds
+   * per-account ownership, so an account that leaves takes its own entries
+   * with it and leaves the others alone.
+   */
+  const NOTES_CLAIM_KEY = "ytd_notes_claim";
+  const VOCABULARY_CLAIM_KEY = "ytd_vocabulary_claim";
+
+  /**
+   * The claim record as it is stored: item id -> account id.
+   */
+  function claimRecord(owners) {
+    const ids = {};
+    for (const [id, owner] of Object.entries(owners || {})) {
+      ids[String(id)] = String(owner);
+    }
+    return { ids };
+  }
+
+  /**
+   * Reads a claim record out of a stored value.
+   */
+  function claimOwners(stored) {
+    if (!stored || typeof stored !== "object" || !stored.ids) return {};
+    const owners = {};
+    for (const [id, owner] of Object.entries(stored.ids)) {
+      owners[String(id)] = String(owner);
+    }
+    return owners;
+  }
+
+  /**
+   * Every key one account left on this device.
+   *
+   * The list is the whole answer to "what does this account leave behind":
+   * its notes, its words, the two drop notices and the two queues of
+   * deletes that have not reached the server yet. A surface that deletes
+   * the account's data has to remove all of them, or the user is told the
+   * device is clean while their own sentences are still on it.
+   */
+  function accountScopedStorageKeys(githubId) {
+    return [
+      notesStorageKey(githubId),
+      vocabularyStorageKey(githubId),
+      notesDroppedKey(githubId),
+      vocabularyDroppedKey(githubId),
+      pendingDeletesStorageKey(githubId),
+      pendingVocabDeletesStorageKey(githubId),
+      syncCursorStorageKey(githubId, "notes"),
+      syncCursorStorageKey(githubId, "vocabulary"),
+    ];
+  }
+
+  /**
+   * Removes everything one account left on this device.
+   *
+   * The keys are named after the account, so exactly that account's data
+   * goes: another account's notes on the same device are left alone. The
+   * ownership records are pruned as well, because they are global: only
+   * this account's entries are removed, the other accounts keep theirs.
+   *
+   * @param {string|number} githubId the account that is leaving.
+   * @param {object} storage the storage to clean (chrome.storage.local).
+   * @returns {Promise<string[]>} the keys that were removed.
+   */
+  async function clearAccountScopedStorage(githubId, storage) {
+    const target = storage || defaultLocalStorage();
+    if (!target) return [];
+    const keys = accountScopedStorageKeys(githubId);
+    await target.remove(keys);
+    await releaseAccountClaims(githubId, target);
+    return keys;
+  }
+
+  /**
+   * Removes one account's entries from the ownership records.
+   *
+   * The records are what stops the next account that signs in from picking
+   * up items this account already took. A record that cannot be written
+   * must not stop the deletion of the account's own data, so a failure
+   * here is only reported.
+   */
+  async function releaseAccountClaims(githubId, storage) {
+    const accountId = String(githubId || "").trim();
+    if (!accountId) return;
+    for (const key of [NOTES_CLAIM_KEY, VOCABULARY_CLAIM_KEY]) {
+      try {
+        const stored = await storage.get(key);
+        const owners = claimOwners(stored && stored[key]);
+        const kept = {};
+        let removed = 0;
+        for (const [id, owner] of Object.entries(owners)) {
+          if (owner === accountId) {
+            removed += 1;
+            continue;
+          }
+          kept[id] = owner;
+        }
+        if (removed === 0) continue;
+        if (Object.keys(kept).length === 0) {
+          await storage.remove(key);
+          continue;
+        }
+        await storage.set({ [key]: claimRecord(kept) });
+      } catch (error) {
+        console.warn(
+          "[YouTube Digest] The ownership record could not be updated:",
+          error && error.message,
+        );
+      }
+    }
+  }
+
+  /**
+   * The device's own storage, when the caller did not name one.
+   */
+  function defaultLocalStorage() {
+    const api = typeof globalThis !== "undefined" ? globalThis.chrome : null;
+    return api && api.storage && api.storage.local ? api.storage.local : null;
+  }
+
+  /**
+   * Where the report of the first sign-in import is kept.
+   *
+   * The import moves the notes and words that were saved while signed out
+   * into the account. The user has to be told how many, so the counts are
+   * written down: the settings page may not be open when the sign-in
+   * finishes, and a move nobody was told about is a move nobody can
+   * account for.
+   */
+  const IMPORT_REPORT_STORAGE_KEY = "ytd_import_report";
 
   /**
    * Copy for the GitHub sync chip in the panel header. The signed-in and
@@ -666,6 +893,20 @@ var YTD_SETTINGS = (() => {
     MAX_LOCAL_VOCABULARY,
     VOCABULARY_DROPPED_KEY,
     vocabularyDroppedKey,
+    PENDING_DELETES_STORAGE_KEY,
+    pendingDeletesStorageKey,
+    PENDING_VOCAB_DELETES_STORAGE_KEY,
+    pendingVocabDeletesStorageKey,
+    SYNC_CURSOR_STORAGE_KEY,
+    SYNC_CURSOR_SCOPES,
+    syncCursorStorageKey,
+    NOTES_CLAIM_KEY,
+    VOCABULARY_CLAIM_KEY,
+    claimRecord,
+    claimOwners,
+    accountScopedStorageKeys,
+    clearAccountScopedStorage,
+    IMPORT_REPORT_STORAGE_KEY,
     SYNC_COPY,
     normalizeUiLanguage,
     translateSyncCopy,
