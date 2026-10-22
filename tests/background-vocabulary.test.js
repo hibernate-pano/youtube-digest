@@ -193,6 +193,46 @@ test("vocabulary extraction refuses an empty sentence", async () => {
   assert.equal(result.error, "EMPTY_SENTENCE");
 });
 
+test("a provider that refuses the key is reported as a missing key", async () => {
+  // Every provider refuses a key it does not know with the same answer.
+  // The panel can only send the user to Settings when the refusal comes
+  // back as the code it knows, not as the provider's own words.
+  const providers = [
+    ["deepseek", "aiApiKey"],
+    ["minimax", "minimaxApiKey"],
+    ["opencode-go", "opencodeGoApiKey"],
+  ];
+  for (const [provider, keyField] of providers) {
+    const background = loadBackground({
+      settings: { provider, [keyField]: "a-key" },
+      fetchImpl: async (url) => {
+        const match = /\/prompts\/([^/?#]+)$/.exec(url);
+        if (match) {
+          const markdown = fs.readFileSync(
+            path.join(root, "prompts", match[1]),
+            "utf8",
+          );
+          return { ok: true, text: async () => markdown };
+        }
+        return {
+          ok: false,
+          status: 401,
+          json: async () => ({ error: { message: "Authentication Fails" } }),
+        };
+      },
+    });
+
+    const result = await background.handleExtractVocabulary("a sentence");
+
+    assert.equal(result.success, false);
+    assert.equal(
+      result.code,
+      "NO_AI_KEY",
+      `the ${provider} refusal was not reported as a missing key`,
+    );
+  }
+});
+
 test("vocabulary extraction asks the active provider and returns the words", async () => {
   const background = loadBackground({
     fetchImpl: promptAwareFetch({

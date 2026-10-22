@@ -294,6 +294,14 @@ async function requestAiCompletion({
       }
       const error = new Error(message);
       error.status = response.status;
+      if (response.status === 401 || response.status === 403) {
+        // The service refused the key. Every provider answers this the same
+        // way, and the answer the user needs is the same too: the key is
+        // missing or wrong, and it is set in Settings. Without the code the
+        // surface can only show the provider's own words, and the user is
+        // left looking for a setting that is right there.
+        error.code = "NO_AI_KEY";
+      }
       throw error;
     }
 
@@ -2990,7 +2998,15 @@ async function handleExtractVocabulary(sentence) {
       }));
     return { success: true, words: cleaned };
   } catch (error) {
-    return { success: false, error: error.message || "Vocabulary extraction failed" };
+    // The code travels with the message: a service that refused the key
+    // and a service that was slow are two different problems, and the
+    // panel can only send the user to the right one if it knows which it
+    // was.
+    return {
+      success: false,
+      error: error.message || "Vocabulary extraction failed",
+      code: error.code,
+    };
   }
 }
 
@@ -3048,6 +3064,7 @@ async function handleExplainSelection(
     return {
       success: false,
       error: error.message || "Failed to explain selection",
+      code: error.code,
     };
   }
 }
@@ -3233,7 +3250,11 @@ async function handleTranslateContent(
     return { success: true, translatedContent: aligned };
   } catch (error) {
     console.error("[YouTube Digest] Translation error:", error);
-    return { success: false, error: error.message || "Translation failed" };
+    return {
+      success: false,
+      error: error.message || "Translation failed",
+      code: error.code,
+    };
   }
 }
 
