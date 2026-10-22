@@ -22,6 +22,8 @@
   - 打包脚本会用 `scripts/verify-package.js` 把包里的每个文件和仓库里的那一份对一遍，
     对不上就直接失败，所以这个包一定是从当前代码打的
   - SHA-256 以 `npm run package` 当次输出为准，不要抄旧记录
+  - `dist/` 里还留着以前版本打的包。打包脚本会把该上传的那一个点名，其余列成
+    「not for upload」——上传那个，不要上传别的
 - [ ] 数据使用披露表单（Data use disclosure）：勾选项必须和「商品信息」里的说法一致，
   尤其是 Supadata 和三个 AI 服务商。这张表和隐私政策对不上是常见的打回原因。
 
@@ -274,7 +276,9 @@ GitHub 登录名。它们不参与上架。
       （不在本文档组的改动范围内）。
 - [x] **版本号**。`manifest.json` 和 `package.json` 已经一起 bump 到 **1.8.0**，
       两个 README 的更新说明里都写着这一版。
-- [ ] **重新打包**。`dist/` 里现在只有旧版本打的包。上架前在仓库根目录跑一次
-      `npm run package`，用新生成的 `dist/youtube-digest-v1.8.0.zip`。
-      打包脚本跑完会自己用 `scripts/verify-package.js` 把包里的每一个文件和仓库里
-      的那一份对一遍，对不上就直接失败；所以这个包一定是从当前代码打的。
+- [x] **重新打包**。`dist/youtube-digest-v1.8.0.zip` 已经用现在的代码打出来，
+      27 个文件，SHA-256 以那次 `npm run package` 的输出为准。上架前如果代码又动了，
+      再跑一次 `npm run package` 重打：打包脚本会自己用 `scripts/verify-package.js`
+      把包里的每一个文件和仓库里的那一份对一遍，对不上就直接失败；所以这个包一定
+      是从当前代码打的。`dist/` 里还有旧版本打的包，不要上传它们——脚本会点名
+      该上传哪一个。

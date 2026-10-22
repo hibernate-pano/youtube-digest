@@ -77,3 +77,18 @@ node "$script_dir/verify-package.js" "$output_zip"
 checksum="$(shasum -a 256 "$output_zip" | awk '{print $1}')"
 printf 'Created %s\n' "$output_zip"
 printf 'SHA-256: %s\n' "$checksum"
+
+# The build directory keeps every package that was ever built. An old one
+# sitting there is a package that can be uploaded by mistake, so the one
+# that is current is named and the others are said out loud.
+older_packages=()
+while IFS= read -r older; do
+  [[ -n "$older" ]] && older_packages+=("$(basename "$older")")
+done < <(find "$dist_dir" -maxdepth 1 -name 'youtube-digest-v*.zip' ! -name "youtube-digest-v$version.zip" -print | LC_ALL=C sort)
+
+if ((${#older_packages[@]} > 0)); then
+  printf 'Upload this one: %s\n' "youtube-digest-v$version.zip"
+  for older in "${older_packages[@]}"; do
+    printf '  not for upload: %s\n' "$older"
+  done
+fi
