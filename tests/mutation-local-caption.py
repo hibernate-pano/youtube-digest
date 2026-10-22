@@ -456,12 +456,12 @@ MUTATIONS = [
         ],
     },
     {
-        "name": "M22 an unknown failure shows the worker's sentence",
+        "name": "M22 a code the panel does not know is replaced by the worker's sentence",
         "file": "sidepanel.js",
         "hunks": [
             (
-                """        panelCopy(PANEL_ERROR_CODE_COPY[code] || "errorMessage"),""",
-                """        panelFailureMessage(result),""",
+                """  if (code && /^[A-Z][A-Z0-9_]*$/.test(code)) return panelCopy("errorMessage");""",
+                """  if (false) return panelCopy("errorMessage");""",
             )
         ],
         "expect": [

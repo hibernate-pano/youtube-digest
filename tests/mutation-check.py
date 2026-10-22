@@ -287,8 +287,8 @@ MUTATIONS = [
             (
                 """  if (copyKey) {
     const provider = String(result?.provider || activeProviderName || "").trim();""",
-                """  const message = String(result?.message || "").trim();
-  if (message) return message;
+                """  const workerSentence = String(result?.message || "").trim();
+  if (workerSentence) return workerSentence;
 
   if (copyKey) {
     const provider = String(result?.provider || activeProviderName || "").trim();""",
