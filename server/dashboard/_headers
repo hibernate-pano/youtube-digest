@@ -1,0 +1,15 @@
+# Response headers for the dashboard's own files.
+#
+# A page that can be framed can be overlaid: an attacker puts a transparent
+# copy of the page over it and captures the click on "Sign in with GitHub".
+# frame-ancestors in a <meta> tag does nothing - the browser ignores it
+# there - so the refusal has to come from a header. X-Frame-Options is the
+# older spelling of the same rule, kept for browsers that only know it.
+#
+# The Worker's API answers carry their own hardening headers; this file is
+# for the static assets it serves (Cloudflare Workers `_headers` format).
+/*
+  X-Frame-Options: DENY
+  Content-Security-Policy: frame-ancestors 'none'
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer

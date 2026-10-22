@@ -23,12 +23,16 @@ body {
   border-bottom: 1px solid var(--border);
   position: sticky;
   top: 0;
+  /* On a narrow screen the mark and the account controls do not fit on one
+     line. The bar wraps instead of pushing the page sideways: a page that
+     scrolls sideways is a page the reader has to fight. */
+  flex-wrap: wrap;
 }
 
-.brand { font-weight: 800; font-size: var(--fs-xl); }
+.brand { font-weight: 800; font-size: var(--fs-xl); min-width: 0; }
 .brand-sub { font-weight: 500; color: var(--text-muted); font-size: var(--fs-md); margin-left: var(--sp-2); }
 
-.user-area { display: flex; align-items: center; gap: 10px; }
+.user-area { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
 
 .login-btn {
   display: inline-block;
@@ -70,7 +74,18 @@ body {
 
 .shell { max-width: 760px; margin: 0 auto; padding: 24px 20px 60px; }
 
-.tabs { display: flex; gap: 6px; margin-bottom: 20px; }
+/* The tab bar is a flex row of four buttons that cannot shrink. On a phone
+   it wraps, so every tab stays visible; if a translation is long enough to
+   break even that, the bar scrolls sideways on purpose. The PAGE must
+   not, so the overflow is kept inside this box. */
+.tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
 /* One tab component for the whole product. The dashboard and the side panel
    now share the same geometry: a 40px hit target, a pill radius, a
    transparent track with a terracotta fill for the active tab. */
@@ -79,6 +94,9 @@ body {
   align-items: center;
   justify-content: center;
   gap: var(--sp-2);
+  /* The tab keeps its width inside the scrolling bar. Squeezing it to fit
+     a narrow screen truncates the label instead of revealing the tab. */
+  flex: 0 0 auto;
   min-height: 40px;
   padding: var(--sp-2) var(--sp-4);
   border: 1px solid transparent;
@@ -133,6 +151,11 @@ body {
   max-width: 60ch;
 }
 
+/* The sentence under a count that is not the whole account. It is a fact
+   the reader has to be able to see, so it is not painted as quiet as the
+   note that explains where the data comes from. */
+.panel-note.truncation { color: var(--text-secondary); }
+
 .empty {
   padding: 28px;
   border: 1px dashed var(--border);
@@ -155,6 +178,10 @@ body {
   align-items: center;
   gap: 10px;
   margin-bottom: var(--sp-2);
+  /* The controls in a row do not fit every card on every screen. The row
+     wraps: a card that is wider than the phone is a page that scrolls
+     sideways. */
+  flex-wrap: wrap;
 }
 
 .card-title { font-weight: 700; font-size: var(--fs-lg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
@@ -167,6 +194,11 @@ body {
   white-space: nowrap;
 }
 .ts-link:hover { text-decoration: underline; }
+
+/* A word card's link carries a video title, not a timestamp, so it can be
+   longer than the row it sits in. It takes what is left and is cut with an
+   ellipsis instead of making the card wider than the screen. */
+.vocab-video { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
 .star-btn {
   position: relative;
@@ -224,6 +256,12 @@ body {
   transform: translate(-50%, -50%);
 }
 .del-btn:hover { color: var(--danger); border-color: var(--danger); }
+
+/* Copy shares the geometry but not the look: it used to be painted exactly
+   like Delete, so the only thing telling the two apart was the word on
+   them. Copy is not destructive and does not wear the danger colour. */
+.copy-btn { color: var(--accent); }
+.copy-btn:hover { color: var(--accent); border-color: var(--accent); }
 
 .card-body { color: var(--text); font-size: var(--fs-lg); white-space: pre-wrap; word-break: break-word; }
 
@@ -295,6 +333,7 @@ select.status-select {
   align-items: center;
   gap: var(--sp-2);
   justify-content: center;
+  flex-wrap: wrap;
   margin-top: var(--sp-8);
   padding-top: 18px;
   border-top: 1px solid var(--border);
@@ -303,6 +342,9 @@ select.status-select {
 }
 /* The separator is a real piece of text, so it needs to be readable. */
 .footer-sep { color: var(--text-muted); }
+/* A separator and the control it introduces travel together, so the dot
+   never ends a line on its own. */
+.footer-group { display: inline-flex; align-items: center; gap: var(--sp-1); }
 .danger-link { color: var(--danger); }
 .danger-link:hover { border-color: var(--danger); color: var(--danger); }
 
@@ -334,8 +376,12 @@ select.status-select {
 
 @media (max-width: 560px) {
   .brand-sub { display: none; }
+  .topbar { padding: 12px; }
   .shell { padding: 16px 12px 50px; }
   .tabs { gap: 8px; }
+  /* A word card's title gets its own line: squeezed between the status
+     picker and Delete it had nothing left to say. */
+  .vocab-video { flex: 1 1 100%; }
 }
 
 @media (prefers-reduced-motion: reduce) {

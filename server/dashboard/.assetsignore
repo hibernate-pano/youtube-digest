@@ -1,0 +1,3 @@
+# The dashboard's own browser gates are a check, not an asset. They are
+# kept next to the page they drive, and must not be served from it.
+checks/

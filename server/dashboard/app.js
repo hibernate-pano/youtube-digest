@@ -15,7 +15,22 @@
   // The browser this page signs in from. The session is bound to it, so a
   // token that was copied out of this browser is refused by the server.
   const DEVICE_KEY = "ytd_dashboard_device";
-  const STATE = { token: "", user: null, notes: [], vocabulary: [] };
+  const STATE = {
+    token: "",
+    user: null,
+    notes: [],
+    vocabulary: [],
+    // What the account really holds. The list endpoint caps a page, so the
+    // array it answers with can be shorter than the account: the number on
+    // screen is this one, not the length of the array.
+    notesTotal: null,
+    vocabularyTotal: null,
+    notesTruncated: false,
+    vocabularyTruncated: false,
+    // When the data on screen was fetched. A tab switch uses it to decide
+    // whether the set has gone stale.
+    loadedAt: 0,
+  };
 
   // The three learning states a saved word can be in. The label is what the
   // user reads; the value is what the server stores. Showing the raw value
@@ -123,6 +138,81 @@
         "Delete your account and ALL notes, words, and review progress? This cannot be undone.",
       confirmDeleteEverything:
         "Really delete everything? This is permanent.",
+      // Copy that names what a control acts on. On a screen of thirty notes
+      // a screen reader otherwise hears "Delete, Delete, Delete".
+      copyNote: "Copy note: {title}",
+      deleteNote: "Delete note: {title}",
+      deleteWord: "Delete word: {term}",
+      statusOfWord: "Status for {term}",
+      untitledWord: "Untitled word",
+      // Copy that says how much of the data is on screen. A count is only
+      // worth showing when it is the truth about the account.
+      notesTruncated: (params) =>
+        params.total
+          ? "Showing the " +
+            params.shown +
+            " most recent of " +
+            params.total +
+            " notes. The rest are not on this page."
+          : "Showing only part of your notes (" +
+            params.shown +
+            " shown). The rest are not on this page.",
+      vocabularyTruncated: (params) =>
+        params.total
+          ? "Showing " +
+            params.shown +
+            " of " +
+            params.total +
+            " words. The rest are not on this page."
+          : "Showing only part of your words (" +
+            params.shown +
+            " shown). The rest are not on this page.",
+      favoritesTruncated: (params) =>
+        params.total
+          ? "These are the starred notes among the " +
+            params.shown +
+            " of " +
+            params.total +
+            " notes this page loaded, so some starred notes may be missing."
+          : "These are the starred notes among the " +
+            params.shown +
+            " notes this page loaded, so some starred notes may be missing.",
+      // Copy for a failure. The server answers in English, so its own
+      // sentence may not be put on a page in another language.
+      storageBlocked:
+        "This browser is blocking local storage, so the dashboard cannot remember your sign-in.",
+      networkFailed:
+        "The page could not reach the server. Check your connection and try again.",
+      errorServer: "The server could not complete the request (HTTP {status}).",
+      errorUnknown: "The request failed before the server could answer.",
+      copyFailedUnknown: "The browser refused to copy the note.",
+      exportTruncated: (params) =>
+        "The export was downloaded, but it is incomplete: " +
+        params.notes +
+        " notes and " +
+        params.vocabulary +
+        " words were left out by the server.",
+      exportTruncatedUnknown:
+        "The export was downloaded, but it is incomplete: the server left some of your data out.",
+      errNoteNotFound: "That note no longer exists.",
+      errWordNotFound: "That word no longer exists.",
+      errNoteEmpty: "The note is empty.",
+      errTermEmpty: "The word is empty.",
+      errStatusInvalid: "The status must be learning, reviewing or mastered.",
+      errGradeInvalid: "The grade must be a number from 0 to 5.",
+      errStarredInvalid: "The starred flag must be true or false.",
+      errBodyNotJson: "The request was not JSON.",
+      errBodyTooLarge: "The request was too large.",
+      errAuthRequired: "The request needs a sign-in.",
+      errSessionInvalid: "The session is not valid any more.",
+      errOtherBrowser: "This session belongs to another browser.",
+      errTooManyRequests: "Too many requests. Try again in a moment.",
+      errNotFound: "The server could not find what was asked for.",
+      errInternal: "The server failed inside.",
+      errServerNotConfigured: "The server is not configured.",
+      errDatabaseNotConfigured: "The server's database is not configured.",
+      errStorageLimit:
+        "This account has reached the limit of notes and words it may hold.",
     },
     "zh-CN": {
       pageTitle: "YouTube Digest · 我的面板",
@@ -202,10 +292,121 @@
       confirmDeleteAccount:
         "确定删除你的账号以及全部笔记、单词和复习进度吗？此操作无法撤销。",
       confirmDeleteEverything: "真的要删除所有数据吗？此操作是永久的。",
+      copyNote: "复制笔记：{title}",
+      deleteNote: "删除笔记：{title}",
+      deleteWord: "删除单词：{term}",
+      statusOfWord: "{term} 的状态",
+      untitledWord: "无标题单词",
+      notesTruncated: (params) =>
+        params.total
+          ? "这里只显示了 " +
+            params.total +
+            " 条笔记中最新的 " +
+            params.shown +
+            " 条，其余没有显示。"
+          : "这里只显示了一部分笔记（" + params.shown + " 条），其余没有显示。",
+      vocabularyTruncated: (params) =>
+        params.total
+          ? "这里只显示了 " +
+            params.total +
+            " 个单词中的 " +
+            params.shown +
+            " 个，其余没有显示。"
+          : "这里只显示了一部分单词（" + params.shown + " 个），其余没有显示。",
+      favoritesTruncated: (params) =>
+        params.total
+          ? "这是本页加载的 " +
+            params.shown +
+            " / " +
+            params.total +
+            " 条笔记中的收藏，可能有遗漏。"
+          : "这是本页加载的 " + params.shown + " 条笔记中的收藏，可能有遗漏。",
+      storageBlocked:
+        "这个浏览器禁止了本地存储，所以面板无法记住你的登录状态。",
+      networkFailed: "页面连不上服务器。检查网络后再试一次。",
+      errorServer: "服务器没能完成这次请求（HTTP {status}）。",
+      errorUnknown: "请求在服务器答复之前就失败了。",
+      copyFailedUnknown: "浏览器拒绝复制这条笔记。",
+      exportTruncated: (params) =>
+        "数据已导出并下载，但不完整：服务器少发了 " +
+        params.notes +
+        " 条笔记和 " +
+        params.vocabulary +
+        " 个单词。",
+      exportTruncatedUnknown: "数据已导出并下载，但不完整：服务器少发了一部分数据。",
+      errNoteNotFound: "这条笔记已经不在了。",
+      errWordNotFound: "这个单词已经不在了。",
+      errNoteEmpty: "笔记是空的。",
+      errTermEmpty: "单词是空的。",
+      errStatusInvalid: "状态必须是「学习中」「复习中」或「已掌握」。",
+      errGradeInvalid: "评分必须是 0 到 5 之间的数字。",
+      errStarredInvalid: "收藏标记必须是 true 或 false。",
+      errBodyNotJson: "请求不是 JSON。",
+      errBodyTooLarge: "请求太大了。",
+      errAuthRequired: "这次请求需要先登录。",
+      errSessionInvalid: "登录状态已经失效。",
+      errOtherBrowser: "这个会话属于另一个浏览器。",
+      errTooManyRequests: "请求太频繁了，请稍后再试。",
+      errNotFound: "服务器找不到请求的内容。",
+      errInternal: "服务器内部出错了。",
+      errServerNotConfigured: "服务器还没有配置好。",
+      errDatabaseNotConfigured: "服务器的数据库还没有配置好。",
+      errStorageLimit: "这个账号的笔记和单词数量已经到了上限。",
     },
   };
 
   const $ = (id) => document.getElementById(id);
+
+  /**
+   * Local storage, read and written without throwing.
+   *
+   * Private browsing, a site policy and a blocked third-party context can
+   * all make the storage object refuse to work. Every call goes through
+   * these helpers so a refusal is a value the caller can act on instead of
+   * an exception that leaves the page blank half-way through its start.
+   */
+  function storageGet(key) {
+    try {
+      return window.localStorage.getItem(key);
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  function storageSet(key, value) {
+    try {
+      window.localStorage.setItem(key, value);
+      return true;
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function storageRemove(key) {
+    try {
+      window.localStorage.removeItem(key);
+    } catch (_error) {
+      // Nothing to do: whether the token was removed or never existed, the
+      // session it named is over.
+    }
+  }
+
+  /**
+   * Whether this browser keeps local storage at all.
+   *
+   * A read alone cannot tell: "no token" and "no storage" look the same.
+   * A write that is immediately undone does.
+   */
+  function storageWorks() {
+    try {
+      const probe = "__ytd_probe__";
+      window.localStorage.setItem(probe, "1");
+      window.localStorage.removeItem(probe);
+      return true;
+    } catch (_error) {
+      return false;
+    }
+  }
 
   // The language the page is currently rendered in. It is settled before
   // anything is drawn, so the first paint is already in the right language.
@@ -375,6 +576,15 @@
         statusState.params,
         { retry: !statusState.noRetry },
       );
+    } else if (statusState.error) {
+      // The sentence on screen came from a failure with no copy key of its
+      // own (an English server message, or one the table does not know).
+      // It is said again in the language the page is in now.
+      const local = errorCopy(statusState.error);
+      statusLine(local.message, statusState.isError, local.key, local.params, {
+        retry: !statusState.noRetry,
+        error: statusState.error,
+      });
     }
   }
 
@@ -403,7 +613,15 @@
   // A message the copy table owns is remembered by key, so a language
   // change can put it back in the new language instead of leaving one
   // English sentence behind.
-  const statusState = { key: null, params: {}, isError: false, noRetry: false };
+  const statusState = {
+    key: null,
+    params: {},
+    isError: false,
+    noRetry: false,
+    // A failure the server named keeps the failure itself, so the sentence
+    // can be rebuilt in the new language even when it had no copy key.
+    error: null,
+  };
 
   function statusLine(message, isError, key, params, options) {
     statusState.key = key || null;
@@ -413,6 +631,7 @@
     // redrawn when the language changes, and a message that cannot be
     // retried must not grow a retry button on the way.
     statusState.noRetry = !!(options && options.retry === false);
+    statusState.error = (options && options.error) || null;
     const el = $("statusLine");
     el.textContent = message || "";
     el.classList.toggle("error", !!isError);
@@ -436,6 +655,17 @@
     statusLine(copy(key, params), isError, key, params);
   }
 
+  /**
+   * Takes a message away again after a while, but only if it is still that
+   * message. A failure that arrived after it has to stay on screen: the
+   * reader is looking for the reason their refresh did not work.
+   */
+  function clearStatusLater(key, delay) {
+    setTimeout(() => {
+      if (statusState.key === key) statusLine("");
+    }, delay);
+  }
+
   async function api(path, options) {
     const headers = {};
     if (STATE.token) headers.Authorization = "Bearer " + STATE.token;
@@ -444,26 +674,199 @@
     const device = deviceId();
     if (device) headers["X-Device-Id"] = device;
     if (options && options.body !== undefined) headers["Content-Type"] = "application/json";
-    const response = await fetch(path, {
-      method: (options && options.method) || "GET",
-      headers,
-      body: options && options.body !== undefined ? JSON.stringify(options.body) : undefined,
-    });
+    let response;
+    try {
+      response = await fetch(path, {
+        method: (options && options.method) || "GET",
+        headers,
+        body: options && options.body !== undefined ? JSON.stringify(options.body) : undefined,
+      });
+    } catch (cause) {
+      // The request never reached the server. The browser's own words
+      // ("Failed to fetch") are English and say nothing the reader can act
+      // on, so the failure is marked and named in the page's language.
+      const error = new Error("The request could not reach the server.");
+      error.network = true;
+      error.cause = cause;
+      throw error;
+    }
     const data = await response.json().catch(() => null);
     if (response.status === 401) {
-      signOut();
-      // The session is gone for good. Signing in again is the way out, so
-      // the message must not offer a retry that cannot work.
+      // The session is gone for good. The token is NOT dropped here: the
+      // caller says why first, and only then is the reader signed out. A
+      // token that vanishes without a word leaves an empty page and no
+      // explanation.
       const error = new Error(copy("sessionExpired"));
       error.noRetry = true;
+      error.sessionExpired = true;
+      error.status = 401;
       throw error;
     }
     if (!response.ok) {
-      throw new Error(
+      const error = new Error(
         (data && data.error) || copy("requestFailed", { status: response.status }),
       );
+      error.status = response.status;
+      throw error;
     }
     return data;
+  }
+
+  /**
+   * The server answers in English. A page that is not in English may not
+   * put that sentence on screen, so every failure the server can produce
+   * is mapped to a copy key. A failure the table does not know gets a
+   * generic sentence that still says what kind of failure it was.
+   */
+  const SERVER_ERROR_KEYS = {
+    "Note not found.": "errNoteNotFound",
+    "Vocabulary entry not found.": "errWordNotFound",
+    "A non-empty note is required.": "errNoteEmpty",
+    "A non-empty term is required.": "errTermEmpty",
+    "Status must be learning, reviewing, or mastered.": "errStatusInvalid",
+    "grade must be an integer from 0 to 5.": "errGradeInvalid",
+    "starred must be a boolean.": "errStarredInvalid",
+    "Request body must be JSON.": "errBodyNotJson",
+    "Request body is too large.": "errBodyTooLarge",
+    "Authentication required.": "errAuthRequired",
+    "Invalid or expired session. Sign in again.": "errSessionInvalid",
+    "This session belongs to another browser.": "errOtherBrowser",
+    "Too many requests. Try again in a moment.": "errTooManyRequests",
+    "Too many sign-in attempts. Try again in a few minutes.": "errTooManyRequests",
+    "Not found.": "errNotFound",
+    "Internal server error.": "errInternal",
+    "Server is not configured (JWT_SECRET missing or too short).":
+      "errServerNotConfigured",
+    "The database is not configured (DATABASE_URL is missing).":
+      "errDatabaseNotConfigured",
+    "The database connection string is not a valid URL.":
+      "errDatabaseNotConfigured",
+    "The database connection string is not a Postgres URL.":
+      "errDatabaseNotConfigured",
+  };
+
+  /**
+   * Turns a failure into the sentence the reader sees, in the page's
+   * language, and the copy key that sentence came from.
+   *
+   * An English page may show the server's own words: they are the most
+   * precise thing there is. Any other page gets a sentence from the copy
+   * table, because an English sentence in the middle of a Chinese page is
+   * not a message, it is noise.
+   */
+  function errorCopy(error) {
+    const message = String((error && error.message) || "");
+    if (language === "en") {
+      return { message: message || copy("errorUnknown"), key: null, params: null };
+    }
+    if (error && error.network) {
+      return { message: copy("networkFailed"), key: "networkFailed", params: null };
+    }
+    const key = SERVER_ERROR_KEYS[message];
+    if (key) return { message: copy(key), key, params: null };
+    // The storage limit carries the number it is about, so its sentence is
+    // not a constant. The key is still the same one.
+    if (message.startsWith("This account already holds")) {
+      return { message: copy("errStorageLimit"), key: "errStorageLimit", params: null };
+    }
+    if (error && error.status) {
+      return {
+        message: copy("errorServer", { status: error.status }),
+        key: "errorServer",
+        params: { status: error.status },
+      };
+    }
+    return { message: copy("errorUnknown"), key: "errorUnknown", params: null };
+  }
+
+  /**
+   * Puts a failure on the status line, in the page's language.
+   *
+   * An expired session is said calmly and the reader is signed out only
+   * afterwards: the token goes when the reason is already on screen.
+   * A silent refresh still says this one, because it is not a failure the
+   * reader can retry - it is the end of the session.
+   */
+  function reportError(error, options) {
+    const silent = !!(options && options.silent);
+    if (error && error.sessionExpired) {
+      statusLine(copy("sessionExpired"), false, "sessionExpired", null, {
+        retry: false,
+      });
+      signOut();
+      return;
+    }
+    if (silent) return;
+    const local = errorCopy(error);
+    statusLine(local.message, true, local.key, local.params, { error });
+  }
+
+  /**
+   * Formats a date in the page's language.
+   *
+   * toLocaleString() with no argument follows the BROWSER's locale, so a
+   * page in Chinese showed "10/18/2026, 9:12:00 AM". The page's own
+   * language is the one the reader chose.
+   */
+  function formatDateTime(value) {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "";
+    try {
+      return date.toLocaleString(language);
+    } catch (_error) {
+      return date.toISOString();
+    }
+  }
+
+  /**
+   * The date part of a timestamp, in the reader's own time zone.
+   *
+   * toISOString() answers in UTC, so a reader in UTC+8 who exported before
+   * 8am got yesterday's date in the filename.
+   */
+  function localDateStamp(date) {
+    const pad = (value) => String(value).padStart(2, "0");
+    return (
+      date.getFullYear() +
+      "-" +
+      pad(date.getMonth() + 1) +
+      "-" +
+      pad(date.getDate())
+    );
+  }
+
+  /**
+   * What an export left out, if anything.
+   *
+   * The export answers with the number of rows per table it left out. A
+   * flag with no number is still a truncation, just one whose size this
+   * page cannot name.
+   */
+  function exportTruncation(data) {
+    const value = data && data.truncated;
+    if (!value) return null;
+    if (value === true) return { known: false, params: null };
+    if (typeof value !== "object") return null;
+    const notes = Number(value.notes) || 0;
+    const vocabulary = Number(value.vocabulary) || 0;
+    if (!notes && !vocabulary) return null;
+    return { known: true, params: { notes, vocabulary } };
+  }
+
+  /**
+   * Reads the server's "this list is only a page" flag.
+   *
+   * The list endpoints answer with a boolean. The export answers with the
+   * number of rows it left out. Both mean the same thing, so both are
+   * understood here.
+   */
+  function readTruncated(value) {
+    if (value === true) return true;
+    if (typeof value === "number") return value > 0;
+    if (value && typeof value === "object") {
+      return Object.values(value).some((count) => Number(count) > 0);
+    }
+    return false;
   }
 
   function formatTimestamp(seconds) {
@@ -482,12 +885,31 @@
     return "https://www.youtube.com/watch?v=" + encodeURIComponent(videoId) + "&t=" + seconds + "s";
   }
 
-  function renderNotes(notes, listId, emptyId, countId) {
+  /**
+   * A row id as something that can be an HTML id.
+   *
+   * The ids come from the server, and an id is used to tie a control to the
+   * title it acts on (aria-describedby), so it has to survive whatever the
+   * server puts in it.
+   */
+  function safeId(value) {
+    return String(value ?? "").replace(/[^a-zA-Z0-9_-]/g, "_");
+  }
+
+  /**
+   * Draws one notes list.
+   *
+   * The count is the account's own number when the server sends it: the
+   * list endpoint caps a page, so the length of the array can be smaller
+   * than what the account holds, and a count that is not the truth is
+   * worse than no count at all.
+   */
+  function renderNotes(notes, listId, emptyId, countId, options) {
+    const opts = options || {};
     const list = $(listId);
     const empty = $(emptyId);
-    $(countId).textContent = notes.length
-      ? copy("noteCount", { count: notes.length })
-      : "";
+    const count = typeof opts.total === "number" ? opts.total : notes.length;
+    $(countId).textContent = count ? copy("noteCount", { count }) : "";
     list.innerHTML = "";
     empty.hidden = notes.length > 0;
     for (const note of notes) {
@@ -496,6 +918,7 @@
       const ts = watchUrl(note.videoId, note.timestampSeconds);
       const head = document.createElement("div");
       head.className = "card-head";
+      const titleText = note.videoTitle || copy("untitledVideo");
       const star = document.createElement("button");
       star.type = "button";
       star.className = "star-btn" + (note.starred ? " on" : "");
@@ -504,11 +927,17 @@
         ? copy("removeFavorite")
         : copy("addFavorite");
       star.setAttribute("aria-label", star.title);
-      star.setAttribute("aria-pressed", note.starred ? "true" : "false");
-      star.addEventListener("click", () => toggleStar(note));
+      // The star's own name stays short: the card it belongs to is named
+      // right after it by the description, so the row is still said.
       const title = document.createElement("span");
       title.className = "card-title";
-      title.textContent = note.videoTitle || copy("untitledVideo");
+      title.id = opts.scope + "-note-title-" + safeId(note.id);
+      title.textContent = titleText;
+      star.setAttribute("aria-describedby", title.id);
+      star.setAttribute("aria-pressed", note.starred ? "true" : "false");
+      star.dataset.focusKey = opts.scope + ":star:" + note.id;
+      star.dataset.focusKind = "star";
+      star.addEventListener("click", () => toggleStar(note));
       const link = document.createElement("a");
       link.className = "ts-link";
       link.href = ts;
@@ -517,13 +946,22 @@
       link.textContent = formatTimestamp(note.timestampSeconds);
       const del = document.createElement("button");
       del.type = "button";
-      del.className = "del-btn";
+      del.className = "del-btn delete-btn";
       del.textContent = copy("deleteAction");
+      // A screen of thirty notes otherwise reads "Delete, Delete, Delete".
+      // The visible word stays short; the name says which row it acts on.
+      del.setAttribute("aria-label", copy("deleteNote", { title: titleText }));
+      del.dataset.focusKey = opts.scope + ":delete:" + note.id;
+      del.dataset.focusKind = "delete";
       del.addEventListener("click", () => deleteNote(note));
       const copyBtn = document.createElement("button");
       copyBtn.type = "button";
-      copyBtn.className = "del-btn";
+      // Copy is not a destructive action and must not look like one.
+      copyBtn.className = "del-btn copy-btn";
       copyBtn.textContent = copy("copyAction");
+      copyBtn.setAttribute("aria-label", copy("copyNote", { title: titleText }));
+      copyBtn.dataset.focusKey = opts.scope + ":copy:" + note.id;
+      copyBtn.dataset.focusKind = "copy";
       copyBtn.addEventListener("click", async () => {
         try {
           await navigator.clipboard.writeText(note.note || "");
@@ -532,7 +970,18 @@
             copyBtn.textContent = copy("copyAction");
           }, 1500);
         } catch (error) {
-          statusLine(copy("copyFailed", { message: error.message }), true);
+          // The browser's clipboard error is English too, so it is not put
+          // on a page in another language.
+          if (language === "en") {
+            statusLine(
+              copy("copyFailed", { message: error.message }),
+              true,
+              "copyFailed",
+              { message: error.message },
+            );
+          } else {
+            statusLine(copy("copyFailedUnknown"), true, "copyFailedUnknown");
+          }
         }
       });
       head.append(star, title, link, copyBtn, del);
@@ -551,7 +1000,7 @@
       }
       const saved = document.createElement("span");
       saved.textContent = copy("savedAt", {
-        date: new Date(note.createdAt).toLocaleString(),
+        date: formatDateTime(note.createdAt),
       });
       meta.appendChild(saved);
       card.append(head, body, meta);
@@ -562,8 +1011,12 @@
   function renderVocabulary(rows) {
     const list = $("vocabularyList");
     const empty = $("vocabularyEmpty");
-    $("vocabularyCount").textContent = rows.length
-      ? copy("wordCount", { count: rows.length })
+    const count =
+      typeof STATE.vocabularyTotal === "number"
+        ? STATE.vocabularyTotal
+        : rows.length;
+    $("vocabularyCount").textContent = count
+      ? copy("wordCount", { count })
       : "";
     list.innerHTML = "";
     empty.hidden = rows.length > 0;
@@ -572,11 +1025,21 @@
       card.className = "card";
       const head = document.createElement("div");
       head.className = "card-head";
+      const termText = row.term || copy("untitledWord");
       const term = document.createElement("span");
       term.className = "vocab-term";
       term.textContent = row.term;
       const status = document.createElement("select");
       status.className = "status-select";
+      // A combo box with no name is announced as "combo box" and nothing
+      // else. The name says which word it changes the status of.
+      status.setAttribute(
+        "aria-label",
+        copy("statusOfWord", { term: termText }),
+      );
+      status.title = status.getAttribute("aria-label");
+      status.dataset.focusKey = "vocabulary:status:" + row.id;
+      status.dataset.focusKind = "status";
       for (const option of VOCAB_STATUSES) {
         const el = document.createElement("option");
         el.value = option.value;
@@ -587,11 +1050,14 @@
       status.addEventListener("change", () => setVocabStatus(row, status.value));
       const del = document.createElement("button");
       del.type = "button";
-      del.className = "del-btn";
+      del.className = "del-btn delete-btn";
       del.textContent = copy("deleteAction");
+      del.setAttribute("aria-label", copy("deleteWord", { term: termText }));
+      del.dataset.focusKey = "vocabulary:delete:" + row.id;
+      del.dataset.focusKind = "delete";
       del.addEventListener("click", () => deleteVocabularyEntry(row));
       const video = document.createElement("a");
-      video.className = "ts-link";
+      video.className = "ts-link vocab-video";
       video.href = watchUrl(row.videoId, row.timestampSeconds);
       video.target = "_blank";
       video.rel = "noreferrer";
@@ -608,7 +1074,7 @@
       const meta = document.createElement("div");
       meta.className = "card-meta";
       meta.textContent = copy("savedAt", {
-        date: new Date(row.createdAt).toLocaleString(),
+        date: formatDateTime(row.createdAt),
       });
       card.append(head, translation, sentence, meta);
       list.appendChild(card);
@@ -624,7 +1090,7 @@
       note.starred = data.note.starred;
       renderAll();
     } catch (error) {
-      statusLine(error.message, true);
+      reportError(error);
     }
   }
 
@@ -635,7 +1101,7 @@
       STATE.notes = STATE.notes.filter((item) => item.id !== note.id);
       renderAll();
     } catch (error) {
-      statusLine(error.message, true);
+      reportError(error);
     }
   }
 
@@ -646,7 +1112,7 @@
       STATE.vocabulary = STATE.vocabulary.filter((item) => item.id !== row.id);
       renderAll();
     } catch (error) {
-      statusLine(error.message, true);
+      reportError(error);
     }
   }
 
@@ -659,11 +1125,18 @@
       row.status = data.vocabulary.status;
       renderAll();
     } catch (error) {
-      statusLine(error.message, true);
+      reportError(error);
     }
   }
 
-  const dashReviewState = { queue: [], index: 0, revealed: false };
+  const dashReviewState = {
+    queue: [],
+    index: 0,
+    revealed: false,
+    // One grade, one request. Without this a double click scores the word
+    // twice and the card jumps over the word in between.
+    submitting: false,
+  };
 
   async function loadDueReviews() {
     try {
@@ -673,7 +1146,7 @@
       dashReviewState.revealed = false;
       renderReview();
     } catch (error) {
-      statusLine(error.message, true);
+      reportError(error);
     }
   }
 
@@ -688,8 +1161,9 @@
       : "";
     $("reviewEmpty").hidden = queue.length > 0;
     $("reviewCard").hidden = queue.length === 0;
-    $("dashReviewActions").hidden = queue.length === 0;
     if (!queue.length) {
+      // Nothing to grade: the grades stay out of the way.
+      $("dashReviewActions").hidden = true;
       $("dashReviewProgress").textContent = "";
       return;
     }
@@ -715,15 +1189,32 @@
       dashReviewState.revealed ? "true" : "false",
     );
     $("dashReviewHint").hidden = dashReviewState.revealed;
+    // The grades are not offered until the answer is on screen. A learner
+    // who grades a word they have not looked at schedules the next review
+    // from a guess, and the guess is what the schedule then believes.
+    $("dashReviewActions").hidden = !dashReviewState.revealed;
     $("dashReviewProgress").textContent = copy("cardPosition", {
       index: dashReviewState.index + 1,
       total: dashReviewState.queue.length,
     });
   }
 
+  /** Locks the grade buttons while a grade is on its way to the server. */
+  function setGradeButtonsBusy(busy) {
+    document.querySelectorAll("#dashReviewActions .grade-btn").forEach((button) => {
+      button.disabled = !!busy;
+    });
+  }
+
   async function submitDashReview(grade) {
+    // A second click while the first request is in flight would score the
+    // same word twice: the server would schedule the next review from the
+    // same answer, and the card would skip the word in between.
+    if (dashReviewState.submitting) return;
     const review = dashReviewState.queue[dashReviewState.index];
     if (!review) return;
+    dashReviewState.submitting = true;
+    setGradeButtonsBusy(true);
     try {
       await api("/api/reviews/" + review.vocabulary.id, {
         method: "POST",
@@ -732,15 +1223,108 @@
       dashReviewState.index += 1;
       renderDashReviewCard();
     } catch (error) {
-      statusLine(error.message, true);
+      reportError(error);
+    } finally {
+      dashReviewState.submitting = false;
+      setGradeButtonsBusy(false);
     }
   }
 
+  /**
+   * Remembers where the keyboard was.
+   *
+   * Every list is rebuilt when the data changes, and a rebuilt element
+   * takes the focus with it: the reader who changed a word's status was
+   * dropped back at the top of the page. The focused control is noted by a
+   * stable identity, and the same control is focused again afterwards.
+   */
+  function captureFocus() {
+    const active = document.activeElement;
+    if (!active || !active.dataset) return null;
+    const key = active.dataset.focusKey;
+    if (!key) return null;
+    const list = active.closest("[data-card-list]");
+    const kind = active.dataset.focusKind || "";
+    let index = -1;
+    if (list) {
+      const same = [...list.querySelectorAll("[data-focus-kind]")].filter(
+        (element) => element.dataset.focusKind === kind,
+      );
+      index = same.indexOf(active);
+    }
+    return { key, listId: list ? list.id : "", kind, index };
+  }
+
+  function restoreFocus(snapshot) {
+    if (!snapshot || !snapshot.listId) return;
+    const list = $(snapshot.listId);
+    if (!list) return;
+    const controls = [...list.querySelectorAll("[data-focus-key]")];
+    let target = controls.find(
+      (element) => element.dataset.focusKey === snapshot.key,
+    );
+    if (!target) {
+      // The row is gone (it was just deleted). The same control in the same
+      // place takes the focus, so the reader stays where they were in the
+      // list instead of being sent back to the top of the page.
+      const same = controls.filter(
+        (element) => element.dataset.focusKind === snapshot.kind,
+      );
+      target = same[Math.min(snapshot.index, same.length - 1)] || same[0];
+    }
+    if (target) target.focus();
+  }
+
+  /** Says, next to a list, that the server did not send the whole set. */
+  function renderTruncation(id, key, truncated, shown, total) {
+    const element = $(id);
+    if (!element) return;
+    element.hidden = !truncated;
+    element.textContent = truncated ? copy(key, { shown, total }) : "";
+  }
+
   function renderAll() {
+    const focus = captureFocus();
+    const scrollY = window.scrollY;
     const favorites = STATE.notes.filter((note) => note.starred);
-    renderNotes(STATE.notes, "notesList", "notesEmpty", "notesCount");
-    renderNotes(favorites, "favoritesList", "favoritesEmpty", "favoritesCount");
+    renderNotes(STATE.notes, "notesList", "notesEmpty", "notesCount", {
+      scope: "notes",
+      total: STATE.notesTotal,
+    });
+    // Favourites are the starred notes among the ones loaded, so their
+    // count is theirs: the account's note total is not their number. When
+    // the notes list is a page of the account, the notice below the
+    // heading says the starred ones may be missing some.
+    renderNotes(favorites, "favoritesList", "favoritesEmpty", "favoritesCount", {
+      scope: "favorites",
+    });
     renderVocabulary(STATE.vocabulary);
+    // The count above each list is the truth about the account. When the
+    // list is only a page of it, the page says so in the same place.
+    renderTruncation(
+      "notesTruncation",
+      "notesTruncated",
+      STATE.notesTruncated,
+      STATE.notes.length,
+      STATE.notesTotal,
+    );
+    renderTruncation(
+      "favoritesTruncation",
+      "favoritesTruncated",
+      STATE.notesTruncated,
+      STATE.notes.length,
+      STATE.notesTotal,
+    );
+    renderTruncation(
+      "vocabularyTruncation",
+      "vocabularyTruncated",
+      STATE.vocabularyTruncated,
+      STATE.vocabulary.length,
+      STATE.vocabularyTotal,
+    );
+    restoreFocus(focus);
+    // A rebuild is not a reason to lose the reader's place in the page.
+    if (scrollY && window.scrollY !== scrollY) window.scrollTo(0, scrollY);
   }
 
   async function loadAll(silent) {
@@ -752,10 +1336,23 @@
       ]);
       STATE.notes = notesData.notes || [];
       STATE.vocabulary = vocabData.vocabulary || [];
+      // The server knows how much the account holds; the array is only the
+      // page it sent. Without a number the length of the array is the
+      // fallback, so an older server still renders.
+      STATE.notesTotal =
+        typeof notesData.total === "number" ? notesData.total : null;
+      STATE.vocabularyTotal =
+        typeof vocabData.total === "number" ? vocabData.total : null;
+      STATE.notesTruncated = readTruncated(notesData.truncated);
+      STATE.vocabularyTruncated = readTruncated(vocabData.truncated);
+      STATE.loadedAt = Date.now();
       renderAll();
       if (!silent) statusLine("");
     } catch (error) {
-      if (!silent) statusLine(error.message, true);
+      // A silent load stays silent on an ordinary failure, but an expired
+      // session is not ordinary: it ends the session whether or not the
+      // reader asked for this refresh.
+      reportError(error, { silent });
     }
   }
 
@@ -765,12 +1362,57 @@
     $("userName").textContent = user.login;
     $("signedOut").hidden = true;
     $("tabsNav").hidden = false;
+    // The footer is always on screen: the privacy policy is for a reader
+    // who is signed in and for one who is not. Only the two controls that
+    // need a session come and go.
     $("footer").hidden = false;
+    $("footerExportGroup").hidden = false;
+    $("footerDeleteGroup").hidden = false;
     // Only the selected tab's panel is shown. Unhiding all four made the tab
     // bar a lie: the page showed Notes, Favorites, Vocabulary and Review
     // stacked under a "Notes" tab that looked selected, and clicking a tab
     // then hid three sections the user had just been reading.
     switchTab("notes", { reload: false });
+  }
+
+  /**
+   * Empties the data the page holds.
+   *
+   * A DOM that still holds the note text is a note the next reader of this
+   * browser can read. Signing out has to take the words off the screen, not
+   * just the token out of the storage.
+   */
+  function clearData() {
+    STATE.notes = [];
+    STATE.vocabulary = [];
+    STATE.notesTotal = null;
+    STATE.vocabularyTotal = null;
+    STATE.notesTruncated = false;
+    STATE.vocabularyTruncated = false;
+    STATE.loadedAt = 0;
+    for (const id of ["notesList", "favoritesList", "vocabularyList"]) {
+      const list = $(id);
+      if (list) list.innerHTML = "";
+    }
+    for (const id of ["notesCount", "favoritesCount", "vocabularyCount"]) {
+      const count = $(id);
+      if (count) count.textContent = "";
+    }
+    for (const id of ["notesEmpty", "favoritesEmpty", "vocabularyEmpty"]) {
+      const empty = $(id);
+      if (empty) empty.hidden = false;
+    }
+    for (const id of [
+      "notesTruncation",
+      "favoritesTruncation",
+      "vocabularyTruncation",
+    ]) {
+      const notice = $(id);
+      if (notice) {
+        notice.hidden = true;
+        notice.textContent = "";
+      }
+    }
   }
 
   function showSignedOut() {
@@ -782,11 +1424,20 @@
     $("favoritesPanel").hidden = true;
     $("vocabularyPanel").hidden = true;
     $("reviewPanel").hidden = true;
-    $("footer").hidden = true;
+    // The privacy link stays: a reader who is not signed in may still want
+    // to know what this page does with their data.
+    $("footer").hidden = false;
+    $("footerExportGroup").hidden = true;
+    $("footerDeleteGroup").hidden = true;
+    clearData();
+    // The sign-in links are the only way back in, so they get a nonce that
+    // this page can verify when the answer comes back. They are prepared
+    // here rather than on click, because a middle click never fires one.
+    prepareSignInLinks();
   }
 
   function signOut() {
-    localStorage.removeItem(TOKEN_KEY);
+    storageRemove(TOKEN_KEY);
     STATE.token = "";
     STATE.user = null;
     showSignedOut();
@@ -853,13 +1504,32 @@
     $("vocabularyPanel").hidden = tab !== "vocabulary";
     $("reviewPanel").hidden = tab !== "review";
     if (!reload) return;
-    // Refresh the visible data when switching tabs so edits made elsewhere
-    // (e.g. in the extension) show up without a manual reload.
     if (tab === "review") {
       void loadDueReviews();
-    } else {
-      void loadAll(true);
+      return;
     }
+    // The notes and the words are already on the page: switching to the
+    // tab that shows them must not fetch the whole account and rebuild
+    // every card again. Five thousand notes took half a second and seventy
+    // thousand nodes, on every switch. A set that has gone stale is
+    // refreshed in the background instead, so the tab never goes blank.
+    void refreshIfStale();
+  }
+
+  /** How old the data may get before a tab switch refreshes it. */
+  const STALE_AFTER_MS = 60_000;
+
+  /**
+   * Refreshes a stale set in the background.
+   *
+   * The extension can add a note while this page is open, so the data does
+   * change without the dashboard doing anything. It just does not change
+   * often enough to pay for a full round trip on every tab switch.
+   */
+  function refreshIfStale() {
+    if (!STATE.token) return;
+    if (STATE.loadedAt && Date.now() - STATE.loadedAt < STALE_AFTER_MS) return;
+    void loadAll(true);
   }
 
   /**
@@ -926,28 +1596,42 @@
   /**
    * Puts the nonce into the sign-in links.
    *
-   * The link stays a link: the nonce is added when the reader presses it,
-   * so the button works the same way with the mouse and with the keyboard.
+   * The nonce is written into the href when the page is drawn, not when the
+   * link is pressed. A middle click and a right click open a link without
+   * firing a click event, so a link that only learned its nonce on click
+   * lost it: the sign-in came back without a nonce this page knew and was
+   * refused.
+   *
+   * The original href is kept on the element, so the link can be prepared
+   * again (after a sign-in spends the nonce) without stacking a second
+   * nonce onto the first.
    */
   function prepareSignInLinks() {
+    let nonce = readPendingNonce();
+    if (!nonce) {
+      nonce = createLoginNonce();
+      try {
+        window.sessionStorage.setItem(NONCE_KEY, nonce);
+      } catch {
+        // Without storage the nonce cannot come back, so the sign-in is
+        // left as it is. It will be refused on the way back, which is the
+        // honest outcome.
+        return;
+      }
+    }
+    const device = deviceId();
     document.querySelectorAll('a[href^="/api/auth/login"]').forEach((link) => {
-      const base = link.getAttribute("href") || LOGIN_PATH;
-      link.addEventListener("click", () => {
-        const nonce = createLoginNonce();
-        try {
-          window.sessionStorage.setItem(NONCE_KEY, nonce);
-        } catch {
-          // Without storage the nonce cannot come back, so the sign-in is
-          // left as it is. It will be refused on the way back, which is the
-          // honest outcome.
-          return;
-        }
-        const separator = base.includes("?") ? "&" : "?";
-        const device = deviceId();
-        const query = "nonce=" + encodeURIComponent(nonce) +
-          (device ? "&device=" + encodeURIComponent(device) : "");
-        link.setAttribute("href", base + separator + query);
-      });
+      const base =
+        link.getAttribute("data-login-href") ||
+        link.getAttribute("href") ||
+        LOGIN_PATH;
+      link.setAttribute("data-login-href", base);
+      const separator = base.includes("?") ? "&" : "?";
+      const query =
+        "nonce=" +
+        encodeURIComponent(nonce) +
+        (device ? "&device=" + encodeURIComponent(device) : "");
+      link.setAttribute("href", base + separator + query);
     });
   }
 
@@ -973,11 +1657,19 @@
         });
         return;
       }
-      localStorage.setItem(TOKEN_KEY, decodeURIComponent(match[1]));
+      storageSet(TOKEN_KEY, decodeURIComponent(match[1]));
     }
-    STATE.token = localStorage.getItem(TOKEN_KEY) || "";
+    STATE.token = storageGet(TOKEN_KEY) || "";
     if (!STATE.token) {
       showSignedOut();
+      // "No token" and "no storage" look the same from here, and they are
+      // not: a browser that refuses local storage cannot keep a session at
+      // all. Saying so is better than an empty page with no explanation.
+      if (!storageWorks()) {
+        statusLine(copy("storageBlocked"), true, "storageBlocked", null, {
+          retry: false,
+        });
+      }
       return;
     }
     try {
@@ -988,21 +1680,20 @@
     } catch (error) {
       showSignedOut();
       // An expired session is not a broken page: the reader is signed out
-      // and the sign-in button is right there. It is said calmly, without
-      // the red error colour of a failure.
-      if (error.noRetry) {
-        // The key is remembered, so a language change puts the sentence
-        // back in the new language instead of leaving English behind.
-        statusLine(error.message, false, "sessionExpired", null, {
-          retry: false,
-        });
-      } else {
-        statusLine(error.message, true);
-      }
+      // and the sign-in button is right there. reportError says it calmly,
+      // then drops the token - never the other way round.
+      reportError(error);
     }
   }
 
+  // The page is started once. Starting it twice would attach every
+  // listener twice, and would prepare a second sign-in nonce over the one
+  // that was already spent.
+  let started = false;
+
   document.addEventListener("DOMContentLoaded", () => {
+    if (started) return;
+    started = true;
     // The language is settled before anything is drawn, so the first paint
     // is already in the user's language.
     language = detectLanguage();
@@ -1014,7 +1705,7 @@
       void loadAll();
       void loadDueReviews();
       statusFromCopy("refreshed");
-      setTimeout(() => statusLine(""), 1200);
+      clearStatusLater("refreshed", 1200);
     });
     // Coming back to this tab refreshes data from the cloud.
     document.addEventListener("visibilitychange", () => {
@@ -1033,13 +1724,32 @@
         const url = URL.createObjectURL(blob);
         const link = document.createElement("a");
         link.href = url;
-        link.download = "youtube-digest-export-" + new Date().toISOString().slice(0, 10) + ".json";
+        // The local date, not the UTC one: a reader in UTC+8 who exports
+        // before 8am got yesterday's date in the filename.
+        link.download =
+          "youtube-digest-export-" + localDateStamp(new Date()) + ".json";
         link.click();
         URL.revokeObjectURL(url);
-        statusFromCopy("exportDownloaded");
-        setTimeout(() => statusLine(""), 2000);
+        // The export says what it left out. A download that looks complete
+        // and is not is worse than no download at all.
+        const missing = exportTruncation(data);
+        if (missing && missing.known) {
+          statusLine(copy("exportTruncated", missing.params), true, "exportTruncated", missing.params, { retry: false });
+        } else if (missing) {
+          statusLine(copy("exportTruncatedUnknown"), true, "exportTruncatedUnknown", null, { retry: false });
+        } else {
+          statusFromCopy("exportDownloaded");
+        }
+        clearStatusLater(
+          missing && missing.known
+            ? "exportTruncated"
+            : missing
+              ? "exportTruncatedUnknown"
+              : "exportDownloaded",
+          4000,
+        );
       } catch (error) {
-        statusLine(error.message, true);
+        reportError(error);
       }
     });
     $("deleteAccountBtn").addEventListener("click", async () => {
@@ -1047,12 +1757,12 @@
       if (!confirm(copy("confirmDeleteEverything"))) return;
       try {
         await api("/api/account", { method: "DELETE" });
-        localStorage.removeItem(TOKEN_KEY);
+        storageRemove(TOKEN_KEY);
         STATE.token = "";
         showSignedOut();
         statusFromCopy("accountDeleted");
       } catch (error) {
-        statusLine(error.message, true);
+        reportError(error);
       }
     });
     document.querySelectorAll(".tab").forEach((button) => {
@@ -1072,6 +1782,8 @@
       $("dashReviewExplanation").hidden = false;
       $("reviewCard").setAttribute("aria-expanded", "true");
       $("dashReviewHint").hidden = true;
+      // The answer is on screen: now the grades may be offered.
+      $("dashReviewActions").hidden = false;
     });
     document.querySelectorAll("#dashReviewActions .grade-btn").forEach((btn) => {
       btn.addEventListener("click", () => {

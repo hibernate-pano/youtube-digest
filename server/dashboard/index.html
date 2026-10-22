@@ -63,6 +63,26 @@
         <button class="tab" type="button" role="tab" id="tab-review" data-tab="review" aria-controls="reviewPanel" aria-selected="false" tabindex="-1"><span data-i18n="tabReview">Review</span></button>
       </nav>
 
+      <!-- Without JavaScript the page is still a sign-in page: the block
+           below is drawn by the script, so a reader who cannot run it gets
+           this one instead, and the footer's privacy link is still there.
+           A page that needs a script to say anything at all says nothing. -->
+      <noscript>
+        <section class="signed-out">
+          <h1>Your learning data, in one place</h1>
+          <p>
+            Sign in with GitHub to see the notes you wrote while watching a
+            video, the notes you starred, and the words you saved for review.
+          </p>
+          <a class="login-btn big" href="/api/auth/login?redirect=/">Sign in with GitHub</a>
+          <p>
+            Showing your notes needs JavaScript. The
+            <a href="/privacy.html">privacy policy</a> says what happens to
+            your data either way.
+          </p>
+        </section>
+      </noscript>
+
       <section id="signedOut" class="signed-out" hidden>
         <h1 data-i18n="heroTitle">Your learning data, in one place</h1>
         <p data-i18n="heroBody">
@@ -97,8 +117,9 @@
           <h2 data-i18n="notesHeading">Notes</h2>
           <span class="count" id="notesCount"></span>
         </div>
+        <p class="panel-note truncation" id="notesTruncation" hidden></p>
         <div class="empty" id="notesEmpty" hidden data-i18n="notesEmpty">No notes yet. Save one from the extension while watching a video.</div>
-        <div id="notesList" class="cards"></div>
+        <div id="notesList" class="cards" data-card-list="notes"></div>
       </section>
 
       <section id="favoritesPanel" role="tabpanel" aria-labelledby="tab-favorites" hidden>
@@ -111,8 +132,9 @@
           panel and it is pinned here, on every device signed in to the same
           account.
         </p>
+        <p class="panel-note truncation" id="favoritesTruncation" hidden></p>
         <div class="empty" id="favoritesEmpty" hidden data-i18n="favoritesEmpty">Nothing starred yet. Star a note in the extension and it is pinned here.</div>
-        <div id="favoritesList" class="cards"></div>
+        <div id="favoritesList" class="cards" data-card-list="favorites"></div>
       </section>
 
       <section id="vocabularyPanel" role="tabpanel" aria-labelledby="tab-vocabulary" hidden>
@@ -124,11 +146,12 @@
           Words come from the extension: save a word from its Words tab and
           it is listed here, ready for review.
         </p>
+        <p class="panel-note truncation" id="vocabularyTruncation" hidden></p>
         <div class="empty" id="vocabularyEmpty" hidden data-i18n="vocabularyEmpty">
           No words saved yet. Save a word in the extension and it appears
           here.
         </div>
-        <div id="vocabularyList" class="cards"></div>
+        <div id="vocabularyList" class="cards" data-card-list="vocabulary"></div>
       </section>
 
       <section id="reviewPanel" role="tabpanel" aria-labelledby="tab-review" hidden>
@@ -163,12 +186,21 @@
 
       <div class="status-line" id="statusLine" role="status" aria-live="polite"></div>
 
-      <footer class="footer" id="footer" hidden>
+      <!-- The footer is always on screen, because the privacy policy is for
+           a reader who is signed in and for one who is not. Only the two
+           controls that need a session are hidden until there is one.
+           Each control keeps its separator: a separator that ends a line on
+           a narrow screen is a dot on its own. -->
+      <footer class="footer" id="footer">
         <a href="/privacy.html" target="_blank" rel="noreferrer" data-i18n="privacy">Privacy</a>
-        <span class="footer-sep">·</span>
-        <button id="exportBtn" type="button" class="ghost-btn" data-i18n="exportData">Export my data</button>
-        <span class="footer-sep">·</span>
-        <button id="deleteAccountBtn" type="button" class="ghost-btn danger-link" data-i18n="deleteAccount">Delete my account</button>
+        <span class="footer-group" id="footerExportGroup" hidden>
+          <span class="footer-sep">·</span>
+          <button id="exportBtn" type="button" class="ghost-btn" data-i18n="exportData">Export my data</button>
+        </span>
+        <span class="footer-group" id="footerDeleteGroup" hidden>
+          <span class="footer-sep">·</span>
+          <button id="deleteAccountBtn" type="button" class="ghost-btn danger-link" data-i18n="deleteAccount">Delete my account</button>
+        </span>
       </footer>
     </main>
 
