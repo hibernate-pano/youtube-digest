@@ -24,7 +24,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
-const { chromium } = require("playwright");
+const { launchReviewBrowser } = require("./lib/review-browser.js");
 
 const root = path.resolve(__dirname, "..");
 const outDir = path.resolve(process.argv[2] || path.join(root, ".review"));
@@ -785,7 +785,7 @@ const READ_KEY_NOTICE = () => {
 
 async function main() {
   fs.mkdirSync(outDir, { recursive: true });
-  const browser = await chromium.launch();
+  const browser = await launchReviewBrowser();
   const { context, page, errors } = await openPanel(browser);
 
   const failures = [];

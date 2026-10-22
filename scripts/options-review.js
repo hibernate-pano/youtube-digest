@@ -20,7 +20,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
-const { chromium } = require("playwright");
+const { launchReviewBrowser } = require("./lib/review-browser.js");
 
 const root = path.resolve(__dirname, "..");
 const outDir = path.resolve(
@@ -139,7 +139,7 @@ const READ_LAYOUT = () => {
 
 async function main() {
   fs.mkdirSync(outDir, { recursive: true });
-  const browser = await chromium.launch();
+  const browser = await launchReviewBrowser();
   const context = await browser.newContext({
     viewport: { width: 720, height: 1000 },
     deviceScaleFactor: 2,
