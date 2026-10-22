@@ -17,7 +17,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { MemoryStore, NeonStore } = require("../src/db");
+const { MemoryStore, NeonStore, MAX_ACCOUNT_ROWS } = require("../src/db");
 const { createFakeSql } = require("./helpers/fake-sql");
 
 const ALICE = 1;
@@ -401,6 +401,219 @@ for (const name of ["MemoryStore", "NeonStore"]) {
     );
     const delta = await f.store.getSyncDelta(ALICE, "2000-01-01T00:00:00Z");
     assert.equal(delta.notes.length, 1);
+  });
+
+  test(`[${name}] a word that is captured again keeps what the first device knew`, async () => {
+    const f = createFixture(name);
+    await f.store.upsertVocabulary(ALICE, {
+      term: "ubiquitous",
+      translation: "无处不在的",
+      sentence: "Ubiquitous computing is here.",
+      sentenceTranslation: "普适计算已到来。",
+      videoId: "abc123xyz",
+      videoTitle: "A talk",
+      timestampSeconds: 12,
+      status: "mastered",
+    });
+
+    // The same word, captured on a second device. That device knows less
+    // about the word than the first one, so it arrives with an empty
+    // translation and the default state.
+    const again = await f.store.upsertVocabulary(ALICE, {
+      term: "ubiquitous",
+      translation: "",
+      sentence: "Ubiquitous computing is here.",
+      sentenceTranslation: "",
+      videoId: "abc123xyz",
+      videoTitle: "A talk",
+      timestampSeconds: 12,
+      status: "learning",
+    });
+
+    assert.equal(
+      again.translation,
+      "无处不在的",
+      "a re-capture must not wipe the translation",
+    );
+    assert.equal(
+      again.sentenceTranslation,
+      "普适计算已到来。",
+      "a re-capture must not wipe the explanation",
+    );
+    assert.equal(
+      again.status,
+      "mastered",
+      "a re-capture must not undo the learning state",
+    );
+  });
+
+  test(`[${name}] a re-capture fills in what the first device did not know`, async () => {
+    const f = createFixture(name);
+    await f.store.upsertVocabulary(ALICE, {
+      term: "ephemeral",
+      translation: "",
+      sentence: "Ephemeral things come and go.",
+      sentenceTranslation: "",
+      videoId: "abc123xyz",
+      videoTitle: "A talk",
+      timestampSeconds: 12,
+      status: "learning",
+    });
+
+    const again = await f.store.upsertVocabulary(ALICE, {
+      term: "ephemeral",
+      translation: "短暂的",
+      sentence: "Ephemeral things come and go.",
+      sentenceTranslation: "易逝的东西来去匆匆。",
+      videoId: "abc123xyz",
+      videoTitle: "A talk",
+      timestampSeconds: 12,
+      status: "mastered",
+    });
+
+    assert.equal(again.translation, "短暂的", "a new translation is taken over");
+    assert.equal(again.sentenceTranslation, "易逝的东西来去匆匆。");
+    assert.equal(again.status, "mastered", "the learning state may move forward");
+  });
+
+  test(`[${name}] a deleted note does not come back`, async () => {
+    const f = createFixture(name);
+    const created = await f.store.createNote(ALICE, {
+      clientId: "note_deleted",
+      videoId: "abc123xyz",
+      videoTitle: "",
+      channelName: "",
+      timestampSeconds: 0,
+      quote: "",
+      note: "a note the user deleted",
+    });
+    assert.ok(await f.store.deleteNote(ALICE, created.id));
+
+    const listed = await f.store.listNotes(ALICE);
+    assert.equal(listed.length, 0, "a deleted note must not be listed any more");
+
+    // The device that still holds the note pushes it again. The delete
+    // wins: the note does not come back from the server.
+    await f.store.createNote(ALICE, {
+      clientId: "note_deleted",
+      videoId: "abc123xyz",
+      videoTitle: "",
+      channelName: "",
+      timestampSeconds: 0,
+      quote: "",
+      note: "a note the user deleted",
+    });
+
+    const after = await f.store.listNotes(ALICE);
+    assert.equal(
+      after.length,
+      0,
+      "a note that was deleted must not come back when a stale device pushes it",
+    );
+  });
+
+  test(`[${name}] a deleted note is reported as deleted in the sync delta`, async () => {
+    const f = createFixture(name);
+    const created = await f.store.createNote(ALICE, {
+      clientId: "note_delta_deleted",
+      videoId: "abc123xyz",
+      videoTitle: "",
+      channelName: "",
+      timestampSeconds: 0,
+      quote: "",
+      note: "text",
+    });
+    await f.store.deleteNote(ALICE, created.id);
+
+    const delta = await f.store.getSyncDelta(ALICE, "2000-01-01T00:00:00Z");
+    assert.equal(delta.notes.length, 0, "a deleted note is not a changed note");
+    assert.ok(delta.deleted, "the delta has to say what was deleted");
+    const keys = delta.deleted.notes.map((row) => row.clientId);
+    assert.ok(
+      keys.includes("note_delta_deleted"),
+      "the other devices have to learn that the note is gone",
+    );
+  });
+
+  test(`[${name}] the review schedule of a deleted word survives the delete`, async () => {
+    const f = createFixture(name);
+    const vocab = await f.store.upsertVocabulary(ALICE, {
+      term: "persistence",
+      translation: "坚持",
+      sentence: "Persistence pays off.",
+      sentenceTranslation: "",
+      videoId: "abc123xyz",
+      videoTitle: "A talk",
+      timestampSeconds: 12,
+      status: "learning",
+    });
+    await f.store.submitReview(ALICE, vocab.id, 4);
+    await f.store.deleteVocabulary(ALICE, vocab.id);
+
+    const dueAfterDelete = await f.store.listDueReviews(ALICE);
+    assert.equal(dueAfterDelete.length, 0, "a deleted word is not offered for review");
+
+    // The user captures the word again. It comes back as the same row, and
+    // with the schedule it had: a word the user had already worked on must
+    // not start over as a word that is due right now.
+    const restored = await f.store.upsertVocabulary(ALICE, {
+      term: "persistence",
+      translation: "坚持",
+      sentence: "Persistence pays off.",
+      sentenceTranslation: "",
+      videoId: "abc123xyz",
+      videoTitle: "A talk",
+      timestampSeconds: 12,
+      status: "learning",
+    });
+    assert.equal(restored.id, vocab.id, "the word must come back as the same row");
+
+    const dueAfterRestore = await f.store.listDueReviews(ALICE);
+    assert.equal(
+      dueAfterRestore.length,
+      0,
+      "the review schedule must survive the delete: the word was graded, so it is not due",
+    );
+  });
+
+  test(`[${name}] an account at the cap can still edit what it has`, async () => {
+    const f = createFixture(name);
+    const first = await f.addNote(ALICE, { clientId: "note_at_cap", note: "the original text" });
+    // Fill the account to its limit.
+    const filler = Array.from({ length: MAX_ACCOUNT_ROWS - 1 }, (_, index) => ({
+      clientId: "filler_" + index,
+      note: "text",
+    }));
+    if (f.calls) {
+      // The fake owns the tables, so the filler goes straight in.
+      for (const note of filler) f.calls.seedNote(ALICE, { client_id: note.clientId, note: note.note });
+    } else {
+      for (const note of filler) {
+        await f.store.createNote(ALICE, {
+          clientId: note.clientId,
+          videoId: "abc123xyz",
+          videoTitle: "",
+          channelName: "",
+          timestampSeconds: 0,
+          quote: "",
+          note: note.note,
+        });
+      }
+    }
+
+    // Editing an existing note is not writing a new row, so the cap must
+    // not refuse it.
+    const edited = await f.store.createNote(ALICE, {
+      clientId: "note_at_cap",
+      videoId: "abc123xyz",
+      videoTitle: "",
+      channelName: "",
+      timestampSeconds: 0,
+      quote: "",
+      note: "the edited text",
+    });
+    assert.equal(edited.id, first.id);
+    assert.equal(edited.note, "the edited text");
   });
 
   test(`[${name}] deleting the account bumps the token version`, async () => {

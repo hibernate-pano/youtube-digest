@@ -26,10 +26,18 @@ create table if not exists notes (
   starred boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
+  -- A deleted note keeps its row. The tombstone is what stops the device
+  -- that still holds the note from pushing it back and bringing it back
+  -- from the server.
+  deleted_at timestamptz,
   unique (user_id, client_id)
 );
 create index if not exists notes_user_updated_idx on notes (user_id, updated_at);
 create index if not exists notes_user_client_idx on notes (user_id, client_id);
+-- The scheduled run drops the old tombstones every few minutes. Without an
+-- index that is a scan of every note ever written, so the index covers only
+-- the rows the query is about.
+create index if not exists notes_deleted_idx on notes (deleted_at) where deleted_at is not null;
 
 create table if not exists vocabulary (
   id uuid primary key default gen_random_uuid(),
@@ -45,9 +53,22 @@ create table if not exists vocabulary (
     check (status in ('learning', 'reviewing', 'mastered')),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  unique (user_id, term, sentence)
+  -- A deleted word keeps its row, and with it the review schedule that
+  -- belongs to it: a word that is captured again comes back with the
+  -- progress the user made.
+  deleted_at timestamptz,
+  -- The identity of a word is a hash of its text. A btree index over the
+  -- sentence itself cannot hold a long subtitle line - the entry would be
+  -- larger than the 2704 bytes Postgres allows - and every attempt to store
+  -- such a word would fail. Two hashes, because their lengths are fixed:
+  -- a term and a sentence can be told apart again, while the text itself
+  -- could not (a term ending in the separator and a sentence starting with
+  -- it would look like one term and one sentence).
+  sync_key text generated always as (md5(term) || md5(sentence)) stored
 );
 create index if not exists vocabulary_user_updated_idx on vocabulary (user_id, updated_at);
+create unique index if not exists vocabulary_user_sync_key_unique on vocabulary (user_id, sync_key);
+create index if not exists vocabulary_deleted_idx on vocabulary (deleted_at) where deleted_at is not null;
 
 create table if not exists review_items (
   id uuid primary key default gen_random_uuid(),

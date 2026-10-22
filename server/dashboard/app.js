@@ -12,6 +12,9 @@
   // matching nonce is not ours: it would quietly sign the reader into
   // somebody else's account.
   const NONCE_KEY = "ytd_dashboard_login_nonce";
+  // The browser this page signs in from. The session is bound to it, so a
+  // token that was copied out of this browser is refused by the server.
+  const DEVICE_KEY = "ytd_dashboard_device";
   const STATE = { token: "", user: null, notes: [], vocabulary: [] };
 
   // The three learning states a saved word can be in. The label is what the
@@ -436,6 +439,10 @@
   async function api(path, options) {
     const headers = {};
     if (STATE.token) headers.Authorization = "Bearer " + STATE.token;
+    // The session is bound to this browser, so every request says which
+    // browser it comes from.
+    const device = deviceId();
+    if (device) headers["X-Device-Id"] = device;
     if (options && options.body !== undefined) headers["Content-Type"] = "application/json";
     const response = await fetch(path, {
       method: (options && options.method) || "GET",
@@ -870,6 +877,34 @@
     return nonce;
   }
 
+  /**
+   * The id of this browser, kept between visits.
+   *
+   * The sign-in names it and every request carries it, so the session only
+   * works in the browser it was started in.
+   */
+  function deviceId() {
+    let device = "";
+    try {
+      device = window.localStorage.getItem(DEVICE_KEY) || "";
+    } catch {
+      return "";
+    }
+    if (device) return device;
+    const bytes = new Uint8Array(16);
+    window.crypto.getRandomValues(bytes);
+    let fresh = "";
+    for (const byte of bytes) fresh += byte.toString(16).padStart(2, "0");
+    try {
+      window.localStorage.setItem(DEVICE_KEY, fresh);
+    } catch {
+      // Without storage the session cannot be bound to a device. The page
+      // keeps working, it is just not bound.
+      return "";
+    }
+    return fresh;
+  }
+
   function readPendingNonce() {
     try {
       return window.sessionStorage.getItem(NONCE_KEY) || "";
@@ -908,7 +943,10 @@
           return;
         }
         const separator = base.includes("?") ? "&" : "?";
-        link.setAttribute("href", base + separator + "nonce=" + encodeURIComponent(nonce));
+        const device = deviceId();
+        const query = "nonce=" + encodeURIComponent(nonce) +
+          (device ? "&device=" + encodeURIComponent(device) : "");
+        link.setAttribute("href", base + separator + query);
       });
     });
   }

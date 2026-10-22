@@ -304,6 +304,45 @@ describe("the migration runs against a real PostgreSQL", async (t) => {
     });
   });
 
+  await t.test("an old database can store a sentence longer than an index entry", async () => {
+    await inTempSchema(async (scoped, name) => {
+      await scoped.query(OLD_SHAPE);
+      await scoped.query("insert into users (github_id, github_login) values (7, 'alice')");
+      // A word that was stored before the upgrade, so the new index has to
+      // be built over rows that already exist.
+      await scoped.query(
+        "insert into vocabulary (user_id, term, sentence) values (1, 'old', 'an old word')",
+      );
+
+      await applyMigration(scoped);
+
+      // Random text: a sentence of one repeated character is compressed by
+      // Postgres and would never reach the limit of an index entry.
+      const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+      let sentence = "";
+      const bytes = require("node:crypto").randomBytes(4000);
+      for (let index = 0; index < 4000; index += 1) {
+        sentence += alphabet[bytes[index] % alphabet.length];
+      }
+      const inserted = await scoped.query(
+        "insert into vocabulary (user_id, term, sentence) values (1, 'long', $1) returning id",
+        [sentence],
+      );
+      assert.equal(inserted.rows.length, 1, "a 4000-byte sentence has to be stored");
+
+      // The old uniqueness is still enforced, now through the hash: the
+      // same word pushed twice is the same row.
+      const again = await scoped.query(
+        `insert into vocabulary (user_id, term, sentence) values (1, 'long', $1)
+           on conflict (user_id, sync_key) do update set status = 'reviewing'
+           returning id, status`,
+        [sentence],
+      );
+      assert.equal(again.rows[0].id, inserted.rows[0].id, "the same word is the same row");
+      assert.equal(again.rows[0].status, "reviewing");
+    });
+  });
+
   await t.test("running the migration twice changes nothing", async () => {
     await inTempSchema(async (scoped, name) => {
       await applyMigration(scoped);

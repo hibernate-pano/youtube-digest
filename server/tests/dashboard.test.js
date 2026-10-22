@@ -131,6 +131,9 @@ async function bootDashboard(options = {}) {
   if (options.storedLang) {
     window.localStorage.setItem("ytd_dashboard_lang", options.storedLang);
   }
+  if (options.device) {
+    window.localStorage.setItem("ytd_dashboard_device", options.device);
+  }
   if (options.hash) {
     window.history.replaceState(null, "", options.hash);
   }
@@ -512,6 +515,31 @@ test("the sign-in link carries a nonce this page can recognize", async () => {
     "the link carries the very nonce the page kept",
   );
   assert.ok(href.includes("redirect=/"), "the link still comes back here");
+
+  // The browser is named as well, so the server can bind the session to it:
+  // a token copied out of this browser is refused there.
+  const device = window.localStorage.getItem("ytd_dashboard_device");
+  assert.ok(device, "pressing sign-in leaves a device id behind");
+  assert.ok(
+    href.includes("device=" + encodeURIComponent(device)),
+    "the link carries the device the session is bound to",
+  );
+});
+
+test("every API request says which browser it comes from", async () => {
+  const { calls } = await bootDashboard({
+    signedIn: true,
+    device: "device-0123456789abcdef",
+  });
+  // The server refuses a bound session in another browser, so the header is
+  // what makes the page's own requests work.
+  const call = calls.find((entry) => entry.path === "/api/me");
+  assert.ok(call, "the page asks who it is signed in as");
+  assert.equal(
+    call.init.headers["X-Device-Id"],
+    "device-0123456789abcdef",
+    "every request has to name the browser the session is bound to",
+  );
 });
 
 test("a token without this page's nonce is refused", async () => {

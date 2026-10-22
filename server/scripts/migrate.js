@@ -67,7 +67,55 @@ const UPGRADE_STATEMENTS = [
       end if;
     end $$;`,
   "alter table if exists notes add column if not exists starred boolean not null default false;",
-  // Token revocation: the account's token version is bumped when the
+  // A deleted note or word keeps its row: the tombstone is what stops the
+  // device that still holds it from pushing it back. `create table if not
+  // exists` never touches an existing table, so the columns have to be
+  // added here.
+  "alter table if exists notes add column if not exists deleted_at timestamptz;",
+  "alter table if exists vocabulary add column if not exists deleted_at timestamptz;",
+  // A word is identified by its text, and a subtitle line can be longer than
+  // the 2704 bytes a btree index entry can hold. The identity therefore
+  // moves into a hash column: the index entry stays small, so a long
+  // sentence is stored instead of failing every single time.
+  //
+  // Two md5 hashes instead of one: the hashes have a fixed length, so the
+  // pair can be told apart again, while `term || sentence` could not (a term
+  // ending in the separator and a sentence starting with it would hash the
+  // same as one term and one sentence).
+  "alter table if exists vocabulary add column if not exists sync_key text generated always as (md5(term) || md5(sentence)) stored;",
+  // The old uniqueness was a btree index over the whole sentence, so it has
+  // to go before the new one can take over. The constraint is looked up by
+  // its columns instead of by its name: a database that was created by an
+  // older schema may carry a different name for the same thing.
+  `do $$
+    declare
+      target text;
+    begin
+      for target in
+        select c.conname
+        from pg_constraint c
+        join pg_class t on t.oid = c.conrelid
+        where t.relname = 'vocabulary'
+          and c.contype = 'u'
+          and (
+            select array_agg(a.attname::text order by array_position(c.conkey, a.attnum))
+            from pg_attribute a
+            where a.attrelid = c.conrelid and a.attnum = any(c.conkey)
+          ) = array['user_id','term','sentence']
+      loop
+        execute format('alter table vocabulary drop constraint %I', target);
+      end loop;
+    end $$;`,
+  // The index over the hash column. It waits for the table: on a fresh
+  // database the table is created by schema.sql, which runs after these
+  // statements.
+  `do $$
+    begin
+      if to_regclass('vocabulary') is not null then
+        create unique index if not exists vocabulary_user_sync_key_unique
+          on vocabulary (user_id, sync_key);
+      end if;
+    end $$;`,  // Token revocation: the account's token version is bumped when the
   // account is deleted, which invalidates the JWTs it issued.
   "alter table if exists users add column if not exists token_version integer not null default 0;",
   // The review interval is capped at a year. `create table if not exists`

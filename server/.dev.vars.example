@@ -3,6 +3,10 @@ GITHUB_CLIENT_ID=Ov23li-example
 GITHUB_CLIENT_SECRET=example-secret
 # Generate with: openssl rand -hex 32
 JWT_SECRET=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-# Neon serverless Postgres connection string (pooled). Omit to use the
-# in-memory dev store for local experiments.
+# Neon serverless Postgres connection string (pooled). This is required: a
+# Worker without a database refuses to serve rather than lose everyone's data
+# at the next restart.
 DATABASE_URL=postgres://user:password@ep-example-123456-pooler.us-east-1.aws.neon.tech/neondb?sslmode=require
+# Only for an OAuth-flow experiment without a database. The store lives in
+# one instance of the Worker, so restarts lose everything.
+# ALLOW_MEMORY_STORE=1

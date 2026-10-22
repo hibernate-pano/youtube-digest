@@ -48,6 +48,23 @@ function realStore() {
 
 const describe = DATABASE_URL ? test : test.skip;
 
+/**
+ * Random text of a given length.
+ *
+ * A sentence of one repeated character is compressed by Postgres and would
+ * never reach the limit of an index entry, so a test about long sentences
+ * has to use text that does not compress.
+ */
+function randomText(length) {
+  const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  const bytes = require("node:crypto").randomBytes(length);
+  let text = "";
+  for (let index = 0; index < length; index += 1) {
+    text += alphabet[bytes[index] % alphabet.length];
+  }
+  return text;
+}
+
 describe("the store's SQL is executable by a real PostgreSQL", async (t) => {
   t.before(async () => {
     await createSchema(pool, schemaSql);
@@ -315,6 +332,144 @@ describe("the store's SQL is executable by a real PostgreSQL", async (t) => {
 
     assert.equal(await store.deleteNote(user.id, created.id), true);
     assert.equal((await store.listNotes(user.id)).length, 0);
+  });
+
+  await t.test("a long sentence is stored instead of failing every time", async () => {
+    await resetTables(pool);
+    const store = realStore();
+    const user = await store.upsertUser({ githubId: 1007, login: "long" });
+    // Random text: a sentence of one repeated character is compressed by
+    // Postgres and would never reach the limit of an index entry.
+    const sentence = randomText(4000);
+    const word = await store.upsertVocabulary(user.id, {
+      term: "longword",
+      translation: "t",
+      sentence,
+      sentenceTranslation: "",
+      videoId: "vid1",
+      videoTitle: "Title",
+      timestampSeconds: 0,
+      status: "learning",
+    });
+
+    assert.equal(word.sentence.length, 4000, "the word has to be stored as it was sent");
+    const again = await store.upsertVocabulary(user.id, {
+      term: "longword",
+      translation: "",
+      sentence,
+      sentenceTranslation: "",
+      videoId: "vid1",
+      videoTitle: "Title",
+      timestampSeconds: 0,
+      status: "learning",
+    });
+    assert.equal(again.id, word.id, "the same word is the same row");
+  });
+
+  await t.test("a word that is captured again keeps what the first device knew", async () => {
+    await resetTables(pool);
+    const store = realStore();
+    const user = await store.upsertUser({ githubId: 1008, login: "merge" });
+    await store.upsertVocabulary(user.id, {
+      term: "ubiquitous",
+      translation: "无处不在的",
+      sentence: "Ubiquitous computing is here.",
+      sentenceTranslation: "普适计算已到来。",
+      videoId: "vid1",
+      videoTitle: "Title",
+      timestampSeconds: 12,
+      status: "mastered",
+    });
+
+    // The same word, captured on a second device that knows less about it.
+    const again = await store.upsertVocabulary(user.id, {
+      term: "ubiquitous",
+      translation: "",
+      sentence: "Ubiquitous computing is here.",
+      sentenceTranslation: "",
+      videoId: "vid1",
+      videoTitle: "Title",
+      timestampSeconds: 12,
+      status: "learning",
+    });
+
+    assert.equal(again.translation, "无处不在的", "a re-capture must not wipe the translation");
+    assert.equal(again.sentenceTranslation, "普适计算已到来。");
+    assert.equal(again.status, "mastered", "a re-capture must not undo the learning state");
+  });
+
+  await t.test("a deleted note does not come back", async () => {
+    await resetTables(pool);
+    const store = realStore();
+    const user = await store.upsertUser({ githubId: 1009, login: "tombstone" });
+    const note = await store.createNote(user.id, {
+      clientId: "c1",
+      videoId: "vid1",
+      videoTitle: "Title",
+      channelName: "Channel",
+      timestampSeconds: 10,
+      quote: "",
+      note: "note",
+    });
+    await store.deleteNote(user.id, note.id);
+
+    // The device that still holds the note pushes it again.
+    await store.createNote(user.id, {
+      clientId: "c1",
+      videoId: "vid1",
+      videoTitle: "Title",
+      channelName: "Channel",
+      timestampSeconds: 10,
+      quote: "",
+      note: "note",
+    });
+
+    assert.equal(
+      (await store.listNotes(user.id)).length,
+      0,
+      "a note that was deleted must not come back from the server",
+    );
+  });
+
+  await t.test("the review schedule of a deleted word survives the delete", async () => {
+    await resetTables(pool);
+    const store = realStore();
+    const user = await store.upsertUser({ githubId: 1010, login: "reviews" });
+    const word = await store.upsertVocabulary(user.id, {
+      term: "persistence",
+      translation: "坚持",
+      sentence: "Persistence pays off.",
+      sentenceTranslation: "",
+      videoId: "vid1",
+      videoTitle: "Title",
+      timestampSeconds: 12,
+      status: "learning",
+    });
+    await store.submitReview(user.id, word.id, 4);
+    await store.deleteVocabulary(user.id, word.id);
+
+    // The user captures the word again: it comes back as the same row, with
+    // the schedule it had. A word the user had worked on must not start
+    // over as a word that is due right now.
+    const restored = await store.upsertVocabulary(user.id, {
+      term: "persistence",
+      translation: "坚持",
+      sentence: "Persistence pays off.",
+      sentenceTranslation: "",
+      videoId: "vid1",
+      videoTitle: "Title",
+      timestampSeconds: 12,
+      status: "learning",
+    });
+    assert.equal(restored.id, word.id, "the word must come back as the same row");
+
+    const { rows } = await pool.query(
+      "select reps, interval_days from review_items where vocabulary_id = $1",
+      [word.id],
+    );
+    assert.equal(rows.length, 1, "the review row has to survive the delete");
+    assert.equal(rows[0].reps, 1, "the review history must not start over");
+    assert.equal(rows[0].interval_days, 2);
   });
 });
 

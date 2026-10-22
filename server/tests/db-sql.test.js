@@ -276,3 +276,133 @@ test("both stores refuse to count a table that does not exist", async () => {
   await assert.rejects(() => memory.countRows("secrets", ALICE));
   await assert.rejects(() => neon.countRows("secrets", ALICE));
 });
+
+const VOCABULARY_ROW = {
+  id: "word-1",
+  term: "longword",
+  translation: "t",
+  sentence: "A sentence.",
+  sentenceTranslation: "",
+  videoId: "video-1",
+  videoTitle: "A title",
+  timestampSeconds: 12,
+  status: "learning",
+  createdAt: "2026-01-01T00:00:00.000Z",
+  updatedAt: "2026-01-02T00:00:00.000Z",
+};
+
+test("a word is identified by a hash, so a long sentence can be stored", async () => {
+  // A btree index over the sentence itself cannot hold a long subtitle
+  // line: the entry would be larger than the 2704 bytes Postgres allows,
+  // and every attempt to store the word would fail with an error the user
+  // never sees.
+  const driver = createDriver((text) =>
+    /insert into vocabulary/i.test(text) ? [VOCABULARY_ROW] : [],
+  );
+  const store = new NeonStore("postgres://example", driver);
+
+  await store.upsertVocabulary(ALICE, {
+    term: "longword",
+    translation: "t",
+    sentence: "x".repeat(4000),
+    sentenceTranslation: "",
+    videoId: "abc123xyz",
+    videoTitle: "v",
+    timestampSeconds: 0,
+    status: "learning",
+  });
+
+  const insert = driver.calls.find((call) => /insert into vocabulary/.test(call.text));
+  assert.ok(insert, "the word must be inserted");
+  assert.match(
+    insert.text,
+    /on conflict \(user_id, sync_key\)/,
+    "the identity of a word has to be the hash, not the sentence itself",
+  );
+  assert.doesNotMatch(
+    insert.text,
+    /on conflict \(user_id, term, sentence\)/,
+    "the sentence may not be part of the index: it can be longer than an index entry",
+  );
+});
+
+test("a re-captured word does not overwrite what the first device knew", async () => {
+  const driver = createDriver((text) =>
+    /insert into vocabulary/i.test(text) ? [VOCABULARY_ROW] : [],
+  );
+  const store = new NeonStore("postgres://example", driver);
+
+  await store.upsertVocabulary(ALICE, {
+    term: "ubiquitous",
+    translation: "无处不在的",
+    sentence: "Ubiquitous computing is here.",
+    sentenceTranslation: "普适计算已到来。",
+    videoId: "abc123xyz",
+    videoTitle: "v",
+    timestampSeconds: 0,
+    status: "mastered",
+  });
+
+  const insert = driver.calls.find((call) => /insert into vocabulary/.test(call.text));
+  const conflict = insert.text.slice(insert.text.indexOf("do update set"));
+  // The translation is only written when the new capture carries one: an
+  // empty text means "this device does not know it".
+  assert.match(
+    conflict,
+    /translation = case when excluded\.translation <> '' then excluded\.translation else vocabulary\.translation end/,
+    conflict,
+  );
+  assert.match(
+    conflict,
+    /sentence_translation = case when excluded\.sentence_translation <> '' then excluded\.sentence_translation else vocabulary\.sentence_translation end/,
+    conflict,
+  );
+  // The learning state may only move forward.
+  assert.match(conflict, /'mastered'/, conflict);
+  assert.match(conflict, /'reviewing'/, conflict);
+  assert.doesNotMatch(
+    conflict,
+    /status = excluded\.status/,
+    "a re-capture must not reset the learning state: " + conflict,
+  );
+});
+
+test("the sync delta is limited", async () => {
+  // A delta without a limit is a request for everything the account ever
+  // wrote. One account that holds a lot is enough to take the Worker down.
+  const driver = createDriver(() => []);
+  const store = new NeonStore("postgres://example", driver);
+
+  await store.getSyncDelta(ALICE, "2026-01-01T00:00:00.000Z");
+
+  const selects = driver.calls.filter((call) => /^select/.test(call.text.trim()));
+  assert.ok(selects.length >= 2, "the delta reads the notes and the words");
+  for (const select of selects) {
+    assert.match(select.text, /limit \$\d+/, select.text);
+  }
+});
+
+test("a deleted note is not resurrected by a repeated push", async () => {
+  const driver = createDriver(() => []);
+  const store = new NeonStore("postgres://example", driver);
+
+  await store.createNote(ALICE, {
+    clientId: "note_1",
+    videoId: "abc123xyz",
+    videoTitle: "",
+    channelName: "",
+    timestampSeconds: 0,
+    quote: "",
+    note: "text",
+  });
+
+  const insert = driver.calls.find((call) => /insert into notes/.test(call.text));
+  assert.ok(insert, "the note must be inserted");
+  // The conflict branch may only run for a note that was not deleted: the
+  // delete has to win, or the note comes back from the server.
+  assert.match(
+    insert.text,
+    /where notes\.deleted_at is null/,
+    "a note that was deleted must not be brought back by a repeated push",
+  );
+});

@@ -18,6 +18,16 @@ binding = "ASSETS"
 run_worker_first = ["/api/*"]
 
 # Account id is read from wrangler login / CLOUDFLARE_ACCOUNT_ID at deploy time.
-# No [vars] here: OAuth client id/secret and the database URL are configured
-# as Worker secrets (wrangler secret put) so they never enter git. For local
-# development, copy server/.dev.vars.example to server/.dev.vars and fill it in.
+#
+# No [vars] block here on purpose. Everything the Worker reads from `env` is
+# a secret, set with `wrangler secret put` (see SETUP.md, "Deploy"):
+#   GITHUB_CLIENT_ID      the OAuth App's client id
+#   GITHUB_CLIENT_SECRET  the OAuth App's client secret
+#   JWT_SECRET            32+ random characters
+#   DATABASE_URL          the Neon connection string
+# A client id in [vars] would be committed to git, and the deploy would still
+# fail until the other three exist. Set all four secrets BEFORE `wrangler
+# deploy`: a Worker deployed without them answers every request with a 500.
+#
+# For local development, copy server/.dev.vars.example to server/.dev.vars and
+# fill it in (that file is gitignored).

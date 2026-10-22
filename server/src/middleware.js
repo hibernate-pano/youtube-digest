@@ -63,6 +63,17 @@ async function requireUser(request, env) {
     githubId: Number(payload.githubId),
     login: String(payload.login || ""),
   };
+  // A session that was bound to a device only works in that device: the
+  // request has to come from the browser the sign-in was started from. A
+  // token that was issued without a device is not bound and keeps working -
+  // a client that does not name its device cannot be bound to one.
+  const device = typeof payload.device === "string" ? payload.device : "";
+  if (device) {
+    const presented = String(request.headers.get("x-device-id") || "").trim();
+    if (presented !== device) {
+      throw new HttpError(401, "This session belongs to another browser.");
+    }
+  }
   // Token revocation: deleting the account bumps the stored token version, so
   // every token issued before the deletion stops authenticating. A token
   // without a version was issued before revocation existed and is refused.

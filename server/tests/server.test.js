@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 
 const jwt = require("../src/jwt");
 const auth = require("../src/auth");
-const { MemoryStore, createStore, applyGrade } = require("../src/db");
+const { MemoryStore, createStore, applyGrade, StorageLimitError, MAX_ACCOUNT_ROWS } = require("../src/db");
 const worker = require("../src/index");
 
 // The server refuses to sign or verify tokens with a secret shorter than 32
@@ -20,9 +20,10 @@ function makeEnv(overrides) {
   }, overrides || {});
 }
 
-async function api(env, method, path, { token, body } = {}) {
+async function api(env, method, path, { token, body, device } = {}) {
   const headers = {};
   if (token) headers.Authorization = "Bearer " + token;
+  if (device) headers["X-Device-Id"] = device;
   if (body !== undefined) headers["Content-Type"] = "application/json";
   const request = new Request("https://test.example" + path, {
     method,
@@ -37,6 +38,30 @@ async function api(env, method, path, { token, body } = {}) {
     data = null;
   }
   return { status: response.status, data, response };
+}
+
+/**
+ * Runs a request with the console output captured.
+ *
+ * @param {() => Promise<unknown>} run what to do while the capture is on.
+ * @returns {Promise<{result: unknown, log: string}>}
+ */
+async function captureLog(run) {
+  const lines = [];
+  const originalError = console.error;
+  const originalWarn = console.warn;
+  const originalLog = console.log;
+  console.error = (...args) => lines.push(args.map(String).join(" "));
+  console.warn = (...args) => lines.push(args.map(String).join(" "));
+  console.log = (...args) => lines.push(args.map(String).join(" "));
+  try {
+    const result = await run();
+    return { result, log: lines.join("\n") };
+  } finally {
+    console.error = originalError;
+    console.warn = originalWarn;
+    console.log = originalLog;
+  }
 }
 
 async function signIn(env, githubId, login) {
@@ -367,9 +392,228 @@ test("unconfigured server refuses to start OAuth", async () => {
   assert.match(result.data.error, /not configured/i);
 });
 
-test("createStore falls back to memory without DATABASE_URL", () => {
-  const store = createStore({});
+test("a Worker without a database refuses to serve instead of pretending", async () => {
+  // The in-memory store lives in one instance of the Worker: every account
+  // would look empty, every note would vanish at the next deploy, and no
+  // error would ever mention the database.
+  assert.throws(
+    () => createStore({}),
+    /database/i,
+    "a Worker without a database must not fall back to a store in memory",
+  );
+
+  const env = makeEnv({ DATABASE_URL: "", store: undefined });
+  const result = await api(env, "GET", "/api/status");
+  assert.equal(result.status, 503);
+  assert.match(
+    result.data.error,
+    /database/i,
+    "the error has to name the database, not just say something went wrong",
+  );
+});
+
+test("the in-memory store is used only when it is asked for", () => {
+  const store = createStore({ ALLOW_MEMORY_STORE: "1" });
   assert.ok(store instanceof MemoryStore);
+});
+
+test("a broken database configuration never reaches the log", async () => {
+  // The driver's own error quotes the string it was given, so the check
+  // happens before the driver sees it.
+  const broken = "not-a-database-url";
+  const env = makeEnv({ DATABASE_URL: broken, store: undefined });
+  const { result, log } = await captureLog(() => api(env, "GET", "/api/status"));
+
+  assert.equal(result.status, 503);
+  assert.ok(
+    !result.data.error.includes(broken),
+    "the response must not carry the connection string",
+  );
+  assert.ok(!log.includes(broken), "the log must not carry the connection string");
+});
+
+test("a database error never logs what the user wrote", async () => {
+  const noteText = "a note that must never be logged";
+  const env = makeEnv();
+  const token = await signIn(env, 1001, "{{USERNAME_5a9a8a1b808e8d0e}}");
+  env.store.createNote = async () => {
+    // A Postgres error carries the row that failed in `detail`.
+    const error = new Error("duplicate key value violates unique constraint");
+    error.code = "23505";
+    error.detail = "Key (note)=(" + noteText + ") already exists.";
+    throw error;
+  };
+
+  const { result, log } = await captureLog(() =>
+    api(env, "POST", "/api/notes", { token, body: { note: noteText, clientId: "n1" } }),
+  );
+
+  assert.equal(result.status, 500);
+  assert.ok(!log.includes(noteText), "the log must not carry the note text");
+  assert.ok(
+    log.includes("23505"),
+    "the log has to carry the error code, that is what a failure is diagnosed from",
+  );
+});
+
+test("an account cannot write past its storage limit", async () => {
+  const store = new MemoryStore();
+  const user = await store.upsertUser({ githubId: 1, login: "{{USERNAME_5a9a8a1b808e8d0e}}", avatarUrl: "" });
+  // The account is full: the cap is a bound, not a suggestion.
+  for (let index = 0; index < MAX_ACCOUNT_ROWS; index += 1) {
+    store.notes.set("n" + index, {
+      id: "n" + index,
+      userId: user.id,
+      clientId: "c" + index,
+      note: "text",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+  }
+
+  await assert.rejects(
+    () => store.createNote(user.id, { clientId: "c_new", note: "one more" }),
+    /limit/i,
+    "an account that is full must not be able to write another row",
+  );
+});
+
+test("a full account is told that it is full", async () => {
+  const env = makeEnv();
+  const token = await signIn(env, 1001, "{{USERNAME_5a9a8a1b808e8d0e}}");
+  env.store.createNote = async () => {
+    throw new StorageLimitError(
+      "This account already holds 20000 notes and words, which is the limit of 20000.",
+    );
+  };
+
+  const result = await api(env, "POST", "/api/notes", {
+    token,
+    body: { note: "text", clientId: "n1" },
+  });
+  assert.equal(result.status, 409);
+  assert.match(result.data.error, /limit/i);
+});
+
+test("the export size is measured in bytes, not characters", async () => {
+  // The Worker has no `Buffer`, so a size measured with it would throw
+  // where it matters most: on a real export. A Chinese note is the case
+  // that shows the difference: one character is three bytes.
+  const store = new MemoryStore();
+  const user = await store.upsertUser({ githubId: 1, login: "{{USERNAME_5a9a8a1b808e8d0e}}", avatarUrl: "" });
+  await store.createNote(user.id, {
+    clientId: "note_utf8",
+    videoId: "abc123xyz",
+    videoTitle: "",
+    channelName: "",
+    timestampSeconds: 0,
+    quote: "",
+    note: "笔记",
+  });
+
+  const bytes = await store.estimateExportBytes(user.id);
+  assert.ok(bytes >= 6, "two Chinese characters are at least six bytes");
+});
+
+test("an export that is too big to download is refused with a reason", async () => {
+  const env = makeEnv();
+  const token = await signIn(env, 1001, "{{USERNAME_5a9a8a1b808e8d0e}}");
+  env.store.estimateExportBytes = async () => 64 * 1024 * 1024;
+
+  const result = await api(env, "GET", "/api/export", { token });
+  assert.equal(result.status, 413);
+  assert.match(result.data.error, /export limit/i);
+});
+
+test("a session that is bound to a device is refused in another browser", async () => {
+  const env = makeEnv();
+  const user = await env.store.upsertUser({ githubId: 1001, login: "{{USERNAME_5a9a8a1b808e8d0e}}", avatarUrl: "" });
+  const device = "device-aaaaaaaaaaaaaaaa";
+  const token = await jwt.signToken(
+    {
+      sub: String(user.id),
+      githubId: user.githubId,
+      login: user.login,
+      tokenVersion: 0,
+      device,
+    },
+    SECRET,
+    3600,
+  );
+
+  const withoutDevice = await api(env, "GET", "/api/me", { token });
+  assert.equal(withoutDevice.status, 401, "a bound session needs its device");
+
+  const otherDevice = await api(env, "GET", "/api/me", { token, device: "device-bbbbbbbbbbbbbbbb" });
+  assert.equal(otherDevice.status, 401, "a token copied to another browser is refused");
+
+  const rightDevice = await api(env, "GET", "/api/me", { token, device });
+  assert.equal(rightDevice.status, 200);
+});
+
+test("the scheduled run drops the tombstones that are no longer needed", async () => {
+  const env = makeEnv();
+  const user = await env.store.upsertUser({ githubId: 1001, login: "{{USERNAME_5a9a8a1b808e8d0e}}", avatarUrl: "" });
+  const note = await env.store.createNote(user.id, {
+    clientId: "note_old",
+    videoId: "abc123xyz",
+    videoTitle: "",
+    channelName: "",
+    timestampSeconds: 0,
+    quote: "",
+    note: "text",
+  });
+  await env.store.deleteNote(user.id, note.id);
+
+  // A tombstone from long ago is dropped; a fresh one is kept, because a
+  // device may still be holding the row it deleted.
+  const stale = await worker.purgeExpiredTombstones(env);
+  assert.equal(stale, 0, "a fresh tombstone must survive: a device may still hold the note");
+
+  env.store.notes.get(note.id).deletedAt = "2020-01-01T00:00:00.000Z";
+  const purged = await worker.purgeExpiredTombstones(env);
+  assert.equal(purged, 1);
+  assert.equal(env.store.notes.get(note.id), undefined, "the old tombstone is gone");
+});
+
+test("a sign-in that names its device gets a session bound to it", async () => {
+  const env = makeEnv();
+  const device = "device-cccccccccccccccc";
+  const login = await api(env, "GET", "/api/auth/login?device=" + device);
+  const cookies = login.response.headers.getSetCookie
+    ? login.response.headers.getSetCookie()
+    : [login.response.headers.get("set-cookie") || ""];
+  assert.match(cookies.join("\n"), /__Host-ytd_oauth_device=/);
+
+  const originalExchange = require("../src/auth").exchangeCode;
+  const originalFetchUser = require("../src/auth").fetchGithubUser;
+  require("../src/auth").exchangeCode = async () => "gh-token";
+  require("../src/auth").fetchGithubUser = async () => ({
+    githubId: 1001,
+    login: "{{USERNAME_5a9a8a1b808e8d0e}}",
+    avatarUrl: "",
+  });
+  try {
+    const callback = new Request(
+      "https://test.example/api/auth/callback?code=abc&state=expected",
+      {
+        headers: {
+          cookie:
+            "__Host-ytd_oauth_state=expected; __Host-ytd_oauth_device=" + device,
+        },
+      },
+    );
+    const response = await worker.fetch(callback, env);
+    assert.equal(response.status, 302);
+    const location = response.headers.get("location") || "";
+    const match = /#access_token=([^&]+)/.exec(location);
+    assert.ok(match, "the callback has to hand out a token");
+    const payload = await jwt.verifyToken(match[1], SECRET);
+    assert.equal(payload.device, device, "the token has to name the device it is bound to");
+  } finally {
+    require("../src/auth").exchangeCode = originalExchange;
+    require("../src/auth").fetchGithubUser = originalFetchUser;
+  }
 });
 
 test("notes can be starred and unstarred by their owner only", async () => {

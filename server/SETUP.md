@@ -22,6 +22,12 @@ Chrome extension (options page)                          Cloudflare Worker
 - All data routes require `Authorization: Bearer <jwt>`; the user id always
   comes from the verified token, never from request bodies.
 - The JWT is an HS256 token signed with `JWT_SECRET`, valid 30 days.
+- A sign-in can be bound to the browser that started it: a client that sends
+  `?device=<random id>` to `/api/auth/login` gets a token that carries that
+  id, and every later request has to send it back in `X-Device-Id`. The
+  dashboard does this; a token copied out of the browser it was issued to is
+  then refused. A client that does not name a device gets an unbound token,
+  which is why the extension itself is not bound yet.
 
 ## 1. Register a GitHub OAuth App
 
@@ -84,25 +90,46 @@ and reload the unpacked extension.
 > you are developing against a local backend, and take it out again before
 > you package a release.
 
-Without `DATABASE_URL` the server runs an in-memory store (restarts lose
-data) so you can exercise the OAuth flow without a database.
+Without `DATABASE_URL` the Worker refuses to serve (`503`, "the database is
+not configured") instead of falling back to a store that lives in one
+instance of the Worker - a store like that makes every account look empty and
+loses every note at the next deploy. To run the OAuth flow locally without a
+database, ask for the in-memory store by name:
+
+```bash
+# .dev.vars
+ALLOW_MEMORY_STORE=1
+```
+
+Restarts lose data; never set it in production.
 
 ## 4. Deploy
+
+Secrets first, deploy second. A Worker deployed without its secrets answers
+every request with a 500, including the sign-in route, so a deploy that runs
+before the secrets land is a deploy that does not work.
 
 ```bash
 cd server
 npm install
 npx wrangler login
-npx wrangler deploy
+# The three secrets, before the code that needs them.
+npx wrangler secret put GITHUB_CLIENT_ID
 npx wrangler secret put GITHUB_CLIENT_SECRET
 npx wrangler secret put JWT_SECRET
 npx wrangler secret put DATABASE_URL
+# Then the Worker itself.
+npx wrangler deploy
 ```
 
-Set `GITHUB_CLIENT_ID` in `wrangler.toml` [vars], point the GitHub OAuth App
-callback URL at the deployed Worker, and set `SERVER_BASE_URL` in
-`settings.js` to the deployed origin. Rebuild the extension (`npm run
-package`) and reload it in Chrome.
+`wrangler.toml` deliberately has no `[vars]` block: the OAuth client id is a
+secret, not a build-time constant, and it is set by the `wrangler secret put
+GITHUB_CLIENT_ID` above. Everything the Worker reads from `env` comes from
+those four secrets (or from `.dev.vars` locally).
+
+Point the GitHub OAuth App callback URL at the deployed Worker, and set
+`SERVER_BASE_URL` in `settings.js` to the deployed origin. Rebuild the
+extension (`npm run package`) and reload it in Chrome.
 
 ## User dashboard
 
@@ -143,12 +170,12 @@ address and user agent of every request to the sync service.
 | GET | /api/auth/callback | exchange code for a JWT (no auth) |
 | GET | /auth/complete | landing page shown after login (no auth) |
 | GET | /api/me | current user |
-| GET | /api/sync?since=ISO | notes/vocabulary changed since timestamp |
+| GET | /api/sync?since=ISO | notes/vocabulary changed since a timestamp, plus the deletions (`deleted.notes`, `deleted.vocabulary`) |
 | GET/POST | /api/notes | list / create notes (idempotent by clientId) |
 | PATCH/DELETE | /api/notes/:id | update / delete a note |
 | PATCH | /api/notes/:id/star | set starred (favorite) flag |
 | DELETE | /api/notes/client/:clientId | delete by client id |
-| GET/POST | /api/vocabulary | list / upsert vocabulary (deduped by term+sentence) |
+| GET/POST | /api/vocabulary | list / upsert vocabulary (deduped by term+sentence; a re-capture keeps the translation, the explanation and the learning state) |
 | PATCH/DELETE | /api/vocabulary/:id | update status / delete entry |
 | GET | /api/reviews/due | due review items with their vocabulary |
 | POST | /api/reviews/:vocabId | submit a review grade (0-5, SM-2 schedule) |
@@ -159,5 +186,10 @@ address and user agent of every request to the sync service.
   token for account A returns 404 for account B's rows.
 - Inputs are validated server-side (length caps, status enums, grade range).
 - The OAuth state cookie is HttpOnly and SameSite=Lax, cleared after use.
+- A deleted note or word stays in the database as a tombstone for 30 days
+  (`TOMBSTONE_RETENTION_DAYS`), so a device that still holds the row cannot
+  bring it back. The scheduled run drops the tombstones that are older.
+- Each account is capped at 20 000 notes and words, and an export that would
+  exceed 8 MB is refused with a message instead of a download that dies.
 - Tokens appear in the URL fragment after login; the extension extracts and
   stores them in `chrome.storage.local` and closes the tab.

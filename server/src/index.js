@@ -25,7 +25,12 @@ const {
   requireJwtSecret,
   HARDENING_HEADERS,
 } = require("./middleware");
-const { createStore } = require("./db");
+const {
+  createStore,
+  DatabaseNotConfiguredError,
+  StorageLimitError,
+  TOMBSTONE_RETENTION_DAYS,
+} = require("./db");
 const auth = require("./auth");
 const notes = require("./routes/notes");
 const vocabulary = require("./routes/vocabulary");
@@ -43,6 +48,10 @@ const REDIRECT_COOKIE = "__Host-ytd_oauth_redirect";
 // the sign-in, so a link someone else made cannot log the user into the
 // wrong account.
 const NONCE_COOKIE = "__Host-ytd_oauth_nonce";
+// The device the sign-in was started from. A client that names its device
+// gets a session that is bound to it: the token then only works in the
+// browser that asked for it.
+const DEVICE_COOKIE = "__Host-ytd_oauth_device";
 // The dashboard remembers the language the reader picked in a cookie as
 // well as in localStorage, so the server can greet them in that language.
 const DASHBOARD_LANG_COOKIE = "ytd_dashboard_lang";
@@ -312,6 +321,21 @@ async function handleLogin(ctx) {
       }),
     );
   }
+  // A client that names the device it signs in from gets a session that is
+  // bound to that device. The name travels through the cookie, because the
+  // callback happens in the browser that started the sign-in.
+  const device = normalizeNonce(url.searchParams.get("device"));
+  if (device) {
+    response.headers.append(
+      "Set-Cookie",
+      auth.setCookie(DEVICE_COOKIE, device, {
+        httpOnly: true,
+        sameSite: "Lax",
+        path: "/",
+        maxAgeSeconds: 600,
+      }),
+    );
+  }
   return response;
 }
 
@@ -361,6 +385,9 @@ async function handleCallback(ctx) {
   }
   const githubUser = await auth.fetchGithubUser(accessToken);
   const user = await env.store.upsertUser(githubUser);
+  // The device the sign-in was started from, when the client named one.
+  // A session that is bound to a device is only good in that device.
+  const device = normalizeNonce(cookies[DEVICE_COOKIE]);
   const token = await signToken(
     {
       sub: String(user.id),
@@ -368,6 +395,7 @@ async function handleCallback(ctx) {
       login: user.login,
       // The token version lets a deleted account revoke the tokens it issued.
       tokenVersion: Number(user.tokenVersion) || 0,
+      device,
     },
     env.JWT_SECRET,
     SESSION_TTL_SECONDS,
@@ -400,6 +428,10 @@ async function handleCallback(ctx) {
       auth.setCookie(NONCE_COOKIE, "", { httpOnly: true, sameSite: "Lax", path: "/", maxAgeSeconds: 0 }),
     );
   }
+  response.headers.append(
+    "Set-Cookie",
+    auth.setCookie(DEVICE_COOKIE, "", { httpOnly: true, sameSite: "Lax", path: "/", maxAgeSeconds: 0 }),
+  );
   response.headers.append(
     "Set-Cookie",
     auth.setCookie(STATE_COOKIE, "", { httpOnly: true, sameSite: "Lax", path: "/", maxAgeSeconds: 0 }),
@@ -521,15 +553,31 @@ const recentErrors = [];
 
 function recordError(request, error, routePattern) {
   try {
-    recentErrors.push({
-      at: new Date().toISOString(),
-      route: routePattern || "unmatched",
-      message: String((error && error.message) || error || "unknown error").slice(0, 300),
-    });
+    recentErrors.push(
+      Object.assign(
+        { at: new Date().toISOString(), route: routePattern || "unmatched" },
+        describeError(error),
+      ),
+    );
     if (recentErrors.length > 50) recentErrors.shift();
   } catch {
     // Never let diagnostics break the error path.
   }
+}
+
+/**
+ * A short description of a failure that is safe to write down.
+ *
+ * The raw error object carries the request's data: a database error holds
+ * the failing row in `detail`, and a driver error holds the connection
+ * string in its message. Neither may reach a log, so only the name and the
+ * code of the error are reported. The code is what a failure is diagnosed
+ * from - a Postgres SQLSTATE says exactly what the database refused.
+ */
+function describeError(error) {
+  const summary = { name: (error && error.name) || "Error" };
+  if (error && typeof error.code === "string") summary.code = error.code;
+  return summary;
 }
 
 /**
@@ -581,19 +629,75 @@ async function handleRequest(request, env) {
   }
 }
 
+/**
+ * The status a failure is answered with.
+ *
+ * Two failures are not bugs: a Worker without a database cannot serve
+ * anything (503), and an account that has used up its storage cannot write
+ * any more (409). Both carry a message the reader can act on.
+ */
+function errorStatus(error) {
+  if (error instanceof HttpError) return error.status;
+  if (error instanceof DatabaseNotConfiguredError) return 503;
+  if (error instanceof StorageLimitError) return 409;
+  return 500;
+}
+
+/**
+ * The message a failure is answered with.
+ *
+ * Only our own messages reach the client. A driver message can carry the
+ * connection string or the row that failed, so it is never passed on.
+ */
+function errorMessage(error) {
+  if (error instanceof HttpError) return error.message || "Request failed.";
+  if (error instanceof DatabaseNotConfiguredError) return error.message;
+  if (error instanceof StorageLimitError) return error.message;
+  return "Internal server error.";
+}
+
+/**
+ * Drops the tombstones that are older than the retention period.
+ *
+ * A tombstone is only needed while a device could still be holding the row
+ * it deleted. Keeping every tombstone forever would grow the database
+ * without bound, so the old ones are dropped.
+ *
+ * @param {object} env the Worker environment.
+ * @returns {Promise<number>} how many rows were dropped.
+ */
+async function purgeExpiredTombstones(env) {
+  const store = env.store || createStore(env);
+  const cutoff = new Date(
+    Date.now() - TOMBSTONE_RETENTION_DAYS * 86_400_000,
+  ).toISOString();
+  return store.purgeTombstones(cutoff);
+}
+
 module.exports = {
+  purgeExpiredTombstones,
   async fetch(request, env) {
-    if (!env.store) env.store = createStore(env);
     try {
+      // The store is created inside the try. A connection string that is
+      // missing or malformed is a configuration error, and the driver's own
+      // error quotes the string it was given - so it must never escape into
+      // a log.
+      if (!env.store) env.store = createStore(env);
       return await handleRequest(request, env);
     } catch (error) {
-      const status = error instanceof HttpError ? error.status : 500;
+      const status = errorStatus(error);
       recordError(request, error, error && error.routePattern);
-      if (status === 500) console.error("[youtube-digest-server]", error);
+      if (status === 500) {
+        // Only the name and the code of the failure: the error itself can
+        // hold the note the user wrote or the connection string.
+        console.error(
+          "[youtube-digest-server]",
+          JSON.stringify(Object.assign({ status }, describeError(error))),
+        );
+      }
       // A raw driver message ("invalid input syntax for type uuid") leaks
       // schema details, so only our own messages reach the client.
-      const message =
-        error instanceof HttpError ? error.message || "Request failed." : "Internal server error.";
+      const message = errorMessage(error);
       const response = json({ error: message }, status);
       // A few errors have to change the browser's state as well, e.g. a
       // one-time CSRF cookie that must not survive the request that spent it.
@@ -606,6 +710,22 @@ module.exports = {
     }
   },
   async scheduled(event, env) {
+    // The tombstones of the deleted notes and words are only needed while a
+    // device could still be holding the row it deleted. The old ones are
+    // dropped, so the database does not grow without bound.
+    try {
+      const purged = await purgeExpiredTombstones(env);
+      if (purged) {
+        console.log("[youtube-digest-server] dropped " + purged + " old tombstone(s)");
+      }
+    } catch (error) {
+      // Only the name and the code: the error itself can hold the
+      // connection string.
+      console.error(
+        "[youtube-digest-server]",
+        JSON.stringify(Object.assign({ task: "purge-tombstones" }, describeError(error))),
+      );
+    }
     // Health probe: /api/me answers 401 when the service is alive.
     const probeBase = "https://ytd.panbo.space";
     try {

@@ -15,8 +15,99 @@ const MAX_LIST_ROWS = 5_000;
 /** Hard cap on the rows an export blob contains. */
 const MAX_EXPORT_ROWS = 10_000;
 
+/**
+ * Hard cap on the rows one account may own.
+ *
+ * The rows are the user's own notes and words, so the cap is far above what
+ * a real account needs, but it is a bound: without it a single account can
+ * write until the Worker runs out of memory, and an out-of-memory Worker
+ * takes every other account down with it.
+ */
+const MAX_ACCOUNT_ROWS = 20_000;
+
+/**
+ * Hard cap on the size of an export, in bytes.
+ *
+ * The export is a single JSON blob that the browser downloads, so a blob of
+ * a few hundred megabytes does not arrive: the download simply dies. The
+ * cap is checked before the blob is built, so the Worker never holds one.
+ */
+const MAX_EXPORT_BYTES = 8 * 1024 * 1024;
+
+/** How long a deletion is remembered, in days. */
+const TOMBSTONE_RETENTION_DAYS = 30;
+
 /** The longest review interval, in days. */
 const MAX_INTERVAL_DAYS = 365;
+
+/**
+ * Thrown when the Worker has no usable database configuration.
+ *
+ * The message names the database and nothing else. A connection string must
+ * never reach a log, a response or a test: it is the password to the user's
+ * notes.
+ */
+class DatabaseNotConfiguredError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "DatabaseNotConfiguredError";
+    this.code = "database_not_configured";
+  }
+}
+
+/**
+ * Thrown when an account has used up its storage.
+ *
+ * The account is not malformed and the request is not wrong: the account
+ * simply holds as many rows as it is allowed to. The route turns this into
+ * a 409 with a message the user can act on.
+ */
+class StorageLimitError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "StorageLimitError";
+    this.code = "storage_limit_reached";
+  }
+}
+
+/**
+ * Checks a connection string before it reaches the driver.
+ *
+ * The driver answers an unusable string with an error that QUOTES the
+ * string, so the check has to happen here, where the message can be
+ * written without it.
+ *
+ * @param {unknown} value the configured connection string.
+ * @returns {string} the trimmed connection string.
+ */
+function assertUsableDatabaseUrl(value) {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new DatabaseNotConfiguredError(
+      "The database is not configured (DATABASE_URL is missing).",
+    );
+  }
+  let parsed;
+  try {
+    parsed = new URL(value.trim());
+  } catch {
+    throw new DatabaseNotConfiguredError(
+      "The database connection string is not a valid URL.",
+    );
+  }
+  if (!/^postgres(ql)?:$/.test(parsed.protocol)) {
+    throw new DatabaseNotConfiguredError(
+      "The database connection string is not a Postgres URL.",
+    );
+  }
+  return value.trim();
+}
+
+/** True for the env values that mean "yes". */
+function isEnabled(value) {
+  if (value === true) return true;
+  if (typeof value !== "string") return false;
+  return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
+}
 
 function toIso(value) {
   if (value instanceof Date) return value.toISOString();
@@ -125,6 +216,76 @@ function reviewKey(userId, vocabularyId) {
 }
 
 /**
+ * The learning state of a word, in the order it can move.
+ *
+ * A word that is captured again may only move forward. The second device
+ * usually knows LESS about a word than the first one, so a re-capture that
+ * reset the state would throw away work the user had already done.
+ */
+const STATUS_ORDER = { learning: 0, reviewing: 1, mastered: 2 };
+
+function moreAdvancedStatus(stored, incoming) {
+  const storedRank = STATUS_ORDER[stored] === undefined ? 0 : STATUS_ORDER[stored];
+  const incomingRank = STATUS_ORDER[incoming] === undefined ? 0 : STATUS_ORDER[incoming];
+  return incomingRank > storedRank ? incoming : stored;
+}
+
+/**
+ * Merges a re-captured word into the stored one.
+ *
+ * A word is identified by its text, so the same word captured on a second
+ * device is the SAME row - and the second device usually knows less about
+ * it. A blind overwrite therefore threw away the translation, the
+ * explanation and the learning state of a word the user had already worked
+ * on.
+ *
+ * The rule:
+ * - the video context is updated: it says where the word was seen last,
+ * - a translation or an explanation is only written when the new capture
+ *   carries one. An empty text means "this device does not know it", not
+ *   "the text is empty",
+ * - the learning state only moves forward.
+ */
+function mergeVocabularyFields(stored, incoming) {
+  return {
+    translation: incoming.translation || stored.translation,
+    sentenceTranslation: incoming.sentenceTranslation || stored.sentenceTranslation,
+    videoId: incoming.videoId || stored.videoId,
+    videoTitle: incoming.videoTitle || stored.videoTitle,
+    timestampSeconds: incoming.timestampSeconds,
+    status: moreAdvancedStatus(stored.status, incoming.status),
+  };
+}
+
+/** The bytes a note adds to an export blob. */
+function noteBytes(row) {
+  return (
+    byteLength(row.note) +
+    byteLength(row.quote) +
+    byteLength(row.videoTitle) +
+    byteLength(row.channelName)
+  );
+}
+
+/** The bytes a word adds to an export blob. */
+function vocabularyBytes(row) {
+  return (
+    byteLength(row.term) +
+    byteLength(row.translation) +
+    byteLength(row.sentence) +
+    byteLength(row.sentenceTranslation) +
+    byteLength(row.videoTitle)
+  );
+}
+
+function byteLength(value) {
+  if (typeof value !== "string") return 0;
+  // `Buffer` does not exist in a Worker, so the length comes from the
+  // platform's own text encoder.
+  return new TextEncoder().encode(value).length;
+}
+
+/**
  * Postgres hands out account ids from a global sequence, so two accounts
  * never share one. The in-memory store mirrors that with a process-wide
  * counter: two store instances in the same process must never hand out the
@@ -180,7 +341,7 @@ class MemoryStore {
 
   async listNotes(userId, limit = MAX_LIST_ROWS) {
     return [...this.notes.values()]
-      .filter((row) => row.userId === userId)
+      .filter((row) => row.userId === userId && !row.deletedAt)
       .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
       .slice(0, limit)
       .map(rowToNote);
@@ -188,10 +349,15 @@ class MemoryStore {
 
   async createNote(userId, note) {
     const now = this.clock().toISOString();
+    await this.assertNoteRoom(userId, note.clientId);
     const existing = [...this.notes.values()].find(
       (row) => row.userId === userId && row.clientId === note.clientId,
     );
     if (existing) {
+      // A note that was deleted stays deleted. The delete is remembered, so
+      // a device that still holds the note cannot bring it back by pushing
+      // it again.
+      if (existing.deletedAt) return rowToNote(existing);
       Object.assign(existing, note, { updatedAt: now });
       return rowToNote(existing);
     }
@@ -218,8 +384,8 @@ class MemoryStore {
       (candidate) =>
         candidate.userId === userId && candidate.clientId === clientId,
     );
-    if (!row) return false;
-    this.notes.delete(row.id);
+    if (!row || row.deletedAt) return false;
+    row.deletedAt = this.clock().toISOString();
     return true;
   }
 
@@ -246,26 +412,34 @@ class MemoryStore {
 
   async deleteNote(userId, noteId) {
     const row = this.notes.get(noteId);
-    if (!row || row.userId !== userId) return false;
-    this.notes.delete(noteId);
+    if (!row || row.userId !== userId || row.deletedAt) return false;
+    // The row stays as a tombstone. A hard delete would let the device that
+    // still holds the note push it back, and the note would come back from
+    // the server.
+    row.deletedAt = this.clock().toISOString();
     return true;
   }
 
   async listVocabulary(userId, limit = MAX_LIST_ROWS) {
     return [...this.vocabulary.values()]
-      .filter((row) => row.userId === userId)
+      .filter((row) => row.userId === userId && !row.deletedAt)
       .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
       .slice(0, limit)
       .map(rowToVocabulary);
   }
 
   async upsertVocabulary(userId, vocab) {
+    await this.assertVocabularyRoom(userId, vocab.term, vocab.sentence);
     const existing = [...this.vocabulary.values()].find(
       (row) => row.userId === userId && row.term === vocab.term && row.sentence === vocab.sentence,
     );
     const now = this.clock().toISOString();
     if (existing) {
-      Object.assign(existing, vocab, { updatedAt: now });
+      // A word that was deleted comes back when it is captured again, and it
+      // comes back with the review schedule it had: the row was only marked
+      // as deleted, so the schedule that belongs to it was never touched.
+      const merged = mergeVocabularyFields(existing, vocab);
+      Object.assign(existing, merged, { updatedAt: now, deletedAt: null });
       return rowToVocabulary(existing);
     }
     const row = Object.assign({}, vocab, {
@@ -299,9 +473,11 @@ class MemoryStore {
 
   async deleteVocabulary(userId, vocabId) {
     const row = this.vocabulary.get(vocabId);
-    if (!row || row.userId !== userId) return false;
-    this.vocabulary.delete(vocabId);
-    this.reviews.delete(reviewKey(userId, vocabId));
+    if (!row || row.userId !== userId || row.deletedAt) return false;
+    // The row stays as a tombstone and keeps its review schedule. A word
+    // that is captured again comes back with the progress the user made,
+    // instead of starting over as a word that is due right now.
+    row.deletedAt = this.clock().toISOString();
     return true;
   }
 
@@ -314,6 +490,7 @@ class MemoryStore {
           review.userId === userId &&
           vocab &&
           vocab.userId === userId &&
+          !vocab.deletedAt &&
           new Date(review.dueAt) <= now
         );
       })
@@ -361,34 +538,157 @@ class MemoryStore {
 
   async getSyncDelta(userId, sinceIso) {
     const since = parseSince(sinceIso);
+    const mine = (row) => row.userId === userId;
     const notes = [...this.notes.values()]
-      .filter((row) => row.userId === userId && new Date(row.updatedAt) > since)
+      .filter((row) => mine(row) && !row.deletedAt && new Date(row.updatedAt) > since)
+      .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
+      .slice(0, MAX_LIST_ROWS)
       .map(rowToNote);
     const vocabulary = [...this.vocabulary.values()]
-      .filter((row) => row.userId === userId && new Date(row.updatedAt) > since)
+      .filter((row) => mine(row) && !row.deletedAt && new Date(row.updatedAt) > since)
+      .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
+      .slice(0, MAX_LIST_ROWS)
       .map(rowToVocabulary);
-    return { notes, vocabulary };
+    // The deletions travel with the delta. A delta that only carries the
+    // rows that still exist cannot say that a note is gone, so the device
+    // that still holds it would keep it and push it back.
+    const deletedNotes = [...this.notes.values()]
+      .filter((row) => mine(row) && row.deletedAt && new Date(row.deletedAt) > since)
+      .slice(0, MAX_LIST_ROWS)
+      .map((row) => ({ clientId: row.clientId }));
+    const deletedVocabulary = [...this.vocabulary.values()]
+      .filter((row) => mine(row) && row.deletedAt && new Date(row.deletedAt) > since)
+      .slice(0, MAX_LIST_ROWS)
+      .map((row) => ({ term: row.term, sentence: row.sentence }));
+    return {
+      notes,
+      vocabulary,
+      deleted: { notes: deletedNotes, vocabulary: deletedVocabulary },
+    };
   }
 
-  /** Counts a user's rows in one of the two content tables. */
+  /**
+   * Counts a user's rows in one of the two content tables.
+   *
+   * Deleted rows are not counted: they are tombstones, and a tombstone is
+   * not a note the user has.
+   */
   async countRows(table, userId) {
     if (!COUNTABLE_TABLES.has(table)) {
       throw new Error(`countRows: unsupported table ${table}`);
     }
     const rows = table === "vocabulary" ? this.vocabulary : this.notes;
-    return [...rows.values()].filter((row) => row.userId === userId).length;
+    return [...rows.values()].filter(
+      (row) => row.userId === userId && !row.deletedAt,
+    ).length;
+  }
+
+  /**
+   * Throws when the account has no room for another note.
+   *
+   * An update to a note that already exists is not a new note, so it is
+   * always allowed: an account that is exactly at the cap must still be
+   * able to edit what it has.
+   */
+  async assertNoteRoom(userId, clientId) {
+    const existing = [...this.notes.values()].some(
+      (row) => row.userId === userId && row.clientId === clientId,
+    );
+    if (!existing) await this.assertAccountRoom(userId);
+  }
+
+  /** The vocabulary counterpart of assertNoteRoom. */
+  async assertVocabularyRoom(userId, term, sentence) {
+    const existing = [...this.vocabulary.values()].some(
+      (row) => row.userId === userId && row.term === term && row.sentence === sentence,
+    );
+    if (!existing) await this.assertAccountRoom(userId);
+  }
+
+  /**
+   * Throws when the account has no room left.
+   *
+   * The rows are the account's own, so the cap is far above what a real
+   * account needs, but it is a bound: without it one account can write
+   * until the Worker runs out of memory, and an out-of-memory Worker takes
+   * every other account down with it.
+   */
+  async assertAccountRoom(userId) {
+    const used =
+      (await this.countRows("notes", userId)) +
+      (await this.countRows("vocabulary", userId));
+    if (used >= MAX_ACCOUNT_ROWS) {
+      throw new StorageLimitError(
+        `This account already holds ${used} notes and words, which is the limit of ${MAX_ACCOUNT_ROWS}.`,
+      );
+    }
+  }
+
+  /**
+   * Removes the tombstones that are older than the retention period.
+   *
+   * A tombstone is only needed while a device could still be holding the row
+   * it deleted. Keeping every tombstone forever would grow the database
+   * without bound, so the old ones are dropped.
+   */
+  async purgeTombstones(olderThanIso) {
+    const cutoff = new Date(olderThanIso).getTime();
+    let removed = 0;
+    for (const [key, row] of [...this.notes.entries()]) {
+      if (row.deletedAt && new Date(row.deletedAt).getTime() <= cutoff) {
+        this.notes.delete(key);
+        removed += 1;
+      }
+    }
+    for (const [key, row] of [...this.vocabulary.entries()]) {
+      if (row.deletedAt && new Date(row.deletedAt).getTime() <= cutoff) {
+        this.vocabulary.delete(key);
+        this.reviews.delete(reviewKey(row.userId, key));
+        removed += 1;
+      }
+    }
+    return removed;
+  }
+
+  /**
+   * The size of the export blob, in bytes, without building it.
+   *
+   * The export is a single JSON blob the browser downloads, so it has to be
+   * measured BEFORE it is built: a blob of a few hundred megabytes does not
+   * arrive, the download simply dies.
+   */
+  async estimateExportBytes(userId) {
+    let bytes = 0;
+    for (const row of this.notes.values()) {
+      if (row.userId !== userId || row.deletedAt) continue;
+      bytes += noteBytes(row);
+    }
+    for (const row of this.vocabulary.values()) {
+      if (row.userId !== userId || row.deletedAt) continue;
+      bytes += vocabularyBytes(row);
+    }
+    return bytes;
   }
 
   async getAllUserData(userId) {
     const user = [...this.users.values()].find(
       (row) => String(row.id) === String(userId),
     );
-    const allNotes = [...this.notes.values()].filter((row) => row.userId === userId);
+    const allNotes = [...this.notes.values()].filter(
+      (row) => row.userId === userId && !row.deletedAt,
+    );
     const allVocabulary = [...this.vocabulary.values()].filter(
-      (row) => row.userId === userId,
+      (row) => row.userId === userId && !row.deletedAt,
     );
     const reviews = [...this.reviews.values()]
-      .filter((review) => review.userId === userId)
+      .filter((review) => {
+        if (review.userId !== userId) return false;
+        // The review of a word that is not in the export is not in the
+        // export either: the Neon store joins the two tables and cannot
+        // return a review without its word.
+        const vocabulary = this.vocabulary.get(review.vocabularyId);
+        return !!vocabulary && !vocabulary.deletedAt;
+      })
       .map((review) => ({
         vocabularyId: review.vocabularyId,
         dueAt: review.dueAt,
@@ -538,7 +838,8 @@ class NeonStore {
       select id, client_id as "clientId", starred, video_id as "videoId", video_title as "videoTitle",
         channel_name as "channelName", timestamp_seconds as "timestampSeconds", quote, note,
         created_at as "createdAt", updated_at as "updatedAt"
-      from notes where user_id = ${userId} order by updated_at desc limit ${limit}
+      from notes where user_id = ${userId} and deleted_at is null
+      order by updated_at desc limit ${limit}
     `;
     return rows.map(rowToNote);
   }
@@ -549,6 +850,7 @@ class NeonStore {
     // whatever is already stored, so pushing note text from the extension can
     // never clear a favorite the user set in the dashboard.
     const starred = typeof note.starred === "boolean" ? note.starred : null;
+    await this.assertNoteRoom(userId, note.clientId);
     const rows = await this.sql`
       insert into notes (user_id, client_id, video_id, video_title, channel_name, timestamp_seconds, quote, note, starred)
       values (${userId}, ${note.clientId}, ${note.videoId}, ${note.videoTitle}, ${note.channelName},
@@ -558,16 +860,30 @@ class NeonStore {
         channel_name = excluded.channel_name, timestamp_seconds = excluded.timestamp_seconds,
         quote = excluded.quote, note = excluded.note, updated_at = now(),
         starred = coalesce(${starred}, notes.starred)
+      where notes.deleted_at is null
       returning id, client_id as "clientId", starred, video_id as "videoId", video_title as "videoTitle",
         channel_name as "channelName", timestamp_seconds as "timestampSeconds", quote, note,
         created_at as "createdAt", updated_at as "updatedAt"
     `;
-    return rowToNote(rows[0]);
+    if (rows.length) return rowToNote(rows[0]);
+    // The note was deleted. The delete wins, so the row stays deleted and
+    // the push changes nothing: a device that still holds the note cannot
+    // bring it back from the server. The row is read back so the caller
+    // learns which note this client id belongs to.
+    const deleted = await this.sql`
+      select id, client_id as "clientId", starred, video_id as "videoId", video_title as "videoTitle",
+        channel_name as "channelName", timestamp_seconds as "timestampSeconds", quote, note,
+        created_at as "createdAt", updated_at as "updatedAt"
+      from notes where user_id = ${userId} and client_id = ${note.clientId}
+    `;
+    return deleted.length ? rowToNote(deleted[0]) : null;
   }
 
   async deleteNoteByClientId(userId, clientId) {
     const rows = await this.sql`
-      delete from notes where user_id = ${userId} and client_id = ${clientId} returning id
+      update notes set deleted_at = now(), updated_at = now()
+      where user_id = ${userId} and client_id = ${clientId} and deleted_at is null
+      returning id
     `;
     return rows.length > 0;
   }
@@ -639,7 +955,9 @@ class NeonStore {
 
   async deleteNote(userId, noteId) {
     const rows = await this.sql`
-      delete from notes where id = ${noteId} and user_id = ${userId} returning id
+      update notes set deleted_at = now(), updated_at = now()
+      where id = ${noteId} and user_id = ${userId} and deleted_at is null
+      returning id
     `;
     return rows.length > 0;
   }
@@ -649,22 +967,32 @@ class NeonStore {
       select id, term, translation, sentence, sentence_translation as "sentenceTranslation",
         video_id as "videoId", video_title as "videoTitle", timestamp_seconds as "timestampSeconds", status,
         created_at as "createdAt", updated_at as "updatedAt"
-      from vocabulary where user_id = ${userId} order by updated_at desc limit ${limit}
+      from vocabulary where user_id = ${userId} and deleted_at is null
+      order by updated_at desc limit ${limit}
     `;
     return rows.map(rowToVocabulary);
   }
 
   async upsertVocabulary(userId, vocab) {
+    await this.assertVocabularyRoom(userId, vocab.term, vocab.sentence);
     const rows = await this.sql`
       insert into vocabulary (user_id, term, translation, sentence, sentence_translation,
         video_id, video_title, timestamp_seconds, status)
       values (${userId}, ${vocab.term}, ${vocab.translation}, ${vocab.sentence},
         ${vocab.sentenceTranslation}, ${vocab.videoId}, ${vocab.videoTitle},
         ${vocab.timestampSeconds}, ${vocab.status})
-      on conflict (user_id, term, sentence) do update set
-        translation = excluded.translation, sentence_translation = excluded.sentence_translation,
-        video_id = excluded.video_id, video_title = excluded.video_title,
-        timestamp_seconds = excluded.timestamp_seconds, status = excluded.status, updated_at = now()
+      on conflict (user_id, sync_key) do update set
+        translation = case when excluded.translation <> '' then excluded.translation else vocabulary.translation end,
+        sentence_translation = case when excluded.sentence_translation <> '' then excluded.sentence_translation else vocabulary.sentence_translation end,
+        video_id = case when excluded.video_id <> '' then excluded.video_id else vocabulary.video_id end,
+        video_title = case when excluded.video_title <> '' then excluded.video_title else vocabulary.video_title end,
+        timestamp_seconds = excluded.timestamp_seconds,
+        status = case
+          when vocabulary.status = 'mastered' or excluded.status = 'mastered' then 'mastered'
+          when vocabulary.status = 'reviewing' or excluded.status = 'reviewing' then 'reviewing'
+          else 'learning' end,
+        deleted_at = null,
+        updated_at = now()
       returning id, term, translation, sentence, sentence_translation as "sentenceTranslation",
         video_id as "videoId", video_title as "videoTitle", timestamp_seconds as "timestampSeconds", status,
         created_at as "createdAt", updated_at as "updatedAt"
@@ -692,8 +1020,13 @@ class NeonStore {
   }
 
   async deleteVocabulary(userId, vocabId) {
+    // The row is marked as deleted and keeps its review schedule: a word
+    // that is captured again comes back with the progress the user made,
+    // instead of starting over as a word that is due right now.
     const rows = await this.sql`
-      delete from vocabulary where id = ${vocabId} and user_id = ${userId} returning id
+      update vocabulary set deleted_at = now(), updated_at = now()
+      where id = ${vocabId} and user_id = ${userId} and deleted_at is null
+      returning id
     `;
     return rows.length > 0;
   }
@@ -706,7 +1039,8 @@ class NeonStore {
         v.created_at as "createdAt", v.updated_at as "updatedAt"
       from review_items ri
       join vocabulary v on v.id = ri.vocabulary_id
-      where ri.user_id = ${userId} and v.user_id = ${userId} and ri.due_at <= now()
+      where ri.user_id = ${userId} and v.user_id = ${userId} and v.deleted_at is null
+        and ri.due_at <= now()
       order by ri.due_at asc limit ${limit}
     `;
     return rows.map((row) => ({
@@ -751,21 +1085,43 @@ class NeonStore {
   async getSyncDelta(userId, sinceIso) {
     const since = parseSince(sinceIso);
     const sinceIsoText = since.toISOString();
+    // The rows are limited: a delta without a limit is a request for
+    // everything the account ever wrote, which is what takes the Worker
+    // down when one account holds a lot.
     const notes = await this.sql`
       select id, client_id as "clientId", starred, video_id as "videoId", video_title as "videoTitle",
         channel_name as "channelName", timestamp_seconds as "timestampSeconds", quote, note,
         created_at as "createdAt", updated_at as "updatedAt"
-      from notes where user_id = ${userId} and updated_at > ${sinceIsoText}
+      from notes where user_id = ${userId} and updated_at > ${sinceIsoText} and deleted_at is null
+      order by updated_at desc limit ${MAX_LIST_ROWS}
     `;
     const vocabulary = await this.sql`
       select id, term, translation, sentence, sentence_translation as "sentenceTranslation",
         video_id as "videoId", video_title as "videoTitle", timestamp_seconds as "timestampSeconds", status,
         created_at as "createdAt", updated_at as "updatedAt"
-      from vocabulary where user_id = ${userId} and updated_at > ${sinceIsoText}
+      from vocabulary where user_id = ${userId} and updated_at > ${sinceIsoText} and deleted_at is null
+      order by updated_at desc limit ${MAX_LIST_ROWS}
+    `;
+    // The deletions travel with the delta. A delta that only carries the
+    // rows that still exist cannot say that a note is gone, so the device
+    // that still holds it would keep it and push it back.
+    const deletedNotes = await this.sql`
+      select client_id as "clientId" from notes
+      where user_id = ${userId} and deleted_at is not null and deleted_at > ${sinceIsoText}
+      order by deleted_at desc limit ${MAX_LIST_ROWS}
+    `;
+    const deletedVocabulary = await this.sql`
+      select term, sentence from vocabulary
+      where user_id = ${userId} and deleted_at is not null and deleted_at > ${sinceIsoText}
+      order by deleted_at desc limit ${MAX_LIST_ROWS}
     `;
     return {
       notes: notes.map(rowToNote),
       vocabulary: vocabulary.map(rowToVocabulary),
+      deleted: {
+        notes: deletedNotes.map((row) => ({ clientId: row.clientId })),
+        vocabulary: deletedVocabulary.map((row) => ({ term: row.term, sentence: row.sentence })),
+      },
     };
   }
 
@@ -781,7 +1137,7 @@ class NeonStore {
         ri.interval_days as "intervalDays", ri.ease, ri.reps, ri.lapses
       from review_items ri
       join vocabulary v on v.id = ri.vocabulary_id
-      where ri.user_id = ${userId} and v.user_id = ${userId}
+      where ri.user_id = ${userId} and v.user_id = ${userId} and v.deleted_at is null
     `;
     const noteCount = await this.countRows("notes", userId);
     const vocabularyCount = await this.countRows("vocabulary", userId);
@@ -819,10 +1175,104 @@ class NeonStore {
       throw new Error(`countRows: unsupported table ${table}`);
     }
     const rows = await this.sql(
-      [`select count(*) as count from ${table} where user_id = `, ""],
+      [`select count(*) as count from ${table} where user_id = `, " and deleted_at is null"],
       userId,
     );
     return rows.length ? Number(rows[0].count) || 0 : 0;
+  }
+
+  /**
+   * Throws when the account has no room for another note.
+   *
+   * An update to a note that already exists is not a new note, so it is
+   * always allowed: an account that is exactly at the cap must still be
+   * able to edit what it has.
+   */
+  async assertNoteRoom(userId, clientId) {
+    const rows = await this.sql`
+      select 1 from notes where user_id = ${userId} and client_id = ${clientId}
+    `;
+    if (!rows.length) await this.assertAccountRoom(userId);
+  }
+
+  /** The vocabulary counterpart of assertNoteRoom. */
+  async assertVocabularyRoom(userId, term, sentence) {
+    const rows = await this.sql`
+      select 1 from vocabulary
+      where user_id = ${userId} and term = ${term} and sentence = ${sentence}
+    `;
+    if (!rows.length) await this.assertAccountRoom(userId);
+  }
+
+  /**
+   * Throws when the account has no room left.
+   *
+   * The rows are the account's own, so the cap is far above what a real
+   * account needs, but it is a bound: without it one account can write
+   * until the Worker runs out of memory, and an out-of-memory Worker takes
+   * every other account down with it.
+   */
+  async assertAccountRoom(userId) {
+    const rows = await this.sql`
+      select
+        (select count(*) from notes where user_id = ${userId} and deleted_at is null) as notes,
+        (select count(*) from vocabulary where user_id = ${userId} and deleted_at is null) as vocabulary
+    `;
+    const used =
+      (rows.length ? Number(rows[0].notes) || 0 : 0) +
+      (rows.length ? Number(rows[0].vocabulary) || 0 : 0);
+    if (used >= MAX_ACCOUNT_ROWS) {
+      throw new StorageLimitError(
+        `This account already holds ${used} notes and words, which is the limit of ${MAX_ACCOUNT_ROWS}.`,
+      );
+    }
+  }
+
+  /**
+   * Removes the tombstones that are older than the retention period.
+   *
+   * A tombstone is only needed while a device could still be holding the row
+   * it deleted. Keeping every tombstone forever would grow the database
+   * without bound, so the old ones are dropped.
+   */
+  async purgeTombstones(olderThanIso) {
+    const cutoff = new Date(olderThanIso).toISOString();
+    const notes = await this.sql`
+      delete from notes
+      where deleted_at is not null and deleted_at < ${cutoff}
+      returning id
+    `;
+    const vocabulary = await this.sql`
+      delete from vocabulary
+      where deleted_at is not null and deleted_at < ${cutoff}
+      returning id
+    `;
+    return notes.length + vocabulary.length;
+  }
+
+  /**
+   * The size of the export blob, in bytes, without building it.
+   *
+   * The export is a single JSON blob the browser downloads, so it has to be
+   * measured BEFORE it is built: a blob of a few hundred megabytes does not
+   * arrive, the download simply dies.
+   */
+  async estimateExportBytes(userId) {
+    const notes = await this.sql`
+      select coalesce(sum(
+        octet_length(note) + octet_length(quote) + octet_length(video_title) + octet_length(channel_name)
+      ), 0) as bytes
+      from notes where user_id = ${userId} and deleted_at is null
+    `;
+    const vocabulary = await this.sql`
+      select coalesce(sum(
+        octet_length(term) + octet_length(translation) + octet_length(sentence)
+        + octet_length(sentence_translation) + octet_length(video_title)
+      ), 0) as bytes
+      from vocabulary where user_id = ${userId} and deleted_at is null
+    `;
+    return (notes.length ? Number(notes[0].bytes) || 0 : 0) +
+      (vocabulary.length ? Number(vocabulary[0].bytes) || 0 : 0);
   }
 
   async deleteUserData(userId) {
@@ -852,10 +1302,22 @@ class NeonStore {
 
 function createStore(env) {
   if (env && env.DATABASE_URL) {
-    return new NeonStore(env.DATABASE_URL);
+    return new NeonStore(assertUsableDatabaseUrl(env.DATABASE_URL));
   }
-  console.warn("[youtube-digest-server] DATABASE_URL missing: using the in-memory dev store.");
-  return new MemoryStore();
+  // The in-memory store is a deliberate choice, never a fallback. A Worker
+  // without a database would otherwise serve a store that lives in one
+  // instance: every account would look empty, every note would vanish at the
+  // next deploy, and no error would mention the database. Local development
+  // asks for the in-memory store by name.
+  if (env && isEnabled(env.ALLOW_MEMORY_STORE)) {
+    console.warn(
+      "[youtube-digest-server] ALLOW_MEMORY_STORE is set: using the in-memory dev store.",
+    );
+    return new MemoryStore();
+  }
+  throw new DatabaseNotConfiguredError(
+    "The database is not configured (DATABASE_URL is missing).",
+  );
 }
 
 module.exports = {
@@ -864,7 +1326,12 @@ module.exports = {
   createStore,
   applyGrade,
   parseSince,
+  DatabaseNotConfiguredError,
+  StorageLimitError,
   MAX_LIST_ROWS,
   MAX_EXPORT_ROWS,
+  MAX_EXPORT_BYTES,
+  MAX_ACCOUNT_ROWS,
+  TOMBSTONE_RETENTION_DAYS,
   MAX_INTERVAL_DAYS,
 };

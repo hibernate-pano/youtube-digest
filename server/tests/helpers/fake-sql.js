@@ -202,6 +202,113 @@ function targetTable(sql) {
   return from ? from[1].toLowerCase() : "";
 }
 
+/**
+ * The value a reference in a statement points at.
+ *
+ * `excluded.<col>` is the row that was proposed for the insert, `<table>.<col>`
+ * is the row that is already stored.
+ */
+function readReference(reference, proposed, stored) {
+  const text = String(reference || "").trim();
+  const excluded = /^excluded\.(\w+)$/i.exec(text);
+  if (excluded) return proposed[excluded[1]];
+  const column = /^(?:\w+\.)?(\w+)$/i.exec(text);
+  if (column) {
+    const name = column[1];
+    if (stored && stored[name] !== undefined) return stored[name];
+    return proposed ? proposed[name] : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Evaluates the condition of one `when` arm.
+ *
+ * The arms compare a column with a literal, e.g.
+ * `vocabulary.status = 'mastered' or excluded.status = 'mastered'`. The parts
+ * are joined by "or", so one of them is enough.
+ */
+function evaluateCondition(condition, proposed, stored) {
+  const parts = String(condition).split(/\s+or\s+/i);
+  for (const part of parts) {
+    const match = /^(?:excluded\.|vocabulary\.|notes\.)?(\w+)\s*=\s*'([^']*)'$/i.exec(part.trim());
+    if (!match) continue;
+    const value = readReference(part.trim().split("=")[0], proposed, stored);
+    if (String(value) === match[2]) return true;
+  }
+  return false;
+}
+
+/**
+ * Evaluates one assignment of a conflict branch.
+ *
+ * The rule is read out of the statement instead of being hardcoded here: a
+ * statement that clears the translation has to behave differently in the
+ * fake than one that keeps it, otherwise the production SQL could be wrong
+ * while the tests stay green.
+ *
+ * @param {string} expression the right-hand side of the assignment.
+ * @param {object} proposed the row that was proposed for the insert.
+ * @param {object} stored the row that is already in the table.
+ */
+function resolveConflictValue(expression, proposed, stored) {
+  const text = String(expression || "").trim();
+  if (/^now\(\)$/i.test(text)) return new Date().toISOString();
+  if (/^null$/i.test(text)) return null;
+
+  // `case when excluded.<col> <> '' then excluded.<col> else <table>.<col> end`
+  const emptyGuard =
+    /^case\s+when\s+excluded\.(\w+)\s*<>\s*''\s+then\s+excluded\.\1\s+else\s+(?:\w+\.)?(\w+)\s+end$/i.exec(text);
+  if (emptyGuard) {
+    const incoming = proposed[emptyGuard[1]];
+    const isEmpty = incoming === "" || incoming === null || incoming === undefined;
+    return isEmpty ? stored[emptyGuard[2]] : incoming;
+  }
+
+  // `case when <cond> then <value> ... else <value> end`
+  if (/^case\s/i.test(text)) {
+    const arms = [];
+    const armPattern = /when\s+(.+?)\s+then\s+('[^']*')|else\s+('[^']*')/gi;
+    let match = armPattern.exec(text);
+    while (match) {
+      if (match[1]) arms.push({ condition: match[1], value: match[2].slice(1, -1) });
+      else arms.push({ condition: null, value: match[3].slice(1, -1) });
+      match = armPattern.exec(text);
+    }
+    for (const arm of arms) {
+      if (arm.condition === null) return arm.value;
+      if (evaluateCondition(arm.condition, proposed, stored)) return arm.value;
+    }
+    return undefined;
+  }
+
+  return readReference(text, proposed, stored);
+}
+
+/**
+ * Applies the assignments of a conflict branch to the stored row.
+ *
+ * The statement decides, not this helper: a statement that clears the
+ * translation has to clear it here as well.
+ */
+function applyConflictAssignments(sql, stored, proposed) {
+  const clause = setClause(sql, "conflict");
+  if (!clause) return;
+  for (const part of splitTopLevel(clause.text)) {
+    const match = /^\s*([a-z_]+)\s*=\s*([\s\S]+)$/i.exec(part.text);
+    if (!match) continue;
+    const value = resolveConflictValue(match[2], proposed, stored);
+    if (value === undefined) continue;
+    stored[match[1].toLowerCase()] = value;
+  }
+}
+
+/** The bytes a text adds to an export blob. */
+function textBytes(value) {
+  if (typeof value !== "string") return 0;
+  return new TextEncoder().encode(value).length;
+}
+
 const sameId = (a, b) => String(a) === String(b);
 const truthy = (v) => v === true || v === "t" || v === 1 || v === "1";
 
@@ -296,6 +403,7 @@ class FakeSql {
         status: "learning",
         created_at: now,
         updated_at: now,
+        deleted_at: null,
       },
       overrides,
     );
@@ -319,6 +427,7 @@ class FakeSql {
         starred: false,
         created_at: now,
         updated_at: now,
+        deleted_at: null,
       },
       overrides,
     );
@@ -353,6 +462,15 @@ class FakeSql {
 
     // Dispatch on the statement kind rather than the target table: INSERTs
     // carry no `from <table>` clause at all.
+    if (/count\(\*\)/.test(lowered) && /as notes/.test(lowered) && /as vocabulary/.test(lowered)) {
+      // assertAccountRoom: the two counts in one statement.
+      return [
+        {
+          notes: this.countFor("notes", values[0]),
+          vocabulary: this.countFor("vocabulary", values[0]),
+        },
+      ];
+    }
     if (/count\(\*\)\s+as\s+count/.test(lowered)) {
       if (lowered.trim().startsWith("with")) {
         // deleteUserData's `with deleted as (...) select count(*)`.
@@ -360,11 +478,12 @@ class FakeSql {
       }
       // A plain `select count(*) as count from <table> where user_id = $1`.
       const table = targetTable(sql);
-      const rows = table === "vocabulary" ? this.vocabulary : this.notes;
-      const count = [...rows.values()].filter(
-        (row) => sameId(row.user_id, values[0]),
-      ).length;
-      return [{ count }];
+      return [{ count: this.countFor(table, values[0]) }];
+    }
+    if (/sum\(\s*octet_length/.test(lowered)) {
+      // estimateExportBytes: the size of the export, without building it.
+      const table = targetTable(sql);
+      return [{ bytes: this.bytesFor(table, values[0]) }];
     }
     if (lowered.includes("insert into users")) return this.handleUsers(lowered, values);
     if (lowered.includes("insert into notes")) return this.handleNotes(sql, values);
@@ -372,15 +491,47 @@ class FakeSql {
     if (lowered.includes("update notes set")) return this.handleNotes(sql, values);
     if (lowered.includes("delete from notes")) return this.handleNotes(sql, values);
     if (lowered.includes("from notes")) return this.handleNotes(sql, values);
-    if (lowered.includes("insert into vocabulary")) return this.handleVocabulary(lowered, values);
-    if (lowered.includes("update vocabulary")) return this.handleVocabulary(lowered, values);
-    if (lowered.includes("delete from vocabulary")) return this.handleVocabulary(lowered, values);
-    if (lowered.includes("from vocabulary")) return this.handleVocabulary(lowered, values);
+    if (lowered.includes("insert into vocabulary")) return this.handleVocabulary(sql, values);
+    if (lowered.includes("update vocabulary")) return this.handleVocabulary(sql, values);
+    if (lowered.includes("delete from vocabulary")) return this.handleVocabulary(sql, values);
+    if (lowered.includes("from vocabulary")) return this.handleVocabulary(sql, values);
     if (lowered.includes("insert into review_items")) return this.handleReviewItems(lowered, values);
     if (lowered.includes("delete from review_items")) return this.handleReviewItems(lowered, values);
     if (lowered.includes("review_items")) return this.handleReviewItems(lowered, values);
     if (lowered.includes("users")) return this.handleUsers(lowered, values);
     throw new Error("FakeSql: unsupported statement -> " + sql.replace(/\s+/g, " ").trim());
+  }
+
+  /** The rows a user still has in a table (tombstones do not count). */
+  countFor(table, userId) {
+    const rows = table === "vocabulary" ? this.vocabulary : this.notes;
+    return [...rows.values()].filter(
+      (row) => sameId(row.user_id, userId) && !row.deleted_at,
+    ).length;
+  }
+
+  /** The bytes a user's rows in a table add to an export blob. */
+  bytesFor(table, userId) {
+    const rows = table === "vocabulary" ? this.vocabulary : this.notes;
+    let bytes = 0;
+    for (const row of rows.values()) {
+      if (!sameId(row.user_id, userId) || row.deleted_at) continue;
+      if (table === "vocabulary") {
+        bytes +=
+          textBytes(row.term) +
+          textBytes(row.translation) +
+          textBytes(row.sentence) +
+          textBytes(row.sentence_translation) +
+          textBytes(row.video_title);
+      } else {
+        bytes +=
+          textBytes(row.note) +
+          textBytes(row.quote) +
+          textBytes(row.video_title) +
+          textBytes(row.channel_name);
+      }
+    }
+    return bytes;
   }
 
   /** Delete a user's notes and report how many were removed. */
@@ -449,31 +600,64 @@ class FakeSql {
     return [];
   }
 
-  handleVocabulary(lowered, values) {
+  handleVocabulary(sql, values) {
+    const lowered = sql.toLowerCase();
+
     if (lowered.includes("insert into vocabulary")) {
-      const row = {
+      const proposed = this.proposedRow(sql, values, "vocabulary", {
         id: "v" + this.nextVocabId++,
-        user_id: values[0],
-        term: values[1],
-        translation: values[2],
-        sentence: values[3],
-        sentence_translation: values[4],
-        video_id: values[5],
-        video_title: values[6],
-        timestamp_seconds: values[7],
-        status: values[8],
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
-      };
-      this.vocabulary.set(row.id, row);
-      return [projectVocabulary(row)];
+        deleted_at: null,
+      });
+      // The conflict branch decides what an existing row keeps, so the fake
+      // follows the statement instead of hardcoding the rule.
+      const existing = [...this.vocabulary.values()].find(
+        (row) =>
+          sameId(row.user_id, proposed.user_id) &&
+          row.term === proposed.term &&
+          row.sentence === proposed.sentence,
+      );
+      if (existing) {
+        applyConflictAssignments(sql, existing, proposed);
+        return [projectVocabulary(existing)];
+      }
+      this.vocabulary.set(proposed.id, proposed);
+      return [projectVocabulary(proposed)];
     }
+
     if (lowered.includes("delete from vocabulary")) {
+      if (/deleted_at is not null/.test(lowered)) {
+        // The tombstone purge: only the rows that were deleted long ago go.
+        const cutoff = new Date(values[0]).getTime();
+        let removed = 0;
+        for (const [id, row] of [...this.vocabulary.entries()]) {
+          if (row.deleted_at && new Date(row.deleted_at).getTime() < cutoff) {
+            this.vocabulary.delete(id);
+            this.reviewItems.delete(row.user_id + ":" + id);
+            removed += 1;
+          }
+        }
+        return removed ? [{ id: "purged" }] : [];
+      }
+      // A hard delete takes the review row with it, the way the foreign key
+      // with `on delete cascade` does.
       const row = this.vocabulary.get(values[0]);
       if (!row || !sameId(row.user_id, values[1])) return [];
       this.vocabulary.delete(row.id);
+      this.reviewItems.delete(row.user_id + ":" + row.id);
       return [{ id: row.id }];
     }
+
+    if (lowered.includes("update vocabulary set deleted_at")) {
+      // The soft delete: the row stays and is marked as deleted.
+      const row = this.vocabulary.get(values[0]);
+      if (!row || !sameId(row.user_id, values[1]) || row.deleted_at) return [];
+      row.deleted_at = new Date().toISOString();
+      row.updated_at = row.deleted_at;
+      return [{ id: row.id }];
+    }
+
     if (lowered.includes("update vocabulary")) {
       const row = this.vocabulary.get(values[0]);
       if (!row || !sameId(row.user_id, values[1])) return [];
@@ -490,13 +674,38 @@ class FakeSql {
       return [{ id: row.id }];
     }
     if (lowered.includes("from vocabulary")) {
+      if (lowered.includes("deleted_at is not null")) {
+        // The deleted words of the sync delta.
+        return [...this.vocabulary.values()]
+          .filter((row) => sameId(row.user_id, values[0]) && row.deleted_at)
+          .map((row) => ({ term: row.term, sentence: row.sentence }));
+      }
       const userId = values[0];
       return [...this.vocabulary.values()]
-        .filter((row) => sameId(row.user_id, userId))
+        .filter((row) => sameId(row.user_id, userId) && !row.deleted_at)
         .sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1))
         .map(projectVocabulary);
     }
     return [];
+  }
+
+  /**
+   * The row an INSERT proposes, built from the statement's own column list.
+   */
+  proposedRow(sql, values, table, defaults) {
+    const insert = insertValues(sql);
+    const row = Object.assign({}, defaults);
+    if (!insert) return row;
+    insert.columns.forEach((column, index) => {
+      const expression = insert.expressions[index];
+      if (!expression) return;
+      const name = column.text.trim().toLowerCase();
+      const value = expression.text.includes(PLACEHOLDER)
+        ? values[valueIndexAt(sql, expression.start)]
+        : expression.text.replace(/'/g, "");
+      row[name] = value;
+    });
+    return row;
   }
 
   handleReviewItems(lowered, values) {
@@ -520,6 +729,12 @@ class FakeSql {
       );
       const existing = this.reviewItems.get(key);
       if (existing) {
+        if (/do\s+nothing/i.test(lowered)) {
+          // `on conflict (user_id, vocabulary_id) do nothing`: the stored
+          // schedule is kept, which is what keeps the progress of a word
+          // that is captured again.
+          return [projectReview(existing)];
+        }
         // `on conflict (user_id, vocabulary_id) do update` in submitReview.
         Object.assign(existing, merged, { updated_at: new Date().toISOString() });
         return [projectReview(existing)];
@@ -550,6 +765,14 @@ class FakeSql {
         rows = rows.filter((row) => {
           const vocab = this.vocabulary.get(row.vocabulary_id);
           return vocab && sameId(vocab.user_id, userId);
+        });
+      }
+      if (/v\.deleted_at\s+is\s+null/.test(lowered)) {
+        // Mirrors `and v.deleted_at is null`: a word that was deleted is not
+        // offered for review any more.
+        rows = rows.filter((row) => {
+          const vocab = this.vocabulary.get(row.vocabulary_id);
+          return vocab && !vocab.deleted_at;
         });
       }
       if (lowered.includes("select ri.due_at")) {
@@ -589,6 +812,11 @@ class FakeSql {
         (row) => sameId(row.user_id, userId) && row.client_id === clientId,
       );
       if (existing) {
+        if (existing.deleted_at) {
+          // A note that was deleted stays deleted: the conflict branch does
+          // not run, so the statement returns no row.
+          return [];
+        }
         existing.video_id = videoId;
         existing.video_title = videoTitle;
         existing.channel_name = channelName;
@@ -621,16 +849,42 @@ class FakeSql {
         starred: resolveStarredFromSql(sql, "insert", false, values),
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
+        deleted_at: null,
       };
       this.notes.set(row.id, row);
       return [noteRow(row)];
     }
 
-    if (lowered.includes("delete from notes")) {
+    if (lowered.includes("update notes set deleted_at")) {
+      // The soft delete: the row stays and is marked as deleted.
+      if (/client_id = __VAL__/.test(lowered)) {
+        const row = [...this.notes.values()].find(
+          (candidate) =>
+            sameId(candidate.user_id, values[0]) && candidate.client_id === values[1],
+        );
+        if (!row || row.deleted_at) return [];
+        row.deleted_at = new Date().toISOString();
+        row.updated_at = row.deleted_at;
+        return [{ id: row.id }];
+      }
       const row = this.notes.get(values[0]);
-      if (!row || !sameId(row.user_id, values[1])) return [];
-      this.notes.delete(row.id);
+      if (!row || !sameId(row.user_id, values[1]) || row.deleted_at) return [];
+      row.deleted_at = new Date().toISOString();
+      row.updated_at = row.deleted_at;
       return [{ id: row.id }];
+    }
+
+    if (lowered.includes("delete from notes")) {
+      // The tombstone purge: only the rows that were deleted long ago go.
+      const cutoff = new Date(values[0]).getTime();
+      let removed = 0;
+      for (const [id, row] of [...this.notes.entries()]) {
+        if (row.deleted_at && new Date(row.deleted_at).getTime() < cutoff) {
+          this.notes.delete(id);
+          removed += 1;
+        }
+      }
+      return removed ? [{ id: "purged" }] : [];
     }
 
     if (lowered.includes("update notes set starred")) {
@@ -675,9 +929,23 @@ class FakeSql {
     }
 
     if (lowered.includes("from notes")) {
+      if (lowered.includes("deleted_at is not null")) {
+        // The deleted notes of the sync delta.
+        return [...this.notes.values()]
+          .filter((row) => sameId(row.user_id, values[0]) && row.deleted_at)
+          .map((row) => ({ clientId: row.client_id }));
+      }
+      if (/client_id = __VAL__/.test(lowered)) {
+        // The read-back of a note that was deleted.
+        const row = [...this.notes.values()].find(
+          (candidate) =>
+            sameId(candidate.user_id, values[0]) && candidate.client_id === values[1],
+        );
+        return row ? [noteRow(row)] : [];
+      }
       const userId = values[0];
       return [...this.notes.values()]
-        .filter((row) => sameId(row.user_id, userId))
+        .filter((row) => sameId(row.user_id, userId) && !row.deleted_at)
         .sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1))
         .map(noteRow);
     }
