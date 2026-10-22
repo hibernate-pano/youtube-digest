@@ -541,6 +541,92 @@ const TAB_EXPECTATIONS = {
   library: { panel: "library", atLeast: 1, countKey: "libraryItems" },
 };
 
+/**
+ * The widths the panel has to survive.
+ *
+ * A side panel is a narrow column that the user drags to whatever suits
+ * them, so a layout that only works at one width is a layout that breaks on
+ * somebody's screen. Chrome's own side panel goes down to about 320px.
+ */
+const LAYOUT_WIDTHS = [320, 360, 420, 520];
+
+/**
+ * Reads the layout faults the user can see.
+ *
+ * A button whose label wraps onto a second line reads as two buttons, and
+ * it grows its row until the row does not fit. The browser does not call
+ * that an overflow — the button simply gets taller — so the only honest
+ * check is the one the reader makes: how many lines of text are there.
+ *
+ * The label next to the button is a different matter. It is a sentence, it
+ * is allowed to wrap, and it must not push the button out of the row.
+ */
+const READ_LAYOUT = () => {
+  const problems = [];
+  const isPainted = (element) => {
+    const style = window.getComputedStyle(element);
+    if (style.display === "none" || style.visibility === "hidden") return false;
+    if (element.offsetParent === null && style.position !== "fixed") return false;
+    return true;
+  };
+
+  for (const button of document.querySelectorAll("button")) {
+    if (!isPainted(button)) continue;
+    const label = (button.textContent || "").trim().replace(/\s+/g, " ");
+    if (!label) continue;
+    // A button that holds a whole card is not a label that can wrap. Only
+    // the short ones are held to the one-line rule.
+    if (label.length > 40) continue;
+
+    // The number of line boxes the label's own text is painted on. Only the
+    // text nodes are measured: a range that starts outside a child element
+    // counts that element's box as well, which would report every icon
+    // button as a wrapped label.
+    const walker = document.createTreeWalker(button, NodeFilter.SHOW_TEXT);
+    const boxes = [];
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (!node.textContent.trim()) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const rect of range.getClientRects()) {
+        if (rect.height > 1) boxes.push(rect);
+      }
+    }
+    if (boxes.length > 1) {
+      problems.push(
+        `The button "${label}" is painted on ${boxes.length} lines; ` +
+          `a button label belongs on one.`,
+      );
+    }
+
+    // The button must stay inside the box it lives in.
+    const parent = button.parentElement;
+    const parentStyle = parent ? window.getComputedStyle(parent) : null;
+    if (parent && parentStyle && !/hidden|auto|scroll/.test(parentStyle.overflow)) {
+      const box = button.getBoundingClientRect();
+      const parentBox = parent.getBoundingClientRect();
+      if (box.right > parentBox.right + 1 || box.left < parentBox.left - 1) {
+        problems.push(
+          `The button "${label}" sticks out of its row ` +
+            `(${Math.round(box.left)}–${Math.round(box.right)} in ` +
+            `${Math.round(parentBox.left)}–${Math.round(parentBox.right)}).`,
+        );
+      }
+    }
+  }
+
+  // The panel itself must not scroll sideways.
+  const root = document.documentElement;
+  if (root.scrollWidth > root.clientWidth + 1) {
+    problems.push(
+      `The panel scrolls sideways: ${root.scrollWidth}px of content in a ` +
+        `${root.clientWidth}px column.`,
+    );
+  }
+
+  return problems;
+};
+
 async function main() {
   fs.mkdirSync(outDir, { recursive: true });
   const browser = await chromium.launch();
@@ -691,6 +777,24 @@ async function main() {
         errors.map((error) => `    ${error}`).join("\n"),
     );
   }
+
+  // The panel has to fit the column it is given. The pictures above are
+  // taken at one width; this walks the tabs again at every width a user can
+  // drag the side panel to.
+  for (const width of LAYOUT_WIDTHS) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const tab of Object.keys(TAB_EXPECTATIONS)) {
+      await page.evaluate((name) => {
+        document.querySelector(`[data-tab="${name}"]`)?.click();
+      }, tab);
+      await page.waitForTimeout(220);
+      const problems = await page.evaluate(READ_LAYOUT);
+      for (const problem of problems) {
+        failures.push(`At ${width}px, on the ${tab} tab: ${problem}`);
+      }
+    }
+  }
+  await page.setViewportSize({ width: 420, height: 900 });
 
   if (failures.length) {
     console.error("\nPANEL REVIEW FAILED:");

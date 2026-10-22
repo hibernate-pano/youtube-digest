@@ -421,7 +421,10 @@ const PANEL_COPY = {
     extractWordSaved: "Saved to your vocabulary.",
     quickNoteLabel: "Write a note",
     noteAtCurrentMoment:
-      "Saved at the start of the video: the panel could not read the playback position.",
+      "The note will be saved at the start of the video: the panel could not read the playback position.",
+    noteAtCachedVideo:
+      "This is a saved copy, so the note will be saved at the start of the video.",
+    noteAtTime: "Note at {time}",
     quickNotePlaceholder: "Write a note at the current moment...",
     quickNoteSave: "Save note",
     quickNoteSaved: "Note saved.",
@@ -430,12 +433,16 @@ const PANEL_COPY = {
     notesNearLimit:
       "You are close to the note limit. When it is reached, the oldest note is dropped first.",
     notesDropped:
-      "Last time you saved a note, {count} older note(s) were removed to stay under the {limit}-note limit on this device.",
+      "Last time you saved a note, {count} older notes were removed to stay under the {limit}-note limit on this device.",
+    notesDroppedOne:
+      "Last time you saved a note, {count} older note was removed to stay under the {limit}-note limit on this device.",
     wordsCount: "{count} / {limit}",
     wordsNearLimit:
       "You are close to the word limit. When it is reached, the oldest word is dropped first.",
     wordsDropped:
-      "Last time you saved a word, {count} older word(s) were removed to stay under the {limit}-word limit on this device.",
+      "Last time you saved a word, {count} older words were removed to stay under the {limit}-word limit on this device.",
+    wordsDroppedOne:
+      "Last time you saved a word, {count} older word was removed to stay under the {limit}-word limit on this device.",
     exportNotes: "Export Markdown",
     exportNotesCopied: "Markdown copied",
     exportNotesFailed: "The notes could not be copied.",
@@ -457,6 +464,7 @@ const PANEL_COPY = {
     libraryRetention:
       "The library keeps the last {count} videos for {days} days. Opening one costs nothing.",
     libraryCleaned: "{count} entries older than {days} days were removed.",
+    libraryCleanedOne: "{count} entry older than {days} days was removed.",
     libraryOpenVideo: "Open this video on YouTube",
     libraryOpenInPanel: "Read in the panel",
     libraryCachedView:
@@ -662,7 +670,9 @@ const PANEL_COPY = {
     extractWordFailed: "没能从这句话里读出生词。",
     extractWordSaved: "已存进词汇本。",
     quickNoteLabel: "写笔记",
-    noteAtCurrentMoment: "已保存在视频开头，因为面板读不到当前的播放进度。",
+    noteAtCurrentMoment: "笔记会记在视频开头，因为面板读不到当前的播放进度。",
+    noteAtCachedVideo: "这是已保存的副本，所以笔记会记在视频开头。",
+    noteAtTime: "笔记时间 {time}",
     quickNotePlaceholder: "在当前这一刻写一条笔记...",
     quickNoteSave: "保存笔记",
     quickNoteSaved: "笔记已保存。",
@@ -672,9 +682,13 @@ const PANEL_COPY = {
       "笔记快到上限了。达到上限后，最旧的笔记会先被清掉。",
     notesDropped:
       "上次保存笔记时，有 {count} 条更早的笔记被清理掉了（这台设备最多保留 {limit} 条）。",
+    notesDroppedOne:
+      "上次保存笔记时，有 {count} 条更早的笔记被清理掉了（这台设备最多保留 {limit} 条）。",
     wordsCount: "{count} / {limit}",
     wordsNearLimit: "词汇快到上限了。达到上限后，最旧的生词会先被清掉。",
     wordsDropped:
+      "上次保存生词时，有 {count} 条更早的生词被清理掉了（这台设备最多保留 {limit} 条）。",
+    wordsDroppedOne:
       "上次保存生词时，有 {count} 条更早的生词被清理掉了（这台设备最多保留 {limit} 条）。",
     exportNotes: "导出 Markdown",
     exportNotesCopied: "Markdown 已复制",
@@ -697,6 +711,7 @@ const PANEL_COPY = {
     libraryRetention:
       "资料库保留最近 {count} 个视频，共 {days} 天。打开它们不花钱。",
     libraryCleaned: "已清理 {count} 条超过 {days} 天的记录。",
+    libraryCleanedOne: "已清理 {count} 条超过 {days} 天的记录。",
     libraryOpenVideo: "在 YouTube 上打开这个视频",
     libraryOpenInPanel: "在面板里重看",
     libraryCachedView:
@@ -752,9 +767,22 @@ function panelCopy(key) {
  * Returns the copy for the current language with its {placeholders} filled
  * in. Used for the labels that name a time, which read in a different order
  * in English and Chinese.
+ *
+ * English has to agree with the number: "1 entry was removed" and "3 entries
+ * were removed" are two sentences, not one sentence with a bracket in it. The
+ * copy table keeps the singular form under the same key with "One" on the
+ * end, and the count decides which of the two is read. A key without a
+ * singular form is used for every number, so most of the table is written
+ * once.
  */
 function panelCopyFormat(key, values = {}) {
-  return panelCopy(key).replace(/\{(\w+)\}/g, (match, name) =>
+  const singularKey = `${key}One`;
+  const singular =
+    Number(values.count) === 1 && Boolean(panelCopy(singularKey))
+      ? panelCopy(singularKey)
+      : "";
+  const text = singular || panelCopy(key);
+  return text.replace(/\{(\w+)\}/g, (match, name) =>
     Object.hasOwn(values, name) ? String(values[name]) : match,
   );
 }
@@ -5189,25 +5217,34 @@ function displayTimestamp(item) {
 async function refreshNotesCurrentTime() {
   const element = document.getElementById("notesCurrentTime");
   if (!element) return;
+  // A caveat is set in the same tone as a warning: the note is going
+  // somewhere the user did not ask for, and a quiet grey label would hide
+  // that.
+  const setLabel = (text, isWarning = false) => {
+    element.textContent = text;
+    element.classList.toggle("is-warning", isWarning);
+  };
   if (!currentVideoId) {
-    element.textContent = "";
+    setLabel("");
     return;
   }
   // A saved copy is not the video in the tab, so the tab's playback
   // position belongs to another video. Reading it would put the note on
   // the wrong moment of the wrong video.
   if (showingCachedVideo) {
-    element.textContent = panelCopy("noteAtCurrentMoment");
+    setLabel(panelCopy("noteAtCachedVideo"), true);
     return;
   }
   const seconds = await getCurrentPlaybackSeconds();
   if (seconds === null) {
-    element.textContent = panelCopy("noteAtCurrentMoment");
+    setLabel(panelCopy("noteAtCurrentMoment"), true);
     return;
   }
-  element.textContent = panelCopyFormat("playFrom", {
-    time: YTD_SETTINGS.formatTimestamp(seconds),
-  });
+  setLabel(
+    panelCopyFormat("noteAtTime", {
+      time: YTD_SETTINGS.formatTimestamp(seconds),
+    }),
+  );
 }
 
 /**

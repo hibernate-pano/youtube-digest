@@ -482,6 +482,10 @@ body {
   color: var(--text-secondary);
   cursor: pointer;
   transition: all 0.18s ease;
+  /* A button that breaks into two lines reads as two buttons, and it
+     grows its row when the panel is narrow. A label wraps in its own
+     box; a button does not. */
+  white-space: nowrap;
 }
 
 .enhance-btn:hover:not(:disabled) {
@@ -1685,6 +1689,10 @@ body.toast-visible .follow-playback-btn {
 .note-actions {
   display: flex;
   gap: var(--sp-2);
+  /* When the column is too narrow for the four actions, they go onto a
+     second line. Squeezed into one line they break their own labels in
+     half, and "Copy" above "text" reads as two different buttons. */
+  flex-wrap: wrap;
 }
 
 .note-action-btn {
@@ -1698,6 +1706,7 @@ body.toast-visible .follow-playback-btn {
   color: var(--text-secondary);
   cursor: pointer;
   transition: all 0.18s ease;
+  white-space: nowrap;
 }
 
 .note-action-btn:hover {
@@ -1953,6 +1962,18 @@ body.toast-visible .follow-playback-btn {
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   color: var(--text-muted);
+  /* The label takes the room the button does not need, and wraps inside
+     it. Without this the label pushes the button into a second line. */
+  flex: 1 1 auto;
+  min-width: 0;
+  line-height: 1.45;
+}
+
+/* The panel could not place the note where the user wanted it. That is
+   not a quiet label: it is said in the tone of a warning. */
+.notes-current-time.is-warning {
+  font-family: var(--font-sans);
+  color: var(--danger);
 }
 
 .notes-meta {
