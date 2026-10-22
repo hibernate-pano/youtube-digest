@@ -29,7 +29,16 @@ const { chromium } = require("playwright");
 const root = path.resolve(__dirname, "..");
 const outDir = path.resolve(process.argv[2] || path.join(root, ".review"));
 
-const NOW = Date.parse("2026-01-15T10:30:00Z");
+/**
+ * The clock the sample data is written against.
+ *
+ * It has to be the real clock. The panel compares its cache entries against
+ * `Date.now()` to decide what has aged out, so a fixed date in the past
+ * made every sample entry look thirty days old: the library emptied itself
+ * and the panel said it had removed entries. The screenshots then showed a
+ * cleanup notice for something that never happened.
+ */
+const NOW = Date.now();
 
 /** A word that is already in the notebook. */
 const WORDS = [
