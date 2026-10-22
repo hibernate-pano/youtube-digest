@@ -346,10 +346,15 @@ function createPanelHarness({
     YTD_SETTINGS: require("../settings.js"),
   };
   sandbox.globalThis = sandbox;
-  vm.runInNewContext(read("sidepanel.js"), sandbox);
+  // The context is kept, not just the global object: the copy table is a
+  // top-level const, and a const lives in the scope of the script that
+  // declared it. Only a script run in the same context can read it.
+  const context = vm.createContext(sandbox);
+  vm.runInContext(read("sidepanel.js"), context, { filename: "sidepanel.js" });
 
   return {
     sandbox,
+    context,
     helpers: sandbox.__YTD_PANEL_TESTING__,
     document,
     elements,
@@ -1003,31 +1008,70 @@ test("the panel does not claim every transcript costs a credit", () => {
   );
 });
 
-test("the panel copy is complete in both languages", () => {
-  const source = read("sidepanel.js");
-  const table = source.match(/const PANEL_COPY = \{[\s\S]*?\n\};/);
-  assert.ok(table, "the panel needs a copy table");
+/**
+ * The copy table the panel reads at runtime.
+ *
+ * The table is read out of the running panel, not out of the source. A
+ * test that scans the source with a regular expression can only see the
+ * shape of the table, never the table itself: a key that the panel asks
+ * for and the table does not hold passes as long as the name appears
+ * somewhere in the file, and the user then reads the English source text
+ * on a Chinese panel.
+ */
+function readPanelCopy() {
+  const panel = createPanelHarness();
+  return vm.runInContext("PANEL_COPY", panel.context);
+}
 
-  const enSection = table[0].split('"zh-CN":')[0];
-  const zhSection = table[0].split('"zh-CN":')[1] || "";
-  const en = [...enSection.matchAll(/^\s{4}([A-Za-z0-9]+):/gm)].map((m) => m[1]);
-  const zh = [...zhSection.matchAll(/^\s{4}([A-Za-z0-9]+):/gm)].map((m) => m[1]);
+test("the panel copy is complete in both languages", () => {
+  const table = readPanelCopy();
+  const en = Object.keys(table.en || {});
+  const zh = Object.keys(table["zh-CN"] || {});
 
   assert.ok(en.length > 10, "the copy table should cover the panel copy");
-  assert.deepEqual(zh, en, "both languages must expose the same keys");
-  assert.doesNotMatch(table[0], /—/, "the copy must not use em dashes");
+  assert.deepEqual(
+    zh,
+    en,
+    "both languages must expose the same keys, in the same order",
+  );
+  for (const [language, copy] of Object.entries(table)) {
+    for (const [key, value] of Object.entries(copy)) {
+      assert.ok(
+        String(value).trim(),
+        `the ${language} copy of ${key} is empty, and the user would read nothing`,
+      );
+    }
+  }
+  assert.doesNotMatch(
+    Object.values(table.en).join("\n"),
+    /—/,
+    "the copy must not use em dashes",
+  );
 });
 
-test("every translated element in the panel has a copy entry", () => {
+test("every translated element in the panel has a copy entry in both languages", () => {
   const html = read("sidepanel.html");
-  const source = read("sidepanel.js");
-  const keys = [...html.matchAll(/data-i18n="([^"]+)"/g)].map((m) => m[1]);
+  const table = readPanelCopy();
+  const attributes = [
+    "data-i18n",
+    "data-i18n-aria-label",
+    "data-i18n-placeholder",
+    "data-i18n-title",
+  ];
+  const keys = [];
+  for (const attribute of attributes) {
+    const pattern = new RegExp(`${attribute}="([^"]+)"`, "g");
+    for (const match of html.matchAll(pattern)) keys.push(match[1]);
+  }
   assert.ok(keys.length >= 8, "the panel should translate its main surfaces");
   for (const key of keys) {
-    assert.match(
-      source,
-      new RegExp(`\\b${key}:`),
-      `missing copy entry for ${key}`,
+    assert.ok(
+      Object.hasOwn(table.en || {}, key),
+      `the English copy has no entry for ${key}`,
+    );
+    assert.ok(
+      Object.hasOwn(table["zh-CN"] || {}, key),
+      `the Chinese copy has no entry for ${key}`,
     );
   }
 });

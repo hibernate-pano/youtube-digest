@@ -59,6 +59,7 @@
             autocomplete="off"
             spellcheck="false"
             placeholder="Paste your Supadata key"
+            data-i18n-placeholder="supadataKeyPlaceholder"
           />
           <p class="help">
             <span data-i18n="supadataHelp"
@@ -142,11 +143,13 @@
               autocomplete="off"
               spellcheck="false"
               placeholder="Paste your DeepSeek key"
+            data-i18n-placeholder="deepseekKeyPlaceholder"
             />
             <p class="help">
               <span data-i18n="deepseekHelp"
                 >YouTube Digest uses DeepSeek V4 Flash for overviews,
-                explanations, translation, and note polishing.</span
+                explanations, translation, and tidying up the notes you save
+                from the video page.</span
               >
               <a
                 href="https://platform.deepseek.com/api_keys"
@@ -174,11 +177,13 @@
               autocomplete="off"
               spellcheck="false"
               placeholder="Paste your MiniMax key"
+            data-i18n-placeholder="minimaxKeyPlaceholder"
             />
             <p class="help">
               <span data-i18n="minimaxHelp"
                 >YouTube Digest uses MiniMax M3 for overviews, explanations,
-                translation, and note polishing.</span
+                translation, and tidying up the notes you save from the video
+                page.</span
               >
               <a
                 href="https://platform.minimaxi.com"
@@ -210,12 +215,14 @@
               autocomplete="off"
               spellcheck="false"
               placeholder="Paste your OpenCode Go key"
+            data-i18n-placeholder="opencodeGoKeyPlaceholder"
             />
             <p class="help">
               <span data-i18n="opencodeGoHelp"
                 >OpenCode Go is a low-cost subscription that includes DeepSeek
                 V4 Flash. YouTube Digest uses it for overviews, explanations,
-                translation, and note polishing.</span
+                translation, and tidying up the notes you save from the video
+                page.</span
               >
               <a
                 href="https://opencode.ai/auth"
@@ -367,7 +374,9 @@
         <p class="help" data-i18n="localDataHelp">
           Digests and translations are stored only in this Chrome profile.
           Notes are stored here too, and are mirrored to the sync service while
-          you are signed in. You can remove them at any time.
+          you are signed in. A note you write in the panel is saved exactly as
+          you wrote it; the Note button on the video page tidies the line that
+          was being spoken up with the AI. You can remove them at any time.
         </p>
         <div class="data-actions">
           <button id="clearCacheBtn" type="button" data-i18n="clearCache">

@@ -299,3 +299,81 @@ test("a note the server did not accept is never the one the device drops", async
   );
 });
 
+test("the panel says the notes are still in the account when the account is bigger than the device", async () => {
+  const panel = createPanel({
+    sendMessageImpl: workerRouter(),
+    local: {
+      ytd_notes_dropped: {
+        total: 50,
+        lastCount: 50,
+        lastAt: Date.now(),
+        lastReason: "sync",
+      },
+    },
+  });
+  await panel.helpers.loadNotesDroppedNotice();
+  await flush();
+  const notice = panel.el("notesDroppedNotice");
+  assert.equal(notice.hidden, false, "the notice is not on screen");
+  assert.match(
+    notice.textContent,
+    /still in your account/i,
+    `the panel does not say where the notes are: ${notice.textContent}`,
+  );
+  assert.doesNotMatch(
+    notice.textContent,
+    /were removed/i,
+    "the panel tells the user the notes are gone when they are in their account",
+  );
+});
+
+test("the panel still says a note the device dropped was dropped", async () => {
+  const panel = createPanel({
+    sendMessageImpl: workerRouter(),
+    local: {
+      ytd_notes_dropped: {
+        total: 1,
+        lastCount: 1,
+        lastAt: Date.now(),
+        lastReason: "save",
+      },
+    },
+  });
+  await panel.helpers.loadNotesDroppedNotice();
+  await flush();
+  const notice = panel.el("notesDroppedNotice");
+  assert.equal(notice.hidden, false, "the notice is not on screen");
+  assert.match(
+    notice.textContent,
+    /removed/i,
+    `the panel does not say what the device did: ${notice.textContent}`,
+  );
+});
+
+test("the panel says the words are still in the account when the account is bigger than the device", async () => {
+  const panel = createPanel({
+    sendMessageImpl: workerRouter(),
+    local: {
+      ytd_vocabulary_dropped: {
+        total: 80,
+        lastCount: 80,
+        lastAt: Date.now(),
+        lastReason: "sync",
+      },
+    },
+  });
+  await panel.helpers.loadWordsDroppedNotice();
+  await flush();
+  const notice = panel.el("wordsDroppedNotice");
+  assert.equal(notice.hidden, false, "the notice is not on screen");
+  assert.match(
+    notice.textContent,
+    /still in your account/i,
+    `the panel does not say where the words are: ${notice.textContent}`,
+  );
+  assert.doesNotMatch(
+    notice.textContent,
+    /were removed/i,
+    "the panel tells the user the words are gone when they are in their account",
+  );
+});

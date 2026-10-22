@@ -399,6 +399,7 @@ function createSettingsHarness(initialStorage = {}, harness = {}) {
   const removed = [];
   const elements = new Map();
   const requests = [];
+  const messages = [];
   const asked = [];
 
   const getElementById = (id) => {
@@ -441,7 +442,18 @@ function createSettingsHarness(initialStorage = {}, harness = {}) {
           },
         },
       },
-      runtime: { sendMessage: async () => ({}) },
+      runtime: {
+        // The page asks the background for anything that touches the sync
+        // service, because the session is bound to this browser and only
+        // the background knows its id.
+        sendMessage: async (message) => {
+          messages.push(message);
+          if (harness.sendMessageImpl) {
+            return harness.sendMessageImpl(message, messages.length);
+          }
+          return {};
+        },
+      },
     },
     navigator: {},
     confirm: (message) => {
@@ -457,7 +469,7 @@ function createSettingsHarness(initialStorage = {}, harness = {}) {
   root.globalThis = root;
 
   const api = options.initialize(root);
-  return { api, storage, removed, getElementById, requests, asked };
+  return { api, storage, removed, getElementById, requests, messages, asked };
 }
 
 test("Delete all notes removes the notes of every signed-in account", async () => {
@@ -505,7 +517,7 @@ test("Delete my account removes the account and its data, and asks twice first",
   const profileGate = new Promise((resolve) => {
     releaseProfile = resolve;
   });
-  const { api, storage, removed, requests, asked, getElementById } =
+  const { api, storage, removed, requests, messages, asked, getElementById } =
     createSettingsHarness(
       {
         ytd_github_session: {
@@ -521,23 +533,19 @@ test("Delete my account removes the account and its data, and asks twice first",
         ytd_settings: { aiApiKey: "x" },
       },
       {
-        fetchImpl: async (url) => {
-          if (String(url).endsWith("/api/me")) {
-            // The server is slow to answer who the reader is. The answer
-            // arrives after the account was deleted, and it must not sign
-            // the reader back in.
+        sendMessageImpl: async (message) => {
+          if (message.action === "verifyGithubSession") {
+            // The background is slow to answer who the reader is. The
+            // answer arrives after the account was deleted, and it must
+            // not sign the reader back in.
             await profileGate;
             return {
-              ok: true,
-              status: 200,
-              json: async () => ({ user: { login: "alice", githubId: 1001 } }),
+              success: true,
+              expired: false,
+              session: { login: "alice", githubId: 1001 },
             };
           }
-          return {
-            ok: true,
-            status: 200,
-            json: async () => ({ deleted: true, notesDeleted: 1 }),
-          };
+          return { success: true };
         },
       },
     );
@@ -553,17 +561,14 @@ test("Delete my account removes the account and its data, and asks twice first",
   assert.match(asked[0], /cannot be undone/);
   assert.match(asked[1], /permanent/);
 
-  // The account is deleted on the server, with the session's token.
-  const accountRequests = requests.filter((request) =>
-    String(request.url).endsWith("/api/account"),
+  // The account is deleted through the background, which is the only half
+  // that can put this browser's id on the request. Asking the server from
+  // the page itself would be refused, and the account would never go.
+  const deletions = messages.filter(
+    (message) => message.action === "deleteGithubAccount",
   );
-  assert.equal(accountRequests.length, 1);
-  assert.equal(accountRequests[0].init.method, "DELETE");
-  assert.equal(
-    accountRequests[0].init.headers.Authorization,
-    "Bearer token-alice",
-    "the account was deleted with the wrong identity",
-  );
+  assert.equal(deletions.length, 1, "the account was never deleted");
+  assert.equal(requests.length, 0, "the page still calls the server itself");
 
   // The account's own data goes with it.
   assert.ok(removed.includes("ytd_notes_1001"), "the notes stayed on the device");
@@ -590,7 +595,7 @@ test("Delete my account removes the account and its data, and asks twice first",
 });
 
 test("a refused confirmation leaves the account alone", async () => {
-  const { api, storage, requests, asked } = createSettingsHarness(
+  const { api, storage, messages, asked } = createSettingsHarness(
     {
       ytd_github_session: { token: "token-alice", login: "alice", githubId: 1001 },
       ytd_notes_1001: [{ id: "note-1" }],
@@ -602,7 +607,7 @@ test("a refused confirmation leaves the account alone", async () => {
 
   assert.equal(asked.length, 1, "the second question was asked anyway");
   assert.equal(
-    requests.filter((request) => String(request.url).endsWith("/api/account"))
+    messages.filter((message) => message.action === "deleteGithubAccount")
       .length,
     0,
     "the account was deleted without consent",
@@ -612,24 +617,29 @@ test("a refused confirmation leaves the account alone", async () => {
 });
 
 test("a refused account deletion keeps the account and says why", async () => {
-  const { api, storage, requests, getElementById } = createSettingsHarness(
+  const { api, storage, messages, getElementById } = createSettingsHarness(
     {
       ytd_github_session: { token: "token-alice", login: "alice", githubId: 1001 },
       ytd_notes_1001: [{ id: "note-1" }],
     },
     {
-      fetchImpl: async () => ({
-        ok: false,
-        status: 500,
-        json: async () => ({ error: "The database is unreachable." }),
-      }),
+      sendMessageImpl: async (message) => {
+        if (message.action === "deleteGithubAccount") {
+          return {
+            success: false,
+            error: "The database is unreachable.",
+            status: 500,
+          };
+        }
+        return {};
+      },
     },
   );
 
   await api.deleteGithubAccount();
 
   assert.equal(
-    requests.filter((request) => String(request.url).endsWith("/api/account"))
+    messages.filter((message) => message.action === "deleteGithubAccount")
       .length,
     1,
   );
@@ -663,10 +673,13 @@ test("a sync service that is having a bad minute does not sign the reader out", 
       },
     },
     {
-      fetchImpl: async () => ({
-        ok: false,
-        status: 503,
-        json: async () => ({ error: "Service unavailable" }),
+      // The background could not reach the service, so it says so without
+      // claiming the token was rejected.
+      sendMessageImpl: async () => ({
+        success: false,
+        session: null,
+        expired: false,
+        error: "Service unavailable",
       }),
     },
   );
@@ -696,10 +709,11 @@ test("only a rejected token ends the session", async () => {
       },
     },
     {
-      fetchImpl: async () => ({
-        ok: false,
-        status: 401,
-        json: async () => ({ error: "Session expired." }),
+      // The service really did reject the token: expired, not unreachable.
+      sendMessageImpl: async () => ({
+        success: true,
+        session: null,
+        expired: true,
       }),
     },
   );
@@ -708,6 +722,219 @@ test("only a rejected token ends the session", async () => {
   await settle();
 
   assert.equal(storage.ytd_github_session, undefined);
+  assert.equal(
+    getElementById("githubStatus").textContent,
+    "Your session expired. Sign in again.",
+  );
+});
+
+// ============================================================
+// The key fields and the account
+// ============================================================
+
+test("the key fields say what to paste in the page's language", () => {
+  // A placeholder is a label. The four key fields carried English
+  // placeholders on a Chinese page, so a Chinese user was told to paste a
+  // key in a language they were not reading.
+  const html = read("options.html");
+  const fields = [...html.matchAll(/data-i18n-placeholder="([^"]+)"/g)].map(
+    (match) => match[1],
+  );
+  assert.equal(
+    fields.length,
+    4,
+    "the four key fields do not all have a placeholder of their own",
+  );
+
+  for (const key of fields) {
+    const english = options.translate("en", key);
+    const chinese = options.translate("zh-CN", key);
+    assert.ok(english, `Missing English copy for ${key}`);
+    assert.ok(chinese, `Missing Chinese copy for ${key}`);
+    assert.notEqual(
+      chinese,
+      english,
+      `${key} says the same thing in both languages`,
+    );
+  }
+
+  // The Chinese placeholder has to be Chinese. A sentence that is only
+  // half translated is the failure this is about.
+  for (const key of fields) {
+    assert.match(
+      options.translate("zh-CN", key),
+      /[一-鿿]/,
+      `${key} is not written in Chinese`,
+    );
+  }
+
+  // The page has to bind them, or the copy exists and never reaches the
+  // field.
+  assert.match(
+    read("options.js"),
+    /data-i18n-placeholder/,
+    "the page never applies the placeholder copy",
+  );
+});
+
+test("the settings page does not promise a polishing the panel does not do", () => {
+  // The panel saves a note exactly as it was written. Only the Note button
+  // on the video page sends the line to the AI, and the settings page
+  // used to promise a tidying-up for every note.
+  for (const language of ["en", "zh-CN"]) {
+    const help = [
+      "deepseekHelp",
+      "minimaxHelp",
+      "opencodeGoHelp",
+      "localDataHelp",
+    ].map((key) => options.translate(language, key));
+    for (const sentence of help) {
+      assert.doesNotMatch(
+        sentence,
+        /note polish/i,
+        "the settings page still promises a polishing",
+      );
+      assert.doesNotMatch(
+        sentence,
+        /笔记润色|润色笔记/,
+        "the Chinese settings page still promises a polishing",
+      );
+    }
+  }
+  assert.match(
+    options.translate("en", "localDataHelp"),
+    /saved exactly as you wrote it/i,
+    "the settings page does not say how a note is saved",
+  );
+});
+
+test("Delete my account takes the notes and words off this device too", async () => {
+  // The button promises that everything on this device goes. The buckets
+  // that hold what was written while signed out are on the disk as well,
+  // and they are the user's notes and words too.
+  const { api, storage, removed } = createSettingsHarness(
+    {
+      ytd_github_session: {
+        token: "token-alice",
+        login: "alice",
+        githubId: 1001,
+      },
+      ytd_notes: [{ id: "note-1" }],
+      ytd_vocabulary: [{ id: "word-1" }],
+      ytd_settings: { aiApiKey: "x" },
+    },
+    {
+      // The server really did delete the account. Only then is the local
+      // copy this account's to remove.
+      sendMessageImpl: async () => ({ success: true }),
+    },
+  );
+
+  await api.deleteGithubAccount();
+
+  assert.ok(
+    removed.includes("ytd_notes"),
+    "the notes written while signed out stayed on the device",
+  );
+  assert.ok(
+    removed.includes("ytd_vocabulary"),
+    "the words written while signed out stayed on the device",
+  );
+  assert.equal(storage.ytd_notes, undefined);
+  assert.equal(storage.ytd_vocabulary, undefined);
+  assert.ok(storage.ytd_settings, "the settings were wiped as well");
+});
+
+// ============================================================
+// The account: the page asks the background, never the server
+// ============================================================
+
+test("the page never talks to the sync service itself", () => {
+  // A session belongs to the browser that started the sign-in, and only
+  // the background knows this browser's id. A request from the page would
+  // be refused: deleting an account would fail, and reading the profile
+  // would look like an expired session.
+  const source = read("options.js");
+  assert.doesNotMatch(
+    source,
+    /\/api\/(me|account)/,
+    "the settings page still builds a sync service request of its own",
+  );
+  assert.doesNotMatch(
+    source,
+    /buildGithubLoginUrl|createLoginNonce/,
+    "the settings page still builds a sign-in link that cannot name this browser",
+  );
+});
+
+test("signing in asks the background for the link", async () => {
+  const { api, messages } = createSettingsHarness();
+
+  await api.startGithubLogin();
+
+  const request = messages.find(
+    (message) => message.action === "startGithubLogin",
+  );
+  assert.ok(request, "the sign-in never reached the background");
+});
+
+test("a service that did not answer leaves the reader signed in", async () => {
+  // success:false means the service did not answer. That says nothing
+  // about the token, and a sign-out here would throw away a working
+  // sign-in because a server had a bad minute.
+  const { api, storage, getElementById } = createSettingsHarness(
+    {
+      ytd_github_session: {
+        token: "token-alice",
+        login: "alice",
+        githubId: 1001,
+        savedAt: 1,
+      },
+    },
+    {
+      sendMessageImpl: async () => ({
+        success: false,
+        session: null,
+        expired: false,
+        error: "Network unreachable",
+      }),
+    },
+  );
+
+  await api.loadOptions();
+  await settle();
+
+  assert.ok(storage.ytd_github_session, "the reader was signed out over a failed request");
+  assert.notEqual(
+    getElementById("githubStatus").textContent,
+    "Your session expired. Sign in again.",
+    "a service that did not answer was reported as an expired session",
+  );
+});
+
+test("a session the service refused signs the reader out", async () => {
+  const { api, storage, getElementById } = createSettingsHarness(
+    {
+      ytd_github_session: {
+        token: "token-alice",
+        login: "alice",
+        githubId: 1001,
+        savedAt: 1,
+      },
+    },
+    {
+      sendMessageImpl: async () => ({
+        success: true,
+        session: null,
+        expired: true,
+      }),
+    },
+  );
+
+  await api.loadOptions();
+  await settle();
+
+  assert.equal(storage.ytd_github_session, undefined, "the refused session stayed on the device");
   assert.equal(
     getElementById("githubStatus").textContent,
     "Your session expired. Sign in again.",

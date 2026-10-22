@@ -17,6 +17,29 @@ const {
    assertion is about what the user ends up seeing.
    ============================================================ */
 
+/**
+ * Waits for the panel to run its own boot.
+ *
+ * jsdom fires DOMContentLoaded by itself once the markup is parsed, so a
+ * panel under test starts up without help. Calling boot() on top of that
+ * dispatches a second one and the panel's listener runs twice, which wires
+ * every button twice: a button that opens a dialog would open it twice.
+ * That is the harness's doing, not the panel's, so a test that presses
+ * buttons waits here instead.
+ */
+async function waitForBoot(panel) {
+  for (let round = 0; round < 50; round += 1) {
+    // The first thing the boot asks the worker for. Seeing it means the
+    // listener has run and the controls are wired.
+    const started = panel.sentMessages.some(
+      (message) => message.action === "checkConfig",
+    );
+    if (started) return;
+    await flush();
+  }
+  throw new Error("the panel never finished booting");
+}
+
 /* ============================================================
    A: a failure has to be visible
    ============================================================ */
@@ -226,6 +249,86 @@ test("every failure code has a sentence in both languages", async () => {
       `${code} says the same thing in both languages`,
     );
   }
+});
+
+test("every code the worker can return has a sentence of its own", async () => {
+  // The list above is a list somebody wrote by hand, so it only ever
+  // covers the codes that existed the day it was written. This one is read
+  // out of the worker's own source: a code added tomorrow is in the list
+  // the moment it is written, and the panel has to answer it.
+  const sources = ["background.js", "cloud-sync.js", "settings.js"].map(read);
+  const codes = new Set();
+  const patterns = [
+    /\.code\s*=\s*"([A-Z][A-Z0-9_]{2,})"/g,
+    /error:\s*"([A-Z][A-Z0-9_]{2,})"/g,
+    /code:\s*"([A-Z][A-Z0-9_]{2,})"/g,
+    /\.code\s*\|\|\s*"([A-Z][A-Z0-9_]{2,})"/g,
+    /const ([A-Z][A-Z0-9_]{2,}) = "\1";/g,
+  ];
+  for (const source of sources) {
+    for (const pattern of patterns) {
+      for (const match of source.matchAll(pattern)) codes.add(match[1]);
+    }
+  }
+  assert.ok(codes.size > 15, "the scan found almost no codes, so it proves nothing");
+
+  const table = read("sidepanel.js").match(
+    /const PANEL_ERROR_CODE_COPY = \{[\s\S]*?\n\};/,
+  );
+  assert.ok(table, "the panel needs a table of failure sentences");
+  const mapped = new Set(
+    [...table[0].matchAll(/^\s{2}([A-Z][A-Z0-9_]*):\s*"(\w+)"/gm)].map(
+      (match) => match[1],
+    ),
+  );
+
+  // A code with no entry falls back to the generic sentence, which is the
+  // bug this guards: the user is told "something went wrong" while the
+  // panel knew exactly what went wrong and did not say.
+  const unmapped = [...codes].filter((code) => !mapped.has(code)).sort();
+  assert.deepEqual(
+    unmapped,
+    [],
+    `the panel has no sentence for: ${unmapped.join(", ")}`,
+  );
+
+  const english = createPanel({ sendMessageImpl: workerRouter() });
+  const chinese = createPanel({ sendMessageImpl: workerRouter(), language: "zh-CN" });
+  await chinese.helpers.loadPanelLanguage();
+  const generic = english.helpers.panelCopy("errorMessage");
+
+  for (const code of codes) {
+    const englishText = english.helpers.panelFailureMessage({ code });
+    const chineseText = chinese.helpers.panelFailureMessage({ code });
+    assert.notEqual(englishText, generic, `${code} falls back to the generic sentence`);
+    assert.notEqual(chineseText, chinese.helpers.panelCopy("errorMessage"), `${code} falls back to the generic sentence in Chinese`);
+    assert.notEqual(chineseText, englishText, `${code} says the same thing in both languages`);
+  }
+});
+
+test("the transcript search count is said in the panel's language", async () => {
+  const panel = createPanel({ sendMessageImpl: workerRouter(), language: "zh-CN" });
+  // jsdom has no layout, so it has no scrollIntoView. The browser the panel
+  // ships to has one; this stub only stands in for it.
+  panel.window.Element.prototype.scrollIntoView = () => {};
+  await panel.helpers.loadPanelLanguage();
+  await panel.boot();
+  await panel.helpers.startDigest(
+    "videoA",
+    "https://www.youtube.com/watch?v=videoA",
+  );
+  await flush();
+
+  const input = panel.el("transcriptSearchInput");
+  input.value = "caption";
+  input.dispatchEvent(new panel.window.Event("input", { bubbles: true }));
+  await flush();
+
+  const count = panel.el("transcriptSearchCount").textContent;
+  // "1 of 2" is the browser's Find bar, not Chinese. A Chinese panel that
+  // counts in English is the machine talking to itself.
+  assert.doesNotMatch(count, /\bof\b/, "the English count reached the Chinese panel");
+  assert.match(count, /共/, "the count is not said in Chinese");
 });
 
 // ============================================================
@@ -1146,4 +1249,767 @@ test("a failure the panel does not know still leaves a way out", async () => {
     true,
     "the retry was answered from what the worker remembers, so it did nothing",
   );
+});
+
+// ============================================================
+// H: the keyboard, the dialog and the words on the screen
+// ============================================================
+
+test("a keyboard selection puts the toolbar in reach", async () => {
+  // The transcript is static text: the browser puts no caret in it, so
+  // Shift with the arrow keys selected nothing and the three actions on
+  // the selection were out of reach for a user without a mouse. The panel
+  // keeps its own caret and builds the selection from it.
+  const panel = createPanel({ sendMessageImpl: workerRouter() });
+  // jsdom has no layout, so a range has no rectangle. The browser the panel
+  // ships to has one; this stub only stands in for it.
+  panel.window.Range.prototype.getBoundingClientRect = () => ({
+    left: 0,
+    top: 0,
+    right: 10,
+    bottom: 10,
+    width: 10,
+    height: 10,
+  });
+  await panel.boot();
+  await panel.helpers.startDigest(
+    "videoA",
+    "https://www.youtube.com/watch?v=videoA",
+  );
+  await flush();
+
+  const list = panel.el("transcriptList");
+  list.focus();
+  list.dispatchEvent(
+    new panel.window.KeyboardEvent("keydown", {
+      key: "ArrowRight",
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+
+  const selection = panel.window.getSelection();
+  assert.equal(selection.rangeCount, 1, "Shift+Right selected nothing");
+  assert.equal(selection.toString(), "A", "the wrong text was selected");
+  assert.ok(
+    list.contains(selection.getRangeAt(0).startContainer),
+    "the selection is not inside the transcript",
+  );
+
+  panel.window.document.dispatchEvent(
+    new panel.window.KeyboardEvent("keyup", {
+      key: "ArrowRight",
+      shiftKey: true,
+      bubbles: true,
+    }),
+  );
+  await flush();
+
+  assert.equal(
+    panel.el("explainTooltip").style.display,
+    "flex",
+    "the actions are out of reach after a keyboard selection",
+  );
+});
+
+test("the selection grows while Shift is held", async () => {
+  // The focus is in the toolbar after a keyboard selection, so the arrow
+  // keys have to grow the selection there as well. A selection that can
+  // never be longer than one character is not a selection.
+  const panel = createPanel({ sendMessageImpl: workerRouter() });
+  panel.window.Range.prototype.getBoundingClientRect = () => ({
+    left: 0,
+    top: 0,
+    right: 10,
+    bottom: 10,
+    width: 10,
+    height: 10,
+  });
+  await panel.boot();
+  await panel.helpers.startDigest(
+    "videoA",
+    "https://www.youtube.com/watch?v=videoA",
+  );
+  await flush();
+
+  const list = panel.el("transcriptList");
+  list.focus();
+  for (const key of ["ArrowRight", "ArrowRight", "ArrowRight"]) {
+    list.dispatchEvent(
+      new panel.window.KeyboardEvent("keydown", {
+        key,
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    panel.window.document.dispatchEvent(
+      new panel.window.KeyboardEvent("keyup", {
+        key,
+        shiftKey: true,
+        bubbles: true,
+      }),
+    );
+  }
+  await flush();
+
+  const toolbar = panel.el("explainTooltip");
+  assert.equal(toolbar.style.display, "flex", "the toolbar is not on screen");
+  assert.equal(
+    panel.window.document.activeElement?.className,
+    "explain-btn",
+    "the keyboard is not in the toolbar",
+  );
+
+  toolbar.dispatchEvent(
+    new panel.window.KeyboardEvent("keydown", {
+      key: "ArrowRight",
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+
+  assert.equal(
+    panel.window.getSelection().toString(),
+    "A ca",
+    "the selection did not grow while the focus was in the toolbar",
+  );
+});
+
+test("Shift+Tab at the first action stays inside the dialog", async () => {
+  // The focus starts on the dialog itself, which is inside the dialog but
+  // is not one of the actions. The old trap only checked whether the focus
+  // was inside, so the first Shift+Tab walked out into the inert panel and
+  // the keyboard was left on the body with nowhere to go.
+  const panel = createPanel({ sendMessageImpl: workerRouter() });
+  await panel.boot();
+  await panel.helpers.showExplanation("some selected words");
+
+  const dialog = panel.document.querySelector(".explain-modal");
+  assert.ok(dialog, "the dialog is not on screen");
+  dialog.focus();
+
+  const event = new panel.window.KeyboardEvent("keydown", {
+    key: "Tab",
+    shiftKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  panel.document.dispatchEvent(event);
+
+  assert.equal(event.defaultPrevented, true, "the browser was allowed to leave the dialog");
+  const active = panel.document.activeElement;
+  assert.ok(dialog.contains(active), "the focus left the dialog");
+  assert.notEqual(active, panel.document.body, "the focus landed on the body");
+  const actions = [...dialog.querySelectorAll("button")];
+  assert.equal(active, actions[actions.length - 1], "the focus did not wrap to the last action");
+});
+
+test("deleting a word says the word was deleted", async () => {
+  const router = workerRouter({
+    getVocabulary: {
+      success: true,
+      items: [{ id: "vocab_1", term: "spaced repetition", translation: "间隔重复" }],
+    },
+  });
+  const panel = createPanel({ sendMessageImpl: router });
+  // The welcome screen is announced when the panel opens, and it would
+  // overwrite whatever the delete said. Boot first, then delete.
+  await panel.boot();
+  await panel.helpers.loadVocabulary();
+
+  await panel.click(panel.el("wordsList").querySelector(".word-delete"));
+  await flush();
+
+  assert.equal(
+    panel.el("panelStatus").textContent,
+    "Word deleted.",
+    "the delete was announced as a different action",
+  );
+  assert.doesNotMatch(
+    panel.el("panelStatus").textContent,
+    /copied/i,
+    "deleting a word announces a copy",
+  );
+});
+
+test("the same message is announced again the second time", async () => {
+  // A live region only speaks when its text changes. Writing the same
+  // sentence twice left the region untouched the second time, so a user
+  // who pressed copy twice heard the first answer and then nothing.
+  const panel = createPanel({ sendMessageImpl: workerRouter() });
+  await panel.boot();
+
+  panel.helpers.announceStatus("Note saved.", { notice: false });
+  assert.equal(panel.el("panelStatus").textContent, "Note saved.");
+
+  panel.helpers.announceStatus("Note saved.", { notice: false });
+  // The region is emptied first so the second write is a change the
+  // browser can announce, and the sentence comes back in the next task.
+  assert.equal(panel.el("panelStatus").textContent, "", "the repeat was written as the same text");
+
+  panel.clock.advance(200);
+  assert.equal(
+    panel.el("panelStatus").textContent,
+    "Note saved.",
+    "the second announcement never arrived",
+  );
+});
+
+test("a failed note delete stays on screen and says why", async () => {
+  const router = workerRouter({
+    getNotes: {
+      success: true,
+      notes: [
+        {
+          id: "note-1",
+          videoId: "video-1",
+          videoTitle: "A video",
+          text: "a note worth keeping",
+          timestampSeconds: 12,
+          timestampedUrl: "https://youtu.be/video-1?t=12",
+        },
+      ],
+    },
+    deleteNote: { success: false, error: "The store is read only." },
+  });
+  const panel = createPanel({ sendMessageImpl: router });
+  await panel.boot();
+  await panel.helpers.loadNotes(null);
+  await flush();
+
+  const row = panel.el("notesList").querySelector(".note-item");
+  assert.ok(row, "the note is not on screen");
+
+  await panel.click(row.querySelector(".note-delete"));
+  await flush();
+
+  assert.ok(
+    panel.el("notesList").querySelector(".note-item"),
+    "the row disappeared while the note is still on the disk",
+  );
+  assert.match(
+    panel.el("panelToastText").textContent,
+    /read only/i,
+    "the failure is not on screen",
+  );
+});
+
+test("the explain dialog states the price before it spends it", async () => {
+  // The word dialog three lines away says what it costs. The explain
+  // dialog charged the same way and said nothing.
+  const panel = createPanel({ sendMessageImpl: workerRouter() });
+  await panel.boot();
+  await panel.helpers.showExplanation("some selected words");
+
+  const dialog = panel.document.querySelector(".explain-modal");
+  assert.match(
+    dialog.textContent,
+    /provider/i,
+    "the dialog charges without saying where the money goes",
+  );
+  assert.match(dialog.textContent, /\$|cent/i, "the dialog states no price");
+});
+
+test("switching to Chinese asks before it pays", async () => {
+  // Translating a video is not one call: the transcript goes out in small
+  // batches. Switching the language used to start all of them with no
+  // price and no question.
+  const panel = createPanel({ sendMessageImpl: workerRouter() });
+  // This test presses a button, so every listener has to exist exactly once.
+  // The harness boot() dispatches a second DOMContentLoaded on top of the one
+  // jsdom fires on its own, which wires the buttons twice and opens the
+  // question twice. Waiting for the panel's own boot keeps one of each.
+  await waitForBoot(panel);
+  await panel.helpers.startDigest(
+    "videoA",
+    "https://www.youtube.com/watch?v=videoA",
+  );
+  await flush();
+
+  const before = panel.sentMessages.filter(
+    (message) => message.action === "translateContent",
+  ).length;
+
+  // The path a user takes: they press the language button.
+  await panel.click(panel.el("contentLanguageChinese"));
+
+  const modal = panel.el("translationCostModal");
+  assert.ok(modal, "the switch started paying without asking");
+  assert.match(modal.textContent, /\$/, "the question does not say what it costs");
+  assert.match(modal.textContent, /call/i, "the question does not say how many calls it takes");
+
+  const paid = panel.sentMessages.filter(
+    (message) => message.action === "translateContent",
+  ).length;
+  assert.equal(paid, before, "a batch went out before the user answered");
+
+  // Saying no leaves the panel where it was.
+  await panel.click(panel.el("translationCostCancelBtn"));
+  await flush();
+  assert.equal(panel.el("translationCostModal"), null, "the question stayed on screen");
+  assert.equal(
+    panel.helpers.getState().currentTranscriptMode,
+    "original",
+    "the language changed even though the user said no",
+  );
+
+  // Saying yes switches, and the switch does not ask a second time.
+  await panel.click(panel.el("contentLanguageChinese"));
+  assert.ok(panel.el("translationCostModal"), "the second switch asked again");
+  await panel.click(panel.el("translationCostConfirmBtn"));
+  await flush();
+  assert.equal(panel.el("translationCostModal"), null);
+  assert.equal(
+    panel.helpers.getState().currentTranscriptMode,
+    "zh",
+    "the language did not change after the user agreed to pay",
+  );
+  const after = panel.sentMessages.filter(
+    (message) => message.action === "translateContent",
+  ).length;
+  assert.ok(after > before, "the agreed translation never went out");
+});
+
+test("the review sign-in hint signs in", async () => {
+  // The hint is the sentence that says the review needs a sign-in. A dead
+  // grey sentence tells the user what is missing and not what to do about
+  // it, and the button that does the thing is somewhere else.
+  const panel = createPanel({
+    sendMessageImpl: workerRouter({
+      getDueReviews: { success: false, error: "NO_SESSION" },
+    }),
+  });
+  await panel.boot();
+  await panel.helpers.loadDueReviews();
+
+  const hint = panel.el("reviewSignedOut");
+  assert.equal(hint.hidden, false, "the sign-in hint is missing");
+  await panel.click(hint);
+
+  assert.ok(
+    panel.sentMessages.some((message) => message.action === "startGithubLogin"),
+    "the hint does not start the sign-in it asks for",
+  );
+});
+
+test("the library never says it is empty and that it was cleaned at once", async () => {
+  const panel = createPanel({
+    sendMessageImpl: workerRouter(),
+    local: { ytd_library_cleanup: { count: 2, at: Date.now() } },
+  });
+  await panel.helpers.loadLibrary();
+  await flush();
+
+  const screen = panel.el("panel-library").textContent;
+  const saysEmpty = /nothing here yet/i.test(screen);
+  const saysCleaned = /removed/i.test(screen);
+  assert.equal(
+    saysEmpty && saysCleaned,
+    true,
+    "the two sentences are not both on screen, so this test proves nothing",
+  );
+  assert.doesNotMatch(
+    panel.el("libraryList").textContent,
+    /nothing here yet/i,
+    "the library says it is empty next to a record of what was removed",
+  );
+});
+
+test("an old cleanup record is forgotten", async () => {
+  // The record outlived the thing it described: a year later the library
+  // still opened with "2 entries older than 30 days were removed" as if it
+  // had just happened.
+  const old = Date.now() - 365 * 24 * 60 * 60 * 1000;
+  const panel = createPanel({
+    sendMessageImpl: workerRouter(),
+    local: { ytd_library_cleanup: { count: 2, at: old } },
+  });
+  await panel.helpers.loadLibrary();
+  await flush();
+
+  assert.equal(panel.el("libraryCleanup").hidden, true, "a year-old cleanup is still on screen");
+  assert.equal(
+    panel.storage.local.values.ytd_library_cleanup,
+    undefined,
+    "the year-old record is still in the store",
+  );
+});
+
+test("the summary gate quotes the price the README measured", async () => {
+  const panel = createPanel({
+    sendMessageImpl: workerRouter({
+      checkConfig: { hasSupadataKey: true, hasAiKey: true },
+    }),
+  });
+  await panel.helpers.bootPanel();
+  panel.helpers.renderSummaryGate();
+
+  const gate = panel.el("summaryGate").textContent;
+  // "One AI call, your own provider balance" is not a price. The README
+  // measured $0.002 to $0.015 for a 20-minute talk.
+  assert.match(gate, /\$0\.002/, "the gate quotes no price");
+  assert.match(gate, /\$0\.015/, "the gate quotes a price range that is not the measured one");
+  assert.match(gate, /provider/i, "the gate does not say where the money goes");
+  assert.match(gate, /length of the video/i, "the gate does not say what changes the price");
+});
+
+test("the note copy does not promise a polishing the panel does not do", async () => {
+  // The panel saves a note exactly as it was written. Only the Note
+  // button on the video page sends the line to the AI.
+  const panel = createPanel({ sendMessageImpl: workerRouter() });
+  const intro = panel.helpers.panelCopy("notesIntro");
+  assert.doesNotMatch(
+    intro,
+    /polish/i,
+    "the panel promises to polish notes it saves verbatim",
+  );
+  assert.match(intro, /exactly as you wrote it/i, "the panel does not say the note is kept as written");
+  assert.match(
+    intro,
+    /video page/i,
+    "the panel does not say where the AI-tidied note comes from",
+  );
+});
+
+test("grading the last card leaves the keyboard in the review area", async () => {
+  // The focus was on a grade button, and the button is hidden once the
+  // queue is empty. A hidden button cannot hold the focus: the browser
+  // drops it on the body and the next Tab starts at the top of the panel
+  // again.
+  const router = workerRouter({
+    getDueReviews: {
+      success: true,
+      reviews: [
+        {
+          review: { dueAt: Date.now() - 1000, intervalDays: 1, ease: 2.5, reps: 1 },
+          vocabulary: { id: "cloud-uuid-1", term: "spaced repetition", translation: "间隔重复" },
+        },
+      ],
+    },
+  });
+  const panel = createPanel({ sendMessageImpl: router });
+  await panel.boot();
+  // The review lives on the Words tab, which is only reachable once the
+  // panel is showing a video. jsdom will not focus an element whose
+  // ancestor is display:none, so the tab has to be on screen first.
+  panel.helpers.showState("results");
+  panel.helpers.switchTab("words");
+  await panel.helpers.loadDueReviews();
+  await panel.helpers.revealReviewAnswer();
+
+  const grade = panel.el("reviewActions").querySelector(".grade-btn");
+  grade.focus();
+  await panel.helpers.submitReviewGrade(3);
+  await flush();
+
+  const active = panel.document.activeElement;
+  assert.notEqual(active, panel.document.body, "the focus was dropped on the body");
+  assert.notEqual(active, grade, "the focus is still on a hidden button");
+  assert.equal(
+    active?.id,
+    "reviewEmpty",
+    "the keyboard was not left where the review ended",
+  );
+});
+
+// ============================================================
+// I: the relay, the list semantics and the price order
+// ============================================================
+
+/**
+ * Answers a relay the way the content script does.
+ *
+ * The worker only uses a tab id the panel names; without one it looks for a
+ * YouTube tab in front, which is a different video whenever the user is
+ * reading another tab beside the panel.
+ */
+function relayRecorder() {
+  const relays = [];
+  const sendMessageImpl = (message) => {
+    if (message.action === "relayToContent") {
+      relays.push(message);
+      return Promise.resolve({ success: true, response: {} });
+    }
+    return Promise.resolve({ success: true });
+  };
+  return { relays, sendMessageImpl };
+}
+
+test("the panel names its own tab when it relays to the page", async () => {
+  // A relay without a tab id may only reach the tab in front. The panel can
+  // be open next to a tab the user is not looking at, and then the answer
+  // comes from another video.
+  const { relays, sendMessageImpl } = relayRecorder();
+  const panel = createPanel({ sendMessageImpl });
+  await waitForBoot(panel);
+
+  panel.window.chrome.tabs.query = async () => [
+    { id: 42, url: "https://www.youtube.com/watch?v=videoA" },
+  ];
+  await panel.helpers.checkCurrentTab();
+  await flush();
+
+  const videoInfo = relays.find(
+    (message) => message.payload?.action === "getVideoInfo",
+  );
+  assert.ok(videoInfo, "the metadata never asked the page");
+  assert.equal(
+    videoInfo.tabId,
+    42,
+    "the metadata relay does not say which tab it is about",
+  );
+});
+
+test("the playback clock names its own tab too", async () => {
+  const { relays, sendMessageImpl } = relayRecorder();
+  const panel = createPanel({ sendMessageImpl });
+  await waitForBoot(panel);
+
+  panel.window.chrome.tabs.query = async () => [
+    { id: 7, url: "https://www.youtube.com/watch?v=videoA" },
+  ];
+  await panel.helpers.checkCurrentTab();
+  relays.length = 0;
+
+  // The direct message to the stored tab is refused, so the panel falls
+  // back to the relay - which is where the tab id used to be dropped.
+  panel.window.chrome.tabs.sendMessage = async () => {
+    throw new Error("no receiving end");
+  };
+  await panel.helpers.refreshNotesCurrentTime();
+  await flush();
+
+  const clock = relays.find(
+    (message) => message.payload?.action === "getCurrentTime",
+  );
+  assert.ok(clock, "the clock never asked the page");
+  assert.equal(clock.tabId, 7, "the clock relay does not say which tab it is about");
+});
+
+test("nothing in the panel waits for a transcript progress message", async () => {
+  // The worker used to narrate the transcript fetch. There is no sender any
+  // more, so a listener for it is a branch that can never run.
+  const source = read("sidepanel.js");
+  assert.doesNotMatch(
+    source,
+    /transcriptProgress/,
+    "the panel still listens for a message nobody sends",
+  );
+});
+
+test("the video id is read from a Shorts and an embed page", () => {
+  // The panel is the broader of the two halves: the page only puts a button
+  // on a watch page, but a user can still reach the panel from a Shorts or
+  // an embedded player.
+  const panel = createPanel({ sendMessageImpl: workerRouter() });
+  assert.equal(
+    panel.helpers.extractVideoId("https://www.youtube.com/shorts/abc123XYZ"),
+    "abc123XYZ",
+  );
+  assert.equal(
+    panel.helpers.extractVideoId("https://www.youtube.com/embed/abc123XYZ"),
+    "abc123XYZ",
+  );
+});
+
+test("a refused language leaves the tick on the language on screen", async () => {
+  // The row is a native radio group. aria-pressed is not read on a radio,
+  // and the browser had already moved the tick to the button the user
+  // pressed, so saying no to the price left the refused language ticked.
+  const panel = createPanel({ sendMessageImpl: workerRouter() });
+  await waitForBoot(panel);
+  await panel.helpers.startDigest(
+    "videoA",
+    "https://www.youtube.com/watch?v=videoA",
+  );
+  await flush();
+
+  await panel.click(panel.el("contentLanguageChinese"));
+  await panel.click(panel.el("translationCostCancelBtn"));
+  await flush();
+
+  assert.equal(panel.el("contentLanguageOriginal").checked, true, "the original is not ticked");
+  assert.equal(panel.el("contentLanguageChinese").checked, false, "the refused language is still ticked");
+  assert.equal(
+    panel.el("contentLanguageChinese").getAttribute("aria-pressed"),
+    null,
+    "a radio is still carrying aria-pressed",
+  );
+});
+
+test("every row of a list is a list item", async () => {
+  // The containers are <ul>. A div inside a <ul> is not a list item, and
+  // Chrome reports the list without saying how many things are in it.
+  const panel = createPanel({
+    sendMessageImpl: workerRouter({
+      getVocabulary: {
+        success: true,
+        items: [{ id: "v1", term: "spaced repetition", translation: "间隔重复" }],
+      },
+    }),
+    // A library entry is whatever the cache holds under a digest_ key.
+    local: {
+      digest_videoB: {
+        videoTitle: "A video read before",
+        channelName: "A channel",
+        timestamp: Date.now() - 60_000,
+        analysis: { summary: "read already" },
+      },
+    },
+  });
+  await waitForBoot(panel);
+  await panel.helpers.loadVocabulary();
+
+  // Each list is checked right after it is rendered: a later render on the
+  // same screen replaces the rows, and a row that is gone cannot be checked.
+  const rows = [];
+  const collect = (selector, className) => {
+    for (const row of panel.document.querySelectorAll(selector)) {
+      if (row.classList.contains(className)) rows.push(row);
+    }
+  };
+
+  collect("#wordsList > *", "word-item");
+
+  panel.helpers.renderNotes(
+    [
+      {
+        id: "n1",
+        text: "a note",
+        timestampSeconds: 30,
+        timestampedUrl: "https://www.youtube.com/watch?v=videoA&t=30s",
+        videoId: "videoA",
+        videoTitle: "A talk",
+      },
+    ],
+    null,
+  );
+  collect("#notesList > *", "note-item");
+
+  panel.helpers.renderAnalysisResults({
+    chapters: [],
+    keyQuotes: [{ quote: "a line worth keeping", timestampSeconds: 12 }],
+  });
+  collect("#quotesList > *", "quote-item");
+
+  await panel.helpers.loadLibrary();
+  collect("#libraryList > *", "library-item");
+
+  assert.equal(rows.length, 4, `not every list rendered a row: ${rows.length}`);
+  for (const row of rows) {
+    assert.equal(
+      row.tagName,
+      "LI",
+      `${row.className} is a ${row.tagName}, not a list item`,
+    );
+  }
+});
+
+test("no list in the panel ever holds something that is not a list item", async () => {
+  // The rows, the empty state, the loading state and the failure state are
+  // four different renderers for the same <ul>, and every one of them has
+  // to put a <li> in it. This walks the whole panel after each state, so a
+  // renderer that goes back to a div or a p is caught wherever it is.
+  const panel = createPanel({
+    sendMessageImpl: workerRouter({
+      getVocabulary: { success: true, items: [] },
+    }),
+  });
+  await waitForBoot(panel);
+
+  const foreign = () =>
+    [...panel.document.querySelectorAll("ul > *")]
+      .filter((child) => child.tagName !== "LI")
+      .map((child) => `${child.tagName}.${child.className}`);
+
+  // The empty states: no words, no notes, no quotes, no library entries.
+  panel.helpers.renderNotes([], null);
+  panel.helpers.renderAnalysisResults({ chapters: [], keyQuotes: [] });
+  panel.helpers.renderVocabulary();
+  await panel.helpers.loadLibrary();
+  assert.deepEqual(foreign(), [], "an empty state is not a list item");
+
+  // The loading and failure states of the overview.
+  panel.helpers.showState("results");
+  panel.helpers.renderAnalysisFailure({ error: "NO_AI_KEY" });
+  assert.deepEqual(foreign(), [], "a failure state is not a list item");
+
+  // And with rows in them.
+  panel.helpers.renderNotes(
+    [{ id: "n1", text: "a note", timestampSeconds: 30, timestampedUrl: "u" }],
+    null,
+  );
+  panel.helpers.renderAnalysisResults({
+    chapters: [{ title: "c", summary: "s", timestampSeconds: 5 }],
+    keyQuotes: [{ quote: "q", timestampSeconds: 12 }],
+  });
+  assert.deepEqual(foreign(), [], "a row is not a list item");
+});
+
+test("the transcript row and its timestamp are a list item with no inline paint", async () => {
+  const panel = createPanel({ sendMessageImpl: workerRouter() });
+  await waitForBoot(panel);
+  await panel.helpers.startDigest(
+    "videoA",
+    "https://www.youtube.com/watch?v=videoA",
+  );
+  await flush();
+
+  const row = panel.el("transcriptList").querySelector(".transcript-entry");
+  assert.ok(row, "the transcript did not render");
+  assert.equal(row.tagName, "LI", "a transcript row is not a list item");
+
+  const stamp = row.querySelector(".transcript-time");
+  // An inline background wins over the stylesheet, so the chip the panel
+  // paints every other timestamp with never reached this one.
+  assert.doesNotMatch(
+    stamp.getAttribute("style") || "",
+    /background|text-align/,
+    "the timestamp still paints itself inline",
+  );
+});
+
+test("the summary price is read before the button, not after it", async () => {
+  const panel = createPanel({ sendMessageImpl: workerRouter() });
+  await waitForBoot(panel);
+  await panel.helpers.renderSummaryGate();
+
+  const gate = panel.el("summaryGate");
+  const cost = gate.querySelector(".summary-gate-cost");
+  const button = panel.el("summaryGenerateBtn");
+  assert.ok(cost, "the gate states no price");
+  assert.equal(
+    cost.nextElementSibling,
+    button,
+    "the price is not directly in front of the button it is about",
+  );
+});
+
+test("the word card keeps the time in its own element", async () => {
+  const panel = createPanel({
+    sendMessageImpl: workerRouter({
+      getVocabulary: {
+        success: true,
+        items: [
+          {
+            id: "v1",
+            term: "spaced repetition",
+            translation: "间隔重复",
+            videoId: "videoA",
+            videoTitle: "A talk",
+            timestampSeconds: 90,
+          },
+        ],
+      },
+    }),
+  });
+  await waitForBoot(panel);
+  await panel.helpers.loadVocabulary();
+
+  const stamp = panel.el("wordsList").querySelector(".word-timestamp");
+  assert.ok(stamp, "the time is still glued to the video title");
+  assert.equal(stamp.textContent, "1:30", "the chip does not say the moment");
 });

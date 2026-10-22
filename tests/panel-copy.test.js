@@ -15,7 +15,7 @@ const { createPanel, flush, read, workerRouter } = require("./helpers/panel-harn
 async function libraryNotice(count) {
   const panel = createPanel({
     sendMessageImpl: workerRouter(),
-    local: { ytd_library_cleanup: { count, removedAt: Date.now() } },
+    local: { ytd_library_cleanup: { count, at: Date.now() } },
   });
   await panel.helpers.loadLibrary();
   await flush();

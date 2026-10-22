@@ -587,6 +587,12 @@ const READ_LAYOUT = () => {
     // text nodes are measured: a range that starts outside a child element
     // counts that element's box as well, which would report every icon
     // button as a wrapped label.
+    //
+    // The lines are counted by where they sit, not by how many pieces of
+    // text there are. A label that is made of several elements - a title, a
+    // separator and a time chip, say - is still one line when all three sit
+    // on the same row, and counting the pieces would call it three lines
+    // and send the reader looking for a fault that is not on the screen.
     const walker = document.createTreeWalker(button, NodeFilter.SHOW_TEXT);
     const boxes = [];
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
@@ -597,9 +603,16 @@ const READ_LAYOUT = () => {
         if (rect.height > 1) boxes.push(rect);
       }
     }
-    if (boxes.length > 1) {
+    // The rows the text sits on. Two boxes belong to the same row when
+    // their tops are within half a line of each other.
+    const rows = [];
+    for (const box of boxes) {
+      const onRow = rows.find((row) => Math.abs(row.top - box.top) < box.height / 2);
+      if (!onRow) rows.push({ top: box.top });
+    }
+    if (rows.length > 1) {
       problems.push(
-        `The button "${label}" is painted on ${boxes.length} lines; ` +
+        `The button "${label}" is painted on ${rows.length} lines; ` +
           `a button label belongs on one.`,
       );
     }

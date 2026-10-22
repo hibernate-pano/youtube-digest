@@ -12,6 +12,7 @@ const YTD_OPTIONS = (() => {
         "Keys stay in this Chrome profile and are sent only to Supadata and your chosen AI provider. There is no analytics or telemetry. If you sign in with GitHub below, your saved notes are mirrored to this project's own sync service at ytd.panbo.space; without signing in, nothing leaves this device.",
       transcriptProvider: "Transcript provider",
       supadataApiKeyLabel: "Supadata API key",
+      supadataKeyPlaceholder: "Paste your Supadata key",
       supadataHelp:
         "Optional. Subtitles are read out of the YouTube page itself; this key is only a fallback for when that fails. ",
       supadataLink: "Create a Supadata account and key",
@@ -19,22 +20,25 @@ const YTD_OPTIONS = (() => {
         ". Supadata generates the key during onboarding.",
       aiProvider: "AI provider",
       deepseekApiKeyLabel: "DeepSeek API key",
+      deepseekKeyPlaceholder: "Paste your DeepSeek key",
       deepseekHelp:
-        "YouTube Digest uses DeepSeek V4 Flash for overviews, explanations, translation, and note polishing. ",
+        "YouTube Digest uses DeepSeek V4 Flash for overviews, explanations, translation, and tidying up the notes you save from the video page. ",
       deepseekLink: "Create a DeepSeek API key",
       deepseekHelpSuffix: ".",
       deepseekPrivacyNote:
         "When you use AI features, DeepSeek receives the video transcript and relevant video context. Review DeepSeek's terms and pricing before saving.",
       minimaxApiKeyLabel: "MiniMax API key",
+      minimaxKeyPlaceholder: "Paste your MiniMax key",
       minimaxHelp:
-        "YouTube Digest uses MiniMax M3 for overviews, explanations, translation, and note polishing. ",
+        "YouTube Digest uses MiniMax M3 for overviews, explanations, translation, and tidying up the notes you save from the video page. ",
       minimaxLink: "Create a MiniMax API key",
       minimaxHelpSuffix: ".",
       minimaxPrivacyNote:
         "When you use AI features, MiniMax receives the video transcript and relevant video context. Review MiniMax's terms and pricing before saving.",
       opencodeGoApiKeyLabel: "OpenCode Go API key",
+      opencodeGoKeyPlaceholder: "Paste your OpenCode Go key",
       opencodeGoHelp:
-        "OpenCode Go is a low-cost subscription that includes DeepSeek V4 Flash. YouTube Digest uses it for overviews, explanations, translation, and note polishing. ",
+        "OpenCode Go is a low-cost subscription that includes DeepSeek V4 Flash. YouTube Digest uses it for overviews, explanations, translation, and tidying up the notes you save from the video page. ",
       opencodeGoLink: "Create an OpenCode Go API key",
       opencodeGoHelpSuffix: ".",
       opencodeGoPrivacyNote:
@@ -87,7 +91,7 @@ const YTD_OPTIONS = (() => {
       copyCustomizationPrompt: "Copy edited prompt",
       localData: "Local data",
       localDataHelp:
-        "Digests and translations are stored only in this Chrome profile. Notes are stored here too, and are mirrored to the sync service while you are signed in. You can remove them at any time.",
+        "Digests and translations are stored only in this Chrome profile. Notes are stored here too, and are mirrored to the sync service while you are signed in. A note you write in the panel is saved exactly as you wrote it; the Note button on the video page tidies the line that was being spoken up with the AI. You can remove them at any time.",
       clearCache: "Clear cached digests",
       deleteNotes: "Delete all notes",
       resetData: "Reset extension data",
@@ -121,28 +125,32 @@ const YTD_OPTIONS = (() => {
         "密钥仅保存在当前 Chrome 个人资料中，只会发送给 Supadata 和你选择的 AI 服务。本扩展不使用分析统计或行为追踪。如果你在下方使用 GitHub 登录，已保存的笔记会镜像到本项目自建的同步服务 ytd.panbo.space；不登录时不会有任何数据离开这台设备。",
       transcriptProvider: "字幕服务",
       supadataApiKeyLabel: "Supadata API 密钥",
+      supadataKeyPlaceholder: "粘贴你的 Supadata 密钥",
       supadataHelp:
         "可选。字幕直接从 YouTube 页面里读；只有读不到的时候，才需要这个密钥作为兜底。",
       supadataLink: "创建 Supadata 账号并获取密钥",
       supadataHelpSuffix: "。Supadata 会在引导流程中生成密钥。",
       aiProvider: "AI 服务",
       deepseekApiKeyLabel: "DeepSeek API 密钥",
+      deepseekKeyPlaceholder: "粘贴你的 DeepSeek 密钥",
       deepseekHelp:
-        "YouTube Digest 使用 DeepSeek V4 Flash 生成概览、解释内容、翻译字幕和润色笔记。",
+        "YouTube Digest 使用 DeepSeek V4 Flash 生成概览、解释内容、翻译字幕，以及整理从视频页面保存的笔记。",
       deepseekLink: "创建 DeepSeek API 密钥",
       deepseekHelpSuffix: "。",
       deepseekPrivacyNote:
         "使用 AI 功能时，DeepSeek 会收到视频字幕及相关视频上下文。保存前请查看 DeepSeek 的服务条款和价格。",
       minimaxApiKeyLabel: "MiniMax API 密钥",
+      minimaxKeyPlaceholder: "粘贴你的 MiniMax 密钥",
       minimaxHelp:
-        "YouTube Digest 使用 MiniMax M3 生成概览、解释内容、翻译字幕和润色笔记。",
+        "YouTube Digest 使用 MiniMax M3 生成概览、解释内容、翻译字幕，以及整理从视频页面保存的笔记。",
       minimaxLink: "创建 MiniMax API 密钥",
       minimaxHelpSuffix: "。",
       minimaxPrivacyNote:
         "使用 AI 功能时，MiniMax 会收到视频字幕及相关视频上下文。保存前请查看 MiniMax 的服务条款和价格。",
       opencodeGoApiKeyLabel: "OpenCode Go API 密钥",
+      opencodeGoKeyPlaceholder: "粘贴你的 OpenCode Go 密钥",
       opencodeGoHelp:
-        "OpenCode Go 是包含 DeepSeek V4 Flash 的低价订阅服务。YouTube Digest 用它生成概览、解释内容、翻译字幕和润色笔记。",
+        "OpenCode Go 是包含 DeepSeek V4 Flash 的低价订阅服务。YouTube Digest 用它生成概览、解释内容、翻译字幕，以及整理从视频页面保存的笔记。",
       opencodeGoLink: "创建 OpenCode Go API 密钥",
       opencodeGoHelpSuffix: "。",
       opencodeGoPrivacyNote:
@@ -193,7 +201,7 @@ const YTD_OPTIONS = (() => {
       copyCustomizationPrompt: "复制编辑后的提示词",
       localData: "本地数据",
       localDataHelp:
-        "摘要和翻译仅保存在当前 Chrome 个人资料中。笔记也保存在这里，登录状态下会同时镜像到同步服务。你可以随时删除。",
+        "摘要和翻译仅保存在当前 Chrome 个人资料中。笔记也保存在这里，登录状态下会同时镜像到同步服务。你在面板里写的笔记会原样保存；视频页面上的「笔记」按钮会用 AI 整理当时正在说的那句话。你可以随时删除。",
       clearCache: "清除缓存的摘要",
       deleteNotes: "删除全部笔记",
       resetData: "重置扩展数据",
@@ -494,24 +502,27 @@ const YTD_OPTIONS = (() => {
       }
     }
 
-    async function fetchGithubProfile(token) {
-      const response = await root.fetch(
-        settingsApi.SERVER_BASE_URL + "/api/me",
-        { headers: { Authorization: "Bearer " + token } },
-      );
-      // Only the server saying "this token is no good" signs the reader
-      // out. A server that is down or broken says nothing about the token,
-      // and signing somebody out because a service had a bad minute is
-      // not what "the session expired" means.
-      if (response.status === 401) return null;
-      if (!response.ok) {
-        throw new Error("The sync service answered with " + response.status + ".");
-      }
-      const data = await response.json();
-      if (!data || !data.user) {
-        throw new Error("The sync service answered without a user.");
-      }
-      return data.user;
+    /**
+     * Asks who the reader is, through the background.
+     *
+     * The page cannot answer this itself any more. A session belongs to the
+     * browser that started the sign-in, and only the background knows this
+     * browser's id and puts it on the request. A token sent from here would
+     * be refused for a session that is perfectly good.
+     *
+     * The answer has three shapes, and confusing two of them signs people
+     * out of a working account:
+     *  - a session: the reader is signed in, here is who they are;
+     *  - expired: the service said the token is no good, so sign them out;
+     *  - not success: the service did not answer, so nothing is known.
+     */
+    async function fetchGithubProfile() {
+      const result = await root.chrome.runtime.sendMessage({
+        action: "verifyGithubSession",
+      });
+      if (result?.session) return result.session;
+      if (result?.expired === true) return null;
+      throw new Error(result?.error || "The sync service did not answer.");
     }
 
     function renderGithubSignedIn(login) {
@@ -554,7 +565,7 @@ const YTD_OPTIONS = (() => {
       }
       renderGithubSignedIn(session.login || "GitHub");
       try {
-        const profile = await fetchGithubProfile(session.token);
+        const profile = await fetchGithubProfile();
         if (profile) {
           await withSessionLock(async () => {
             // The session may be gone by now: the reader may have deleted
@@ -587,27 +598,15 @@ const YTD_OPTIONS = (() => {
     }
 
     async function startGithubLogin() {
-      // The sign-in page speaks the interface language the user picked, so
-      // the page after GitHub does not greet a Chinese reader in English.
+      // The background builds the sign-in link, because the link has to
+      // name this browser: the session it creates is bound to the browser
+      // that asked for it, and only the background knows that id. A link
+      // built here would create a session nobody can use.
       //
-      // The nonce ties the sign-in to this browser. The sync service hands
-      // it back with the token, and the background only accepts a token
-      // that carries it: a link with somebody else's token in it would
-      // otherwise sign the user into that account and move their notes
-      // there.
-      const nonce = settingsApi.createLoginNonce();
-      const session = root.chrome?.storage?.session;
-      if (session) {
-        await session.set({
-          [settingsApi.PENDING_LOGIN_NONCE_KEY]: nonce,
-        });
-      }
-      const loginUrl = settingsApi.buildGithubLoginUrl(
-        currentLanguage,
-        settingsApi.SERVER_BASE_URL,
-        nonce,
-      );
-      await root.chrome.tabs.create({ url: loginUrl });
+      // It also owns the nonce that ties the sign-in to this browser, and
+      // the language the sign-in page speaks. The panel has always done it
+      // this way; this page is catching up.
+      await root.chrome.runtime.sendMessage({ action: "startGithubLogin" });
       // The background finishes the sign-in and says so; this page only
       // shows the result.
     }
@@ -650,29 +649,23 @@ const YTD_OPTIONS = (() => {
       );
       if (!really) return;
 
-      let response;
+      // The background sends the request, because the session is bound to
+      // this browser and only the background knows its id. A request from
+      // this page would be refused, and the account would look undeletable.
+      let result;
       try {
-        response = await root.fetch(
-          settingsApi.SERVER_BASE_URL + "/api/account",
-          {
-            method: "DELETE",
-            headers: { Authorization: "Bearer " + session.token },
-          },
-        );
+        result = await root.chrome.runtime.sendMessage({
+          action: "deleteGithubAccount",
+        });
       } catch (error) {
         setStatus(githubStatus, "githubDeleteAccountFailed", {
           message: error.message,
         });
         return;
       }
-      if (!response.ok) {
-        let message = "HTTP " + response.status;
-        try {
-          const data = await response.json();
-          if (data && data.error) message = data.error;
-        } catch (_error) {
-          // The body was not JSON. The status line is enough.
-        }
+      if (!result?.success) {
+        const message =
+          result?.error || "HTTP " + (result?.status || "unknown");
         setStatus(githubStatus, "githubDeleteAccountFailed", { message });
         return;
       }
@@ -689,6 +682,14 @@ const YTD_OPTIONS = (() => {
         keys.push(settingsApi.notesDroppedKey(githubId));
         keys.push(settingsApi.vocabularyDroppedKey(githubId));
       }
+      // The buckets that hold what was written while signed out are on the
+      // disk as well, and they are not named after the account. They are
+      // the user's notes and words too, so "delete my account" has to take
+      // them with it: the button promises that everything on this device
+      // goes, and a sentence left behind is a sentence the user can still
+      // read.
+      keys.push(settingsApi.NOTES_STORAGE_KEY);
+      keys.push(settingsApi.VOCABULARY_STORAGE_KEY);
       await withSessionLock(async () => {
         if (keys.length) await storage.remove(keys);
         await storage.remove(settingsApi.GITHUB_SESSION_KEY);
@@ -737,6 +738,15 @@ const YTD_OPTIONS = (() => {
         element.setAttribute(
           "aria-label",
           translate(currentLanguage, element.dataset.i18nAriaLabel),
+        );
+      }
+      // A placeholder is a label too. The four key fields carried English
+      // placeholders on a Chinese page, and a Chinese user was told to
+      // paste a key in a language they were not reading.
+      for (const element of doc.querySelectorAll("[data-i18n-placeholder]")) {
+        element.setAttribute(
+          "placeholder",
+          translate(currentLanguage, element.dataset.i18nPlaceholder),
         );
       }
 
@@ -911,6 +921,7 @@ const YTD_OPTIONS = (() => {
       clearCachedDigests,
       resetAllData,
       loadOptions,
+      startGithubLogin,
       deleteGithubAccount,
     };
   }

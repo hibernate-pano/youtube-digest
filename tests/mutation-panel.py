@@ -306,7 +306,13 @@ MUTATIONS = [
       return;
     }
     notice.hidden = false;
-    notice.textContent = panelCopyFormat("notesDropped", {""",
+    // Two drops, two different facts. A note that fell off when the user
+    // saved is a note this device let go of. A note that fell off when the
+    // account synced is a note the account still has, and the user has to
+    // hear that, or they will go looking for a note that is not lost.
+    const fromSync = record?.lastReason === "sync";
+    notice.textContent = panelCopyFormat(
+      fromSync ? "notesKeptInAccount" : "notesDropped",""",
                 """    const count = 0;
 
     if (!count) {
@@ -315,7 +321,13 @@ MUTATIONS = [
       return;
     }
     notice.hidden = false;
-    notice.textContent = panelCopyFormat("notesDropped", {""",
+    // Two drops, two different facts. A note that fell off when the user
+    // saved is a note this device let go of. A note that fell off when the
+    // account synced is a note the account still has, and the user has to
+    // hear that, or they will go looking for a note that is not lost.
+    const fromSync = record?.lastReason === "sync";
+    notice.textContent = panelCopyFormat(
+      fromSync ? "notesKeptInAccount" : "notesDropped",""",
             )
         ],
         "expect": [
@@ -338,7 +350,13 @@ MUTATIONS = [
       return;
     }
     notice.hidden = false;
-    notice.textContent = panelCopyFormat("notesDropped", {""",
+    // Two drops, two different facts. A note that fell off when the user
+    // saved is a note this device let go of. A note that fell off when the
+    // account synced is a note the account still has, and the user has to
+    // hear that, or they will go looking for a note that is not lost.
+    const fromSync = record?.lastReason === "sync";
+    notice.textContent = panelCopyFormat(
+      fromSync ? "notesKeptInAccount" : "notesDropped",""",
                 """    const count = Number(record?.lastCount) || 0;
 
     if (!count) {
@@ -350,13 +368,59 @@ MUTATIONS = [
       return;
     }
     notice.hidden = false;
-    notice.textContent = panelCopyFormat("notesDropped", {""",
+    // Two drops, two different facts. A note that fell off when the user
+    // saved is a note this device let go of. A note that fell off when the
+    // account synced is a note the account still has, and the user has to
+    // hear that, or they will go looking for a note that is not lost.
+    const fromSync = record?.lastReason === "sync";
+    notice.textContent = panelCopyFormat(
+      fromSync ? "notesKeptInAccount" : "notesDropped",""",
             )
         ],
         "expect": [
             (
                 "panel-tabs.test.js",
                 "the panel says nothing when nothing was dropped",
+            ),
+        ],
+    },
+    {
+        "name": "M14b the panel says a note was dropped when the account still has it",
+        "file": "sidepanel.js",
+        "hunks": [
+            (
+                """    const fromSync = record?.lastReason === "sync";
+    notice.textContent = panelCopyFormat(
+      fromSync ? "notesKeptInAccount" : "notesDropped",""",
+                """    const fromSync = false;
+    notice.textContent = panelCopyFormat(
+      fromSync ? "notesKeptInAccount" : "notesDropped",""",
+            )
+        ],
+        "expect": [
+            (
+                "sync-local-cap.test.js",
+                "the panel says the notes are still in the account when the account is bigger than the device",
+            ),
+        ],
+    },
+    {
+        "name": "M14c the panel says a word was dropped when the account still has it",
+        "file": "sidepanel.js",
+        "hunks": [
+            (
+                """    const fromSync = record?.lastReason === "sync";
+    notice.textContent = panelCopyFormat(
+      fromSync ? "wordsKeptInAccount" : "wordsDropped",""",
+                """    const fromSync = false;
+    notice.textContent = panelCopyFormat(
+      fromSync ? "wordsKeptInAccount" : "wordsDropped",""",
+            )
+        ],
+        "expect": [
+            (
+                "sync-local-cap.test.js",
+                "the panel says the words are still in the account when the account is bigger than the device",
             ),
         ],
     },

@@ -133,6 +133,13 @@ const LOCAL_VOCAB_LIMIT =
 // The cached digests keep 20 videos for 30 days.
 const LIBRARY_MAX_ENTRIES = 20;
 const LIBRARY_MAX_AGE_DAYS = 30;
+// How long the panel tells the user that entries were cleaned up.
+//
+// The record is a note about the past, and a note about the past goes
+// stale. A week is enough to explain an empty library; after that the
+// sentence is old news, and old news next to an empty library leaves the
+// user guessing whether the library is empty or was emptied.
+const LIBRARY_CLEANUP_NOTICE_DAYS = 7;
 
 // The video on screen changed. This ticket changes ONLY when that happens,
 // so a response that is still perfectly valid - because the user re-ran the
@@ -258,6 +265,20 @@ const PANEL_COPY = {
       "The transcript service could not be reached. Try again in a moment.",
     errorCodeStorageQuotaExceeded:
       "This device's storage is full, so the change was not saved. Free some space in YouTube Digest Settings and try again.",
+    errorCodeEmptyAiResponse:
+      "The AI provider answered with an empty response. Try again.",
+    errorCodeAiResponseTooLarge:
+      "The AI provider's answer was too long to read. Try a shorter selection.",
+    errorCodeLocalTranscriptTimeout:
+      "Reading the subtitles from the page took too long. Try again.",
+    errorCodeNoSession:
+      "You are not signed in to GitHub. Sign in to back up your notes and to review your words.",
+    errorCodeEmptyTerm: "There was no word to read. Try again.",
+    errorCodeEmptyNote: "There was no note to save. Write something first.",
+    errorCodeVideoNotStarted:
+      "The video has not started playing yet, so there are no subtitles to read.",
+    errorCodePageNotReady:
+      "The YouTube page was not ready yet, so the subtitles could not be read.",
     cacheNotSaved:
       "This device's storage is full, so this video was not cached. Free some space in YouTube Digest Settings and try again.",
     toastDismiss: "Dismiss",
@@ -310,9 +331,9 @@ const PANEL_COPY = {
     fullTranscript: "Full Transcript",
     savedNotes: "Saved Notes",
     noNotesForVideo:
-      "No notes for this video yet. Hover over the video and click Note to save.",
+      "No notes for this video yet. Write one above, or hover over the video and click Note. A note you write in the panel is saved exactly as you wrote it.",
     noNotesYet:
-      "No notes saved yet. Hover over a video and click Note to save.",
+      "No notes saved yet. Write one in the panel, or hover over the video and click Note. A note you write in the panel is saved exactly as you wrote it.",
     costDisclosure:
       "AI calls use your own provider balance. Transcripts are read out of the page, so they cost nothing; only the fallback uses a Supadata credit.",
     aiKeyNotice:
@@ -326,6 +347,16 @@ const PANEL_COPY = {
     translationCancelled: "Translation cancelled.",
     translationWaiting: "Waiting for translation...",
     translating: "Translating...",
+    // The translation of a whole video is not one call. The user is told
+    // how many calls it takes and what they cost before the first one goes
+    // out, because the number of calls is the number of bills.
+    translationCostTitle: "Translate this video?",
+    translationCostBatches:
+      "The whole transcript goes to the provider in small batches, so the provider is called at least {count} times.",
+    translationCostPrice:
+      "A 20-minute video costs about $0.002 to $0.015 this way. The price depends on your provider and on the length of the video, and it comes out of your own provider balance.",
+    translationCostConfirm: "Translate now",
+    translationCostCancel: "Not now",
     retry: "Retry",
     retrying: "Retrying...",
     signIn: "Sign in",
@@ -349,7 +380,7 @@ const PANEL_COPY = {
     thisVideo: "This Video",
     allNotes: "All Notes",
     notesIntro:
-      'Move your mouse over the video and click Note to save a timestamped note, or press the "n" key while the video is focused.',
+      "A note you write in the panel is saved exactly as you wrote it. The Note button on the video page saves the line that was being spoken, and tidies it up with the AI.",
     followPlayback: "Follow playback",
     searchPlaceholder: "Search words or phrases",
     searchTranscript: "Search transcript",
@@ -358,6 +389,7 @@ const PANEL_COPY = {
     previousMatch: "Previous transcript match",
     nextMatch: "Next transcript match",
     searchNoMatches: "No matches",
+    searchMatchCount: "{index} of {total}",
     digestReady: "Digest ready",
     explainTitle: "Explain",
     close: "Close",
@@ -391,7 +423,7 @@ const PANEL_COPY = {
     summaryTitle: "AI summary",
     generateSummary: "Build summary",
     summaryCostNote:
-      "One AI call, charged to your own provider (DeepSeek, MiniMax or OpenCode Go).",
+      "About $0.002 to $0.015 for one summary, depending on your provider and the length of the video, taken from your own provider balance.",
     summaryFailed: "The summary could not be built.",
     wordsTitle: "My vocabulary",
     wordsIntro:
@@ -402,6 +434,7 @@ const PANEL_COPY = {
     wordStatusReviewing: "Reviewing",
     wordStatusMastered: "Mastered",
     deleteWord: "Delete word",
+    wordDeleted: "Word deleted.",
     reviewTitle: "Review",
     reviewSignIn:
       "Sign in with GitHub to review your words on a schedule.",
@@ -416,7 +449,9 @@ const PANEL_COPY = {
     extractWord: "Word",
     extractWordTitle: "Add words to your vocabulary",
     extractWordCost:
-      "This calls your own AI provider once, so it uses your provider balance.",
+      "One AI call on your own provider. It costs a fraction of a cent, and the exact price depends on your provider and the length of the sentence.",
+    explainCost:
+      "One AI call on your own provider. It costs a fraction of a cent, and the exact price depends on your provider and the length of the selection.",
     extractWordConfirm:
       "Your AI provider will read this sentence and pick out the words worth learning.",
     extractWordRun: "Find words",
@@ -442,6 +477,10 @@ const PANEL_COPY = {
       "Last time you saved a note, {count} older notes were removed to stay under the {limit}-note limit on this device.",
     notesDroppedOne:
       "Last time you saved a note, {count} older note was removed to stay under the {limit}-note limit on this device.",
+    notesKeptInAccount:
+      "Your account has more notes than this device keeps. {count} older notes were not downloaded here, and they are still in your account and in the web dashboard.",
+    notesKeptInAccountOne:
+      "Your account has more notes than this device keeps. {count} older note was not downloaded here, and it is still in your account and in the web dashboard.",
     wordsCount: "{count} / {limit}",
     wordsNearLimit:
       "You are close to the word limit. When it is reached, the oldest word is dropped first.",
@@ -449,6 +488,10 @@ const PANEL_COPY = {
       "Last time you saved a word, {count} older words were removed to stay under the {limit}-word limit on this device.",
     wordsDroppedOne:
       "Last time you saved a word, {count} older word was removed to stay under the {limit}-word limit on this device.",
+    wordsKeptInAccount:
+      "Your account has more words than this device keeps. {count} older words were not downloaded here, and they are still in your account and in the web dashboard.",
+    wordsKeptInAccountOne:
+      "Your account has more words than this device keeps. {count} older word was not downloaded here, and it is still in your account and in the web dashboard.",
     exportNotes: "Export Markdown",
     exportNotesCopied: "Markdown copied",
     exportNotesFailed: "The notes could not be copied.",
@@ -471,6 +514,10 @@ const PANEL_COPY = {
       "The library keeps the last {count} videos for {days} days. Opening one costs nothing.",
     libraryCleaned: "{count} entries older than {days} days were removed.",
     libraryCleanedOne: "{count} entry older than {days} days was removed.",
+    libraryEmptyCleaned:
+      "Nothing here yet: {count} entries older than {days} days were removed.",
+    libraryEmptyCleanedOne:
+      "Nothing here yet: {count} entry older than {days} days was removed.",
     libraryOpenVideo: "Open this video on YouTube",
     libraryOpenInPanel: "Read in the panel",
     libraryCachedView:
@@ -517,6 +564,17 @@ const PANEL_COPY = {
       "字幕服务连接不上。请稍等一下再试。",
     errorCodeStorageQuotaExceeded:
       "这台设备的存储空间已满，这次改动没有保存。请在 YouTube Digest 设置里清理空间后重试。",
+    errorCodeEmptyAiResponse: "AI 服务返回了空内容，请重试。",
+    errorCodeAiResponseTooLarge:
+      "AI 服务返回的内容太长，读不了。请选择更短的一段再试。",
+    errorCodeLocalTranscriptTimeout: "从页面里读取字幕超时了，请重试。",
+    errorCodeNoSession:
+      "你还没有使用 GitHub 登录。登录后即可备份笔记，也可以复习生词。",
+    errorCodeEmptyTerm: "没有读到可以学习的词，请重试。",
+    errorCodeEmptyNote: "没有可以保存的笔记内容，请先写点什么。",
+    errorCodeVideoNotStarted:
+      "视频还没有开始播放，所以没有字幕可以读。",
+    errorCodePageNotReady: "YouTube 页面还没准备好，所以读不到字幕。",
     cacheNotSaved:
       "这台设备的存储空间已满，这个视频没有被缓存。请在 YouTube Digest 设置里清理空间后重试。",
     toastDismiss: "关闭",
@@ -561,9 +619,9 @@ const PANEL_COPY = {
     fullTranscript: "完整字幕",
     savedNotes: "已保存的笔记",
     noNotesForVideo:
-      "这个视频还没有笔记。把鼠标移到视频上并点击视频上的「笔记」按钮即可保存。",
+      "这个视频还没有笔记。可以在上面直接写，也可以把鼠标移到视频上点「笔记」。你在面板里写的笔记会原样保存。",
     noNotesYet:
-      "还没有保存任何笔记。把鼠标移到视频上并点击视频上的「笔记」按钮即可保存。",
+      "还没有保存任何笔记。可以在面板里写，也可以把鼠标移到视频上点「笔记」。你在面板里写的笔记会原样保存。",
     costDisclosure:
       "AI 调用使用你自己的服务额度。字幕直接从页面里读，不花钱；只有兜底那一次会消耗 1 个 Supadata 额度。",
     aiKeyNotice:
@@ -576,6 +634,15 @@ const PANEL_COPY = {
     translationCancelled: "翻译已取消。",
     translationWaiting: "等待翻译...",
     translating: "正在翻译...",
+    // 整份字幕的翻译不是一次调用。用户在第一次调用发出去之前就知道要调用
+    // 多少次、大概要花多少钱，因为调用次数就是账单次数。
+    translationCostTitle: "要翻译这个视频吗？",
+    translationCostBatches:
+      "整份字幕会分成小批次发给 AI 服务，所以至少会调用 {count} 次。",
+    translationCostPrice:
+      "20 分钟的视频这样翻译大约 $0.002 到 $0.015。具体价格取决于你的服务方和视频长度，这笔费用从你自己的服务额度里扣。",
+    translationCostConfirm: "现在翻译",
+    translationCostCancel: "先不翻译",
     retry: "重试",
     retrying: "重试中...",
     signIn: "登录",
@@ -599,7 +666,7 @@ const PANEL_COPY = {
     thisVideo: "本视频",
     allNotes: "全部笔记",
     notesIntro:
-      "把鼠标移到视频上并点击视频上的「笔记」按钮保存带时间戳的笔记，也可以在视频获得焦点时按 \"n\" 键。",
+      "你在面板里写的笔记会原样保存。视频页面上的「笔记」按钮保存的是当时正在说的那句话，并会用 AI 整理一遍。",
     followPlayback: "跟随播放",
     searchPlaceholder: "搜索词语或短语",
     searchTranscript: "搜索字幕",
@@ -608,6 +675,7 @@ const PANEL_COPY = {
     previousMatch: "上一个字幕匹配",
     nextMatch: "下一个字幕匹配",
     searchNoMatches: "没有匹配",
+    searchMatchCount: "第 {index} 个，共 {total} 个",
     digestReady: "摘要已就绪",
     explainTitle: "解释",
     close: "关闭",
@@ -641,7 +709,7 @@ const PANEL_COPY = {
     summaryTitle: "AI 摘要",
     generateSummary: "生成摘要",
     summaryCostNote:
-      "一次 AI 调用，使用你自己的服务额度（DeepSeek、MiniMax 或 OpenCode Go）。",
+      "生成一次摘要大约 $0.002 到 $0.015，具体取决于你的服务方和视频长度。这笔费用从你自己的服务额度里扣。",
     summaryFailed: "摘要生成失败。",
     wordsTitle: "我的词汇本",
     wordsIntro:
@@ -652,6 +720,7 @@ const PANEL_COPY = {
     wordStatusReviewing: "复习中",
     wordStatusMastered: "已掌握",
     deleteWord: "删除生词",
+    wordDeleted: "生词已删除。",
     reviewTitle: "复习",
     reviewSignIn: "使用 GitHub 登录后，可以按计划复习你的生词。",
     reviewEmptyState: "现在没有需要复习的生词。",
@@ -665,7 +734,9 @@ const PANEL_COPY = {
     extractWord: "生词",
     extractWordTitle: "把生词加入词汇本",
     extractWordCost:
-      "这会调用你自己的 AI 服务一次，因此会消耗你自己的服务额度。",
+      "这会在你自己的 AI 服务上调用一次。费用是几分之一分钱，具体价格取决于你的服务方和这句话的长度。",
+    explainCost:
+      "这会在你自己的 AI 服务上调用一次。费用是几分之一分钱，具体价格取决于你的服务方和你选中内容的长度。",
     extractWordConfirm:
       "你的 AI 服务会读这句话，并挑出值得学习的词。",
     extractWordRun: "找生词",
@@ -689,12 +760,20 @@ const PANEL_COPY = {
       "上次保存笔记时，有 {count} 条更早的笔记被清理掉了（这台设备最多保留 {limit} 条）。",
     notesDroppedOne:
       "上次保存笔记时，有 {count} 条更早的笔记被清理掉了（这台设备最多保留 {limit} 条）。",
+    notesKeptInAccount:
+      "你的账号里的笔记比这台设备能留下的多。有 {count} 条更早的笔记没有下载到本机，它们还在你的账号里，也还在网页控制台里。",
+    notesKeptInAccountOne:
+      "你的账号里的笔记比这台设备能留下的多。有 {count} 条更早的笔记没有下载到本机，它还在你的账号里，也还在网页控制台里。",
     wordsCount: "{count} / {limit}",
     wordsNearLimit: "词汇快到上限了。达到上限后，最旧的生词会先被清掉。",
     wordsDropped:
       "上次保存生词时，有 {count} 条更早的生词被清理掉了（这台设备最多保留 {limit} 条）。",
     wordsDroppedOne:
       "上次保存生词时，有 {count} 条更早的生词被清理掉了（这台设备最多保留 {limit} 条）。",
+    wordsKeptInAccount:
+      "你的账号里的生词比这台设备能留下的多。有 {count} 条更早的生词没有下载到本机，它们还在你的账号里，也还在网页控制台里。",
+    wordsKeptInAccountOne:
+      "你的账号里的生词比这台设备能留下的多。有 {count} 条更早的生词没有下载到本机，它还在你的账号里，也还在网页控制台里。",
     exportNotes: "导出 Markdown",
     exportNotesCopied: "Markdown 已复制",
     exportNotesFailed: "笔记没能复制成功。",
@@ -717,6 +796,8 @@ const PANEL_COPY = {
       "资料库保留最近 {count} 个视频，共 {days} 天。打开它们不花钱。",
     libraryCleaned: "已清理 {count} 条超过 {days} 天的记录。",
     libraryCleanedOne: "已清理 {count} 条超过 {days} 天的记录。",
+    libraryEmptyCleaned: "这里还是空的：有 {count} 条超过 {days} 天的记录被清理掉了。",
+    libraryEmptyCleanedOne: "这里还是空的：有 {count} 条超过 {days} 天的记录被清理掉了。",
     libraryOpenVideo: "在 YouTube 上打开这个视频",
     libraryOpenInPanel: "在面板里重看",
     libraryCachedView:
@@ -747,6 +828,14 @@ const PANEL_ERROR_CODE_COPY = {
   TRANSCRIPT_REQUEST_TIMEOUT: "errorCodeTranscriptRequestTimeout",
   TRANSCRIPT_FAILED: "errorCodeTranscriptFailed",
   STORAGE_QUOTA_EXCEEDED: "errorCodeStorageQuotaExceeded",
+  EMPTY_AI_RESPONSE: "errorCodeEmptyAiResponse",
+  AI_RESPONSE_TOO_LARGE: "errorCodeAiResponseTooLarge",
+  LOCAL_TRANSCRIPT_TIMEOUT: "errorCodeLocalTranscriptTimeout",
+  NO_SESSION: "errorCodeNoSession",
+  EMPTY_TERM: "errorCodeEmptyTerm",
+  EMPTY_NOTE: "errorCodeEmptyNote",
+  VIDEO_NOT_STARTED: "errorCodeVideoNotStarted",
+  PAGE_NOT_READY: "errorCodePageNotReady",
 };
 
 function normalizePanelLanguage(language) {
@@ -816,7 +905,12 @@ function copyPlaceholders() {
  * rather than shown as it is.
  */
 function panelFailureMessage(result) {
-  const code = String(result?.error || "").trim();
+  // The code is the same in every language and the sentence that explains
+  // it can be translated, so it is looked for in both places the worker
+  // puts it: some failures answer with the code as the error, others
+  // answer with the code next to the message.
+  const code =
+    String(result?.code || "").trim() || String(result?.error || "").trim();
   const copyKey = PANEL_ERROR_CODE_COPY[code];
   if (copyKey) {
     const provider = String(result?.provider || activeProviderName || "").trim();
@@ -827,6 +921,8 @@ function panelFailureMessage(result) {
 
   const message = String(result?.message || "").trim();
   if (message) return message;
+  const error = String(result?.error || "").trim();
+  if (error && !/^[A-Z][A-Z0-9_]*$/.test(error)) return error;
   if (code && /^[A-Z][A-Z0-9_]*$/.test(code)) return panelCopy("errorMessage");
   return code || panelCopy("errorMessage");
 }
@@ -841,9 +937,16 @@ function panelFailureMessage(result) {
  * really a code in disguise is replaced by the generic sentence.
  */
 function noteSaveFailureMessage(result) {
-  const code = String(result?.code || "").trim();
-  if (code && PANEL_ERROR_CODE_COPY[code]) {
-    return panelCopy(PANEL_ERROR_CODE_COPY[code]);
+  // The code is looked for in both places the worker puts it, so a code
+  // that comes back as the error is translated as well.
+  const candidates = [
+    String(result?.code || "").trim(),
+    String(result?.error || "").trim(),
+  ];
+  for (const candidate of candidates) {
+    if (candidate && PANEL_ERROR_CODE_COPY[candidate]) {
+      return panelCopy(PANEL_ERROR_CODE_COPY[candidate]);
+    }
   }
   const message = String(result?.error || "").trim();
   if (message && !/^[A-Z][A-Z0-9_]*$/.test(message)) return message;
@@ -1074,12 +1177,20 @@ function createDialogKeyHandler(dialog, close) {
     const first = items[0];
     const last = items[items.length - 1];
     const active = document.activeElement;
+    // The focus is on one of the actions, or it is somewhere else: on the
+    // dialog itself, which is where it starts, or outside the dialog
+    // because something took it there.
+    const onAction = items.includes(active);
     if (event.shiftKey) {
-      if (active === first || !dialog.contains(active)) {
+      // Walking back from the first action wraps to the last one. It has
+      // to wrap from the dialog as well: the browser would walk out of the
+      // dialog, and the background is inert, so the focus would land on
+      // the body with nowhere to go.
+      if (!onAction || active === first) {
         event.preventDefault();
         last.focus();
       }
-    } else if (active === last || !dialog.contains(active)) {
+    } else if (!onAction || active === last) {
       event.preventDefault();
       first.focus();
     }
@@ -1591,11 +1702,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     checkCurrentTab();
     sendResponse({ success: true });
   }
-  if (message.action === "transcriptProgress") {
-    // Background is telling us the transcript fetch status changed
-    updateLoading(message.title, message.subtitle);
-    sendResponse({ success: true });
-  }
   if (message.action === "noteSaved") {
     // Refresh notes list when a new note is saved
     loadNotes(notesFilterShowAll ? null : currentVideoId);
@@ -1878,6 +1984,23 @@ function setupEventListeners() {
         void submitReviewGrade(Number(button.dataset.grade));
       });
     });
+  // The review needs a sign-in, and the sign-in hint is the sentence that
+  // says so. A dead grey sentence tells the user what is missing and not
+  // what to do about it, and the button that does the thing is a hundred
+  // pixels away in the header. The hint therefore signs in.
+  const reviewSignIn = document.getElementById("reviewSignedOut");
+  if (reviewSignIn) {
+    const startSignIn = () => {
+      void chrome.runtime
+        .sendMessage({ action: "startGithubLogin" })
+        .catch(() => {});
+    };
+    reviewSignIn.addEventListener("click", startSignIn);
+    makeKeyboardActivatable(reviewSignIn, startSignIn, {
+      role: "button",
+      label: panelCopy("signInTitle"),
+    });
+  }
 
   // Library: search.
   document.getElementById("librarySearchInput")?.addEventListener("input", (event) => {
@@ -1931,7 +2054,9 @@ function setupEventListeners() {
     ?.addEventListener("click", exportTranscript);
   document.querySelectorAll(".transcript-mode-btn").forEach((button) => {
     button.addEventListener("click", () => {
-      handleDisplayLanguageModeChange(button.dataset.transcriptMode);
+      // The click is the user's decision, so it is the click that is
+      // asked about the price.
+      requestDisplayLanguageModeChange(button.dataset.transcriptMode);
     });
   });
   setupTranscriptSearch();
@@ -2026,9 +2151,13 @@ async function getFrontTab() {
  */
 async function requestVideoMetadata() {
   try {
-    // Route through background script for reliable message passing
+    // Route through background script for reliable message passing. The tab
+    // id is this panel's own video: a relay without one may only go to the
+    // tab the user is looking at, and the panel can be open beside a tab
+    // the user is not on.
     const result = await chrome.runtime.sendMessage({
       action: "relayToContent",
+      tabId: youtubeTabId,
       payload: { action: "getVideoInfo" },
     });
     debugLog("[YouTube Digest Panel] getVideoInfo result:", result);
@@ -2098,10 +2227,10 @@ async function checkCurrentTab() {
 /**
  * Finds the video id in whatever shape YouTube serves a video.
  *
- * The content script already knows how to read a Shorts, a live page or an
- * embedded player, and it puts a Digest button on all of them. The panel
- * has to agree: a button that opens a panel which says "no video" is worse
- * than no button at all.
+ * The content script reads the video id out of a watch page, a Shorts, a
+ * live page and an embedded player, but it only puts a Digest button on a
+ * watch page; an embedded player gets a hint instead. The panel is the
+ * broader of the two, so it accepts every shape a video id comes in.
  *
  * @param {string} url the page URL
  * @returns {string|null} the video id, or null when the page has no video
@@ -2609,7 +2738,7 @@ function clearOverviewLists() {
   const quotesList = document.getElementById("quotesList");
   if (quotesList) {
     quotesList.innerHTML = "";
-    const item = document.createElement("div");
+    const item = document.createElement("li");
     item.className = "quote-item";
     item.style.color = "var(--text-muted)";
     item.style.borderLeftColor = "var(--border)";
@@ -2691,7 +2820,7 @@ function renderAnalysisResults(analysis) {
     (a, b) => (a.timestampSeconds || 0) - (b.timestampSeconds || 0),
   );
   sortedQuotes.forEach((quote, index) => {
-    const div = document.createElement("div");
+    const div = document.createElement("li");
     div.className = "quote-item";
     div.dataset.seconds = quote.timestampSeconds;
     const stamp = displayTimestamp(quote);
@@ -2748,8 +2877,9 @@ function renderAnalysisResults(analysis) {
     // The model wrote a summary but no quotes. An empty list under a
     // heading looks like the panel broke, so it says what happened. It is
     // said as a plain line, not as a quote: a quotation mark in front of
-    // "there are no quotes" is a joke nobody asked for.
-    const note = document.createElement("p");
+    // "there are no quotes" is a joke nobody asked for. It is still a list
+    // item, because the container is a <ul>.
+    const note = document.createElement("li");
     note.className = "panel-hint";
     note.textContent = panelCopy("quotesNone");
     quotesList.appendChild(note);
@@ -2854,8 +2984,233 @@ function seekFromTranscriptEntryClick(event, seconds) {
     event.stopPropagation();
     return;
   }
-
   seekTo(seconds);
+}
+
+// ============================================================
+// TRANSCRIPT SELECTION — the caret the keyboard moves
+// ============================================================
+
+/**
+ * The keys that move the caret inside the transcript.
+ *
+ * PageUp and PageDown are not in here: the browser scrolls the transcript
+ * with them, and a caret that jumped a screen at a time would be a guess
+ * about where the user wanted to land.
+ */
+const TRANSCRIPT_CARET_KEYS = new Set([
+  "ArrowUp",
+  "ArrowDown",
+  "ArrowLeft",
+  "ArrowRight",
+  "Home",
+  "End",
+]);
+
+/**
+ * The text nodes of one block of transcript text.
+ *
+ * Buttons are left out. The timestamp and the retry button are controls,
+ * not words, and a selection that swallowed a timestamp would carry
+ * "0:42" into the note the user saves.
+ */
+function collectBlockTextNodes(container) {
+  const nodes = [];
+  const visit = (node) => {
+    for (const child of node.childNodes || []) {
+      if (child.nodeType === 3) {
+        if (child.nodeValue) nodes.push(child);
+        continue;
+      }
+      if (child.nodeType !== 1) continue;
+      if (String(child.tagName || "").toLowerCase() === "button") continue;
+      visit(child);
+    }
+  };
+  visit(container);
+  return nodes;
+}
+
+/**
+ * The transcript as the caret sees it: rows, and the blocks of text in them.
+ *
+ * A row has one block of text in the original language and two in the
+ * bilingual mode, so a block is the smallest piece of text the caret can
+ * stand in. The blocks are read every time the caret moves, because the
+ * transcript is redrawn whenever the language changes.
+ */
+function collectTranscriptRows() {
+  const list = document.getElementById("transcriptList");
+  if (!list) return [];
+  const rows = [];
+  list.querySelectorAll(".transcript-entry").forEach((row) => {
+    const blocks = [];
+    row
+      .querySelectorAll(
+        ".transcript-text, .transcript-original, .transcript-translation",
+      )
+      .forEach((container) => {
+        const nodes = collectBlockTextNodes(container);
+        if (!nodes.length) return;
+        blocks.push({
+          nodes,
+          text: nodes.map((node) => node.nodeValue).join(""),
+        });
+      });
+    if (blocks.length) rows.push({ row, blocks });
+  });
+  return rows;
+}
+
+/**
+ * The block at a place in the transcript, or null when there is none.
+ */
+function transcriptBlockAt(rows, row, column) {
+  const entry = rows[row];
+  if (!entry) return null;
+  return entry.blocks[Math.min(column, entry.blocks.length - 1)] || null;
+}
+
+/**
+ * The next row that has text, or null when there is none.
+ */
+function nextTranscriptRow(rows, row, step) {
+  let index = row + step;
+  while (index >= 0 && index < rows.length) {
+    if (rows[index].blocks.length) return index;
+    index += step;
+  }
+  return null;
+}
+
+/**
+ * The place inside a block that an offset names.
+ */
+function locateTextOffset(nodes, offset) {
+  let remaining = Math.max(0, offset);
+  for (const node of nodes) {
+    const length = node.nodeValue.length;
+    if (remaining <= length) return { node, offset: remaining };
+    remaining -= length;
+  }
+  const last = nodes[nodes.length - 1];
+  return { node: last, offset: last.nodeValue.length };
+}
+
+/**
+ * Where the caret stands after a key.
+ *
+ * The caret walks the text of the transcript: a character at a time inside
+ * a block, from one block to the next, and from one row to the next. The
+ * offset is kept when the row changes, so a caret that stood in the middle
+ * of a sentence lands in the middle of the next one.
+ */
+function moveTranscriptCaret(rows, position, key) {
+  const entry = rows[position.row];
+  if (!entry) return position;
+  const block = entry.blocks[position.column] || entry.blocks[0];
+  if (!block) return position;
+
+  if (key === "ArrowRight") {
+    if (position.offset < block.text.length) {
+      return { ...position, offset: position.offset + 1 };
+    }
+    const nextColumn = position.column + 1;
+    if (nextColumn < entry.blocks.length) {
+      return { row: position.row, column: nextColumn, offset: 0 };
+    }
+    const nextRow = nextTranscriptRow(rows, position.row, 1);
+    if (nextRow === null) return position;
+    return { row: nextRow, column: 0, offset: 0 };
+  }
+
+  if (key === "ArrowLeft") {
+    if (position.offset > 0) {
+      return { ...position, offset: position.offset - 1 };
+    }
+    if (position.column > 0) {
+      const previous = entry.blocks[position.column - 1];
+      return {
+        row: position.row,
+        column: position.column - 1,
+        offset: previous.text.length,
+      };
+    }
+    const previousRow = nextTranscriptRow(rows, position.row, -1);
+    if (previousRow === null) return position;
+    const previousEntry = rows[previousRow];
+    const lastColumn = previousEntry.blocks.length - 1;
+    return {
+      row: previousRow,
+      column: lastColumn,
+      offset: previousEntry.blocks[lastColumn].text.length,
+    };
+  }
+
+  if (key === "Home") return { ...position, offset: 0 };
+  if (key === "End") return { ...position, offset: block.text.length };
+
+  if (key === "ArrowDown" || key === "ArrowUp") {
+    const step = key === "ArrowDown" ? 1 : -1;
+    const row = nextTranscriptRow(rows, position.row, step);
+    if (row === null) return position;
+    const target = rows[row];
+    const column = Math.min(position.column, target.blocks.length - 1);
+    const targetBlock = target.blocks[column];
+    return {
+      row,
+      column,
+      offset: Math.min(position.offset, targetBlock.text.length),
+    };
+  }
+
+  return position;
+}
+
+/**
+ * The range between two places in the transcript.
+ */
+function transcriptRangeBetween(rows, start, end) {
+  const startBlock = transcriptBlockAt(rows, start.row, start.column);
+  const endBlock = transcriptBlockAt(rows, end.row, end.column);
+  if (!startBlock || !endBlock) return null;
+  const startPoint = locateTextOffset(startBlock.nodes, start.offset);
+  const endPoint = locateTextOffset(endBlock.nodes, end.offset);
+  const range = document.createRange();
+  range.setStart(startPoint.node, startPoint.offset);
+  range.setEnd(endPoint.node, endPoint.offset);
+  return range;
+}
+
+/**
+ * Tells which of two places comes first in the transcript.
+ */
+function compareTranscriptPositions(a, b) {
+  if (a.row !== b.row) return a.row - b.row;
+  if (a.column !== b.column) return a.column - b.column;
+  return a.offset - b.offset;
+}
+
+/**
+ * The closest place to a position that still exists in the transcript.
+ *
+ * The transcript is redrawn whenever the language changes, so a place that
+ * was valid a moment ago can be gone. The caret uses the closest place
+ * that is left rather than jumping back to the top.
+ */
+function clampTranscriptPosition(rows, position) {
+  const row = Math.max(0, Math.min(position.row, rows.length - 1));
+  const entry = rows[row];
+  const column = Math.max(
+    0,
+    Math.min(position.column, entry.blocks.length - 1),
+  );
+  const block = entry.blocks[column];
+  return {
+    row,
+    column,
+    offset: Math.max(0, Math.min(position.offset, block.text.length)),
+  };
 }
 
 function renderTranscript() {
@@ -2871,7 +3226,7 @@ function renderTranscript() {
   const grouped = groupTranscriptEntries(currentTranscript);
 
   grouped.forEach((group) => {
-    const div = document.createElement("div");
+    const div = document.createElement("li");
     div.className = "transcript-entry";
     div.dataset.seconds = group.start;
 
@@ -2879,8 +3234,10 @@ function renderTranscript() {
 
     // The timestamp is a real button, so a keyboard user can jump to the
     // moment and a screen reader hears a control instead of loose text.
+    // The look comes from .transcript-time in the stylesheet; an inline
+    // background here used to win over it and kept the pill from showing.
     div.innerHTML = `
-      <button class="transcript-time" type="button" style="border: none; background: none; text-align: left; align-self: flex-start; cursor: pointer;" aria-label="${escapeHtml(panelCopyFormat("jumpTo", { time: timestamp }))}">${timestamp}</button>
+      <button class="transcript-time" type="button" aria-label="${escapeHtml(panelCopyFormat("jumpTo", { time: timestamp }))}">${timestamp}</button>
       <span class="transcript-text">${renderSubtitleInlineMarkup(group.text)}</span>
     `;
 
@@ -2998,7 +3355,10 @@ function updateTranscriptSearchControls(query) {
     count.textContent = !query
       ? ""
       : hasMatches
-        ? `${transcriptSearchIndex + 1} of ${transcriptSearchMatches.length}`
+        ? panelCopyFormat("searchMatchCount", {
+            index: String(transcriptSearchIndex + 1),
+            total: String(transcriptSearchMatches.length),
+          })
         : panelCopy("searchNoMatches");
   }
   if (previous) previous.disabled = !hasMatches;
@@ -3185,6 +3545,22 @@ function exportTranscript() {
 // ============================================================
 
 /**
+ * How long the panel waits before it writes a repeated message again.
+ *
+ * A live region that is written with the same words twice says nothing the
+ * second time: the screen reader compares the region with what it already
+ * read, and there is no change to read out. The region is cleared and the
+ * words are written again, and the write has to land in a later task, or
+ * the region changes twice in the same step and the change is not noticed.
+ */
+const LIVE_REGION_REPEAT_MS = 100;
+
+/**
+ * The pending repeat of a live region message, per region.
+ */
+const liveRegionRepeats = new Map();
+
+/**
  * Writes a message into a live region.
  *
  * The region is a permanent, visually hidden live region. It never leaves the
@@ -3192,10 +3568,39 @@ function exportTranscript() {
  * screen. A live region inside a container that is hidden with display:none
  * is never announced, which is why the panel announces here instead of inside
  * the state blocks.
+ *
+ * The same message twice is still a message: the user copied the same note
+ * twice, and the second time has to be heard as well.
  */
 function writeLiveRegion(regionId, message) {
   const region = document.getElementById(regionId);
-  if (region) region.textContent = message ? String(message) : "";
+  if (!region) return;
+
+  const pending = liveRegionRepeats.get(regionId);
+  if (pending) {
+    clearTimeout(pending);
+    liveRegionRepeats.delete(regionId);
+  }
+
+  const text = message ? String(message) : "";
+  if (!text) {
+    region.textContent = "";
+    return;
+  }
+  if (region.textContent !== text) {
+    region.textContent = text;
+    return;
+  }
+
+  region.textContent = "";
+  liveRegionRepeats.set(
+    regionId,
+    setTimeout(() => {
+      liveRegionRepeats.delete(regionId);
+      const current = document.getElementById(regionId);
+      if (current) current.textContent = text;
+    }, LIVE_REGION_REPEAT_MS),
+  );
 }
 
 // How long a passing message stays on screen. An error does not use this:
@@ -3792,12 +4197,15 @@ function renderSummaryGate() {
   updateSummaryButtonLabel();
 
   // The cost line sits right above the button, so the price is read at the
-  // moment the user is about to spend it.
+  // moment the user is about to spend it. It goes in front of the button
+  // rather than after it: a screen reader follows the markup, and a price
+  // read out after the control it belongs to is a price read too late.
   let cost = gate.querySelector(".summary-gate-cost");
   if (!cost) {
     cost = document.createElement("p");
     cost.className = "summary-gate-cost";
-    gate.appendChild(cost);
+    if (button?.parentNode === gate) gate.insertBefore(cost, button);
+    else gate.appendChild(cost);
   }
   cost.textContent = hasAiKey
     ? panelCopy("summaryCostNote")
@@ -3977,7 +4385,8 @@ function renderAnalysisFailure(result) {
 
   if (quotesList) {
     quotesList.innerHTML = "";
-    const item = document.createElement("div");
+    // A list item, because the container is a <ul>.
+    const item = document.createElement("li");
     item.className = "quote-item";
     item.style.color = "var(--danger)";
     item.style.borderLeftColor = "var(--border)";
@@ -4020,9 +4429,12 @@ async function seekTo(seconds) {
       }
     }
 
-    // Fallback: route through background script
+    // Fallback: route through background script. The tab id goes with it so
+    // the fallback lands on this panel's video rather than on whichever
+    // YouTube tab happens to be in front.
     const result = await chrome.runtime.sendMessage({
       action: "relayToContent",
+      tabId: youtubeTabId,
       payload,
     });
     debugLog("[YouTube Digest Panel] seekTo relay result:", result);
@@ -4180,6 +4592,17 @@ function setupExplainFeature() {
   // Where the selection the toolbar was opened for starts. A selection that
   // starts in the same place is the user extending it, not a new one.
   let selectionAnchor = null;
+  // The panel keeps its own caret.
+  //
+  // A div with a tabindex is not a text field: the browser will not put a
+  // caret in it, so Shift with the arrow keys selects nothing and the three
+  // actions on the selection are out of reach for a keyboard user. The
+  // caret below is the panel's own, and the browser selection is built
+  // from it, so the mouse and the keyboard end up with the same thing.
+  let caret = null;
+  // The place the selection grows from. It is set when the caret moves
+  // without Shift, and it stays while Shift is held.
+  let caretAnchor = null;
 
   /**
    * Tells whether two ranges start at the same place.
@@ -4190,6 +4613,119 @@ function setupExplainFeature() {
       anchor.container === range.startContainer &&
       anchor.offset === range.startOffset
     );
+  }
+
+  /**
+   * Marks the place the caret stands in.
+   *
+   * The browser does not paint a caret in a region it cannot edit, so the
+   * panel marks the place itself. The mark is a piece of the transcript,
+   * so it scrolls with the text and cannot fall behind it.
+   */
+  function renderTranscriptCaret(rows, position) {
+    const previous = transcriptList.querySelector(".transcript-caret");
+    if (previous) previous.remove();
+
+    const block = transcriptBlockAt(rows, position.row, position.column);
+    if (!block) return;
+
+    const point = locateTextOffset(block.nodes, position.offset);
+    const marker = document.createElement("span");
+    marker.className = "transcript-caret";
+    marker.setAttribute("aria-hidden", "true");
+    // The stylesheet belongs to another team, so the mark carries its own
+    // looks until there is a class for it.
+    marker.style.cssText =
+      "display:inline-block;width:2px;height:1.1em;vertical-align:-0.2em;background:currentColor;";
+    const range = document.createRange();
+    range.setStart(point.node, point.offset);
+    range.collapse(true);
+    range.insertNode(marker);
+  }
+
+  /**
+   * Puts the caret where it belongs and builds the selection from it.
+   *
+   * @param {object} next - the place the caret moves to.
+   * @param {boolean} extend - true when the selection grows from the anchor.
+   * @returns {boolean} true when the caret could be placed.
+   */
+  function applyTranscriptCaret(next, extend) {
+    const rows = collectTranscriptRows();
+    if (!rows.length) return false;
+
+    // The transcript was redrawn under the caret, so the place it pointed
+    // at may be gone. The closest place that still exists is used.
+    const position = clampTranscriptPosition(rows, next);
+    const anchor =
+      extend && caretAnchor
+        ? clampTranscriptPosition(rows, caretAnchor)
+        : position;
+
+    const [start, end] =
+      compareTranscriptPositions(anchor, position) <= 0
+        ? [anchor, position]
+        : [position, anchor];
+
+    // The mark is placed first: it splits the text node it stands in, and
+    // the range has to be built from the nodes that are left.
+    renderTranscriptCaret(rows, position);
+    const marked = collectTranscriptRows();
+    const range = transcriptRangeBetween(marked, start, end);
+    if (!range) return false;
+
+    const selection = window.getSelection?.();
+    if (selection) {
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+
+    caret = position;
+    caretAnchor = anchor;
+    return true;
+  }
+
+  /**
+   * Where the caret starts when the keyboard lands on the transcript.
+   *
+   * A timestamp button belongs to a row, so the caret starts in that row.
+   * Anywhere else the caret starts at the top of the transcript.
+   */
+  function transcriptCaretStart(rows, target) {
+    const entry = target?.closest?.(".transcript-entry");
+    if (entry) {
+      const index = rows.findIndex((candidate) => candidate.row === entry);
+      if (index >= 0) return { row: index, column: 0, offset: 0 };
+    }
+    return { row: 0, column: 0, offset: 0 };
+  }
+
+  /**
+   * Moves the caret one key further and lets the toolbar follow.
+   */
+  function moveTranscriptCaretByKey(key, extend, target) {
+    const rows = collectTranscriptRows();
+    if (!rows.length) return false;
+
+    // The transcript was redrawn under the caret, so the place it pointed
+    // at may be gone. A caret that no longer has text under it starts
+    // again at the top.
+    const current =
+      caret && rows[caret.row] ? caret : transcriptCaretStart(rows, target);
+    // The selection grows from the place the caret stood before the move.
+    // The first Shift therefore selects the character under the caret.
+    if (extend && !caretAnchor) caretAnchor = current;
+
+    const next = moveTranscriptCaret(rows, current, key);
+    if (!applyTranscriptCaret(next, extend)) return false;
+
+    // The toolbar belongs to a selection. A caret on its own selects
+    // nothing, so the toolbar goes away.
+    const selection = window.getSelection?.();
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+      tooltip.style.display = "none";
+    }
+    return true;
   }
 
   /**
@@ -4310,6 +4846,16 @@ function setupExplainFeature() {
   // A toolbar is a toolbar: the arrow keys move between the actions, and
   // Escape puts the selection back and sends the focus to the transcript.
   tooltip.addEventListener("keydown", (event) => {
+    // Shift with the arrow keys grows the selection the toolbar acts on.
+    // The focus is in the toolbar after a keyboard selection, so without
+    // this the selection could never grow past the first character.
+    if (event.shiftKey && TRANSCRIPT_CARET_KEYS.has(event.key)) {
+      event.preventDefault();
+      event.stopPropagation();
+      moveTranscriptCaretByKey(event.key, true, event.target);
+      return;
+    }
+
     const actions = collectFocusableElements(tooltip);
     if (!actions.length) return;
     const index = actions.indexOf(event.target);
@@ -4346,6 +4892,22 @@ function setupExplainFeature() {
     "mouseup",
     () => {
       showToolbarForSelection(false);
+    },
+    { signal: selectionSignal },
+  );
+
+  // The keyboard moves the caret. The panel owns it, because the browser
+  // will not put a caret in a region that is not a text field: Shift with
+  // the arrow keys selected nothing there, and the three actions on the
+  // selection were out of reach for a keyboard user.
+  transcriptList.addEventListener(
+    "keydown",
+    (event) => {
+      if (!TRANSCRIPT_CARET_KEYS.has(event.key)) return;
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (moveTranscriptCaretByKey(event.key, event.shiftKey, event.target)) {
+        event.preventDefault();
+      }
     },
     { signal: selectionSignal },
   );
@@ -4666,6 +5228,14 @@ async function showExplanation(selectedText, trigger = null) {
   content.id = "explanationContent";
   content.setAttribute("aria-busy", "true");
 
+  // The explanation is an AI call, and it is the easiest paid action in
+  // the panel to press ten times in a row. The price is said before the
+  // call goes out, the same way the word dialog says it. It sits outside
+  // the content area, which is replaced by the answer.
+  const cost = document.createElement("p");
+  cost.className = "word-cost";
+  cost.textContent = panelCopy("explainCost");
+
   const loading = document.createElement("div");
   loading.className = "explain-loading";
   const loadingBar = document.createElement("div");
@@ -4675,7 +5245,7 @@ async function showExplanation(selectedText, trigger = null) {
   loading.append(loadingBar, loadingText);
   content.appendChild(loading);
 
-  dialog.append(header, selected, content);
+  dialog.append(header, selected, cost, content);
   modal.appendChild(dialog);
   document.body.appendChild(modal);
 
@@ -5004,7 +5574,7 @@ function renderNotes(notes, filteredVideoId) {
     const translationId = getNoteTranslationId(note, index);
     const starred = note.starred === true;
     const stamp = displayTimestamp(note);
-    const noteEl = document.createElement("div");
+    const noteEl = document.createElement("li");
     noteEl.className = "note-item";
     noteEl.innerHTML = `
       <div class="note-header">
@@ -5060,7 +5630,13 @@ function renderNotes(notes, filteredVideoId) {
     deleteBtn.title = panelCopy("deleteNote");
     deleteBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
-      await deleteNote(note.id);
+      const result = await deleteNote(note.id);
+      if (!result?.success) {
+        // The note is still on the disk, so the row stays where it is and
+        // the reason is said out loud.
+        announceAlert(noteSaveFailureMessage(result));
+        return;
+      }
       loadNotes(filteredVideoId);
     });
 
@@ -5196,15 +5772,21 @@ function startEditingNote(note, noteEl) {
 }
 /**
  * Deletes a note by ID.
+ *
+ * The answer comes back with the reason, so a note that did not delete can
+ * be told apart from a note that did. A caller that ignores the answer
+ * removes the row while the note is still on the disk, and the user has no
+ * way of knowing that the note they are looking at is still there.
  */
 async function deleteNote(noteId) {
   try {
-    await chrome.runtime.sendMessage({
+    return await chrome.runtime.sendMessage({
       action: "deleteNote",
       noteId: noteId,
     });
   } catch (error) {
     console.error("[YouTube Digest Panel] Delete note error:", error);
+    return { success: false, error: error?.message || "" };
   }
 }
 
@@ -5228,6 +5810,7 @@ async function getCurrentPlaybackSeconds() {
   try {
     const result = await chrome.runtime.sendMessage({
       action: "relayToContent",
+      tabId: youtubeTabId,
       payload: { action: "getCurrentTime" },
     });
     if (!result?.success || !result?.response) return null;
@@ -5428,10 +6011,18 @@ async function loadNotesDroppedNotice() {
       return;
     }
     notice.hidden = false;
-    notice.textContent = panelCopyFormat("notesDropped", {
-      count: String(count),
-      limit: String(LOCAL_NOTE_LIMIT),
-    });
+    // Two drops, two different facts. A note that fell off when the user
+    // saved is a note this device let go of. A note that fell off when the
+    // account synced is a note the account still has, and the user has to
+    // hear that, or they will go looking for a note that is not lost.
+    const fromSync = record?.lastReason === "sync";
+    notice.textContent = panelCopyFormat(
+      fromSync ? "notesKeptInAccount" : "notesDropped",
+      {
+        count: String(count),
+        limit: String(LOCAL_NOTE_LIMIT),
+      },
+    );
   } catch (error) {
     notice.hidden = true;
   }
@@ -5501,10 +6092,16 @@ async function loadWordsDroppedNotice() {
       return;
     }
     notice.hidden = false;
-    notice.textContent = panelCopyFormat("wordsDropped", {
-      count: String(count),
-      limit: String(LOCAL_VOCAB_LIMIT),
-    });
+    // Same two facts as the notes: a word the device dropped when the user
+    // saved, and a word the account still has and the device did not take.
+    const fromSync = record?.lastReason === "sync";
+    notice.textContent = panelCopyFormat(
+      fromSync ? "wordsKeptInAccount" : "wordsDropped",
+      {
+        count: String(count),
+        limit: String(LOCAL_VOCAB_LIMIT),
+      },
+    );
   } catch (error) {
     notice.hidden = true;
   }
@@ -5652,7 +6249,9 @@ function renderVocabulary() {
   void loadWordsDroppedNotice();
 
   if (!vocabularyItems.length) {
-    const empty = document.createElement("p");
+    // Inside a <ul> only a list item is a list item. A <p> there is not an
+    // item, and some browsers drop it out of the list altogether.
+    const empty = document.createElement("li");
     empty.className = "panel-hint";
     empty.textContent = panelCopy("wordsEmpty");
     list.appendChild(empty);
@@ -5660,12 +6259,15 @@ function renderVocabulary() {
   }
 
   vocabularyItems.forEach((item) => {
-    const card = document.createElement("div");
+    const card = document.createElement("li");
     card.className = "word-item";
 
     const statusKey = WORD_STATUS_LABELS[item.status] || "wordStatusLearning";
+    // The title and the time are two different things: the title says which
+    // video, the time is where in it. Kept as one string the time could not
+    // wear the same chip as every other timestamp in the panel.
     const source = item.videoId
-      ? `<button class="word-source" type="button" data-video-id="${escapeHtml(item.videoId)}" data-seconds="${Number(item.timestampSeconds) || 0}">${escapeHtml(item.videoTitle || panelCopy("untitledVideo"))} · ${escapeHtml(YTD_SETTINGS.formatTimestamp(item.timestampSeconds))}</button>`
+      ? `<button class="word-source" type="button" data-video-id="${escapeHtml(item.videoId)}" data-seconds="${Number(item.timestampSeconds) || 0}" title="${escapeHtml(item.videoTitle || panelCopy("untitledVideo"))}"><span class="word-source-title">${escapeHtml(item.videoTitle || panelCopy("untitledVideo"))}</span><span class="word-source-sep">·</span><span class="word-timestamp">${escapeHtml(YTD_SETTINGS.formatTimestamp(item.timestampSeconds))}</span></button>`
       : "";
 
     card.innerHTML = `
@@ -5710,7 +6312,10 @@ function renderVocabulary() {
         );
         renderVocabulary();
         updateWelcomeCounts();
-        announceStatus(panelCopy("copied"));
+        // The word is gone, and that is what has to be said. "Copied" is a
+        // different action, and a screen reader user who hears it has no
+        // way of telling what happened to the word.
+        announceStatus(panelCopy("wordDeleted"));
       } else {
         deleteButton.disabled = false;
         announceAlert(panelCopy("couldNotSave"));
@@ -5843,10 +6448,18 @@ function renderReviewCard() {
 
   const progress = document.getElementById("reviewProgress");
   if (progress) {
-    progress.textContent = panelCopyFormat("reviewProgress", {
+    const text = panelCopyFormat("reviewProgress", {
       index: String(reviewIndex + 1),
       total: String(reviewQueue.length),
     });
+    progress.textContent = text;
+    // The progress element is not a live region yet, so the panel reads
+    // the progress out itself. The moment the element gets an aria-live
+    // of its own the browser reads the change, and reading it here as
+    // well would say it twice.
+    if (!progress.hasAttribute("aria-live")) {
+      announceStatus(text, { notice: false });
+    }
   }
 }
 
@@ -5926,11 +6539,24 @@ async function submitReviewGrade(grade) {
     const empty = document.getElementById("reviewEmpty");
     if (card) card.hidden = true;
     if (actions) actions.hidden = true;
-    if (empty) empty.hidden = false;
+    if (empty) {
+      empty.hidden = false;
+      // The focus was on a grade button, and a hidden button cannot hold
+      // the focus: the browser drops it on the body, and the next Tab
+      // starts at the top of the panel again. The empty state is where the
+      // review ended, so the focus goes there and the keyboard carries on
+      // from the review area.
+      empty.setAttribute("tabindex", "-1");
+      empty.focus();
+    }
     const progress = document.getElementById("reviewProgress");
     if (progress) progress.textContent = "";
-    // The review area says this on its own.
-    announceStatus(panelCopy("reviewEmptyState"), { notice: false });
+    // The empty state reads itself out when the focus lands on it. The
+    // announcement is the fallback for the case where it could not take
+    // the focus.
+    if (document.activeElement !== empty) {
+      announceStatus(panelCopy("reviewEmptyState"), { notice: false });
+    }
     void loadVocabulary();
     return;
   }
@@ -6006,20 +6632,45 @@ function renderLibrary() {
       )
     : libraryEntries;
 
+  // The cleanup notice and the empty library are two different sentences,
+  // and they cannot both be on the screen: "2 entries were removed" next
+  // to "there is nothing here yet" leaves the user guessing whether the
+  // library is empty or was emptied. When the library is empty the notice
+  // carries the empty state with it, and the empty state stays away.
+  const showCleanup = Boolean(libraryCleanup) && !query;
+  const notice = document.getElementById("libraryCleanup");
+  if (notice) {
+    notice.hidden = !showCleanup;
+    if (showCleanup) {
+      notice.textContent = visible.length
+        ? panelCopyFormat("libraryCleaned", {
+            count: String(libraryCleanup.count),
+            days: String(LIBRARY_MAX_AGE_DAYS),
+          })
+        : panelCopyFormat("libraryEmptyCleaned", {
+            count: String(libraryCleanup.count),
+            days: String(LIBRARY_MAX_AGE_DAYS),
+          });
+    }
+  }
+
   if (!visible.length) {
-    const empty = document.createElement("p");
-    empty.className = "panel-hint";
-    // Two different situations, two different sentences: an empty library
-    // and a search that found nothing.
-    empty.textContent = query
-      ? panelCopy("libraryNoResults")
-      : panelCopy("libraryEmpty");
-    list.appendChild(empty);
+    if (!showCleanup) {
+      // A list item, not a <p>: the container is a <ul>.
+      const empty = document.createElement("li");
+      empty.className = "panel-hint";
+      // Two different situations, two different sentences: an empty library
+      // and a search that found nothing.
+      empty.textContent = query
+        ? panelCopy("libraryNoResults")
+        : panelCopy("libraryEmpty");
+      list.appendChild(empty);
+    }
     return;
   }
 
   visible.forEach((entry) => {
-    const card = document.createElement("div");
+    const card = document.createElement("li");
     card.className = "library-item";
     const relative = formatRelativeTime(entry.timestamp);
     card.innerHTML = `
@@ -6183,27 +6834,46 @@ async function recordLibraryCleanup(count) {
 }
 
 /**
- * Shows the last cleanup, once.
+ * Reads the last cleanup and forgets it when it is too old to matter.
+ *
+ * The notice is a sentence about the past, and it is only useful while it
+ * is fresh. A record that is older than the notice window is removed from
+ * the disk: otherwise the sentence about the cleanup stays on screen for
+ * good, next to a library that has been empty for months, and the user
+ * cannot tell an empty library from an emptied one.
  */
 async function loadLibraryCleanupNotice() {
   const notice = document.getElementById("libraryCleanup");
-  if (!notice) return;
   try {
     const stored = await chrome.storage.local.get(LIBRARY_CLEANUP_KEY);
     const record = stored?.[LIBRARY_CLEANUP_KEY];
     if (!record?.count) {
-      notice.hidden = true;
       libraryCleanup = null;
+      if (notice) notice.hidden = true;
       return;
     }
+
+    const at = Number(record.at) || 0;
+    const age = Date.now() - at;
+    const tooOld =
+      !at || age > LIBRARY_CLEANUP_NOTICE_DAYS * 24 * 60 * 60 * 1000;
+    if (tooOld) {
+      libraryCleanup = null;
+      if (notice) notice.hidden = true;
+      await chrome.storage.local.remove(LIBRARY_CLEANUP_KEY).catch(() => {});
+      return;
+    }
+
     libraryCleanup = record;
-    notice.hidden = false;
-    notice.textContent = panelCopyFormat("libraryCleaned", {
-      count: String(record.count),
-      days: String(LIBRARY_MAX_AGE_DAYS),
-    });
+    if (notice) {
+      notice.textContent = panelCopyFormat("libraryCleaned", {
+        count: String(record.count),
+        days: String(LIBRARY_MAX_AGE_DAYS),
+      });
+    }
   } catch (error) {
-    notice.hidden = true;
+    libraryCleanup = null;
+    if (notice) notice.hidden = true;
   }
 }
 
@@ -6291,10 +6961,11 @@ async function playbackTrackingTick() {
       }
     }
 
-    // The tab is gone, or it never answered. The relay finds the YouTube
-    // page again, so the tracker keeps following the video.
+    // The direct message did not get through. The relay goes to this
+    // panel's own tab rather than to whichever YouTube tab is in front.
     const result = await chrome.runtime.sendMessage({
       action: "relayToContent",
+      tabId: youtubeTabId,
       payload: { action: "getCurrentTime" },
     });
 
@@ -6576,10 +7247,188 @@ function setTranscriptModeButtons(mode) {
   document.querySelectorAll(".transcript-mode-btn").forEach((button) => {
     const active = button.dataset.transcriptMode === mode;
     button.classList.toggle("active", active);
-    button.setAttribute("aria-pressed", String(active));
+    // The language row is a native radio group, so the tick is what says
+    // which language is on screen. aria-pressed on a radio is not read at
+    // all, and the browser had already moved the tick to the button the
+    // user pressed: without this line a user who said no to paying would
+    // still see the refused language ticked.
+    button.checked = active;
   });
 }
 
+/**
+ * The translations the user has already paid for.
+ *
+ * The key is the video and the language, so asking twice about the same
+ * video would be noise, and the price does not change between two
+ * switches of the same video.
+ */
+const translationPriceConfirmed = new Set();
+
+/**
+ * How many provider calls a translation of this video will take.
+ *
+ * The transcript is sent in small batches, so the number of calls follows
+ * the number of lines that are not translated yet. A transcript that is
+ * already translated costs nothing, and there is nothing to ask about.
+ *
+ * @returns {number} the number of calls, 0 when there is nothing to pay for.
+ */
+function translationCallsToPayFor() {
+  const segments = getActiveTranscriptSegments();
+  const pending = segments.filter(
+    (segment) =>
+      !transcriptParagraphCache.has(transcriptTranslationCacheKey(segment)),
+  );
+  if (!pending.length) return 0;
+  return Math.max(1, Math.ceil(pending.length / TRANSLATION_BATCH_SIZE));
+}
+
+/**
+ * Asks the user to pay for a translation before the first call goes out.
+ *
+ * Translating a video is not one call: the transcript goes to the provider
+ * in small batches, and every batch is a call. The user is told how many
+ * calls it takes and what a translation costs, and the switch only
+ * happens when they say yes.
+ *
+ * @param {number} calls - how many provider calls the translation takes.
+ * @returns {Promise<boolean>} true when the user wants the translation.
+ */
+function confirmTranslationCost(calls) {
+  return new Promise((resolve) => {
+    const modal = document.createElement("div");
+    modal.id = "translationCostModal";
+    modal.className = "explain-modal-overlay";
+
+    const dialog = document.createElement("div");
+    dialog.className = "explain-modal";
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-modal", "true");
+    dialog.setAttribute("aria-labelledby", "translation-cost-title");
+    dialog.setAttribute("tabindex", "-1");
+
+    const header = document.createElement("div");
+    header.className = "explain-modal-header";
+    const title = document.createElement("div");
+    title.className = "explain-modal-title";
+    title.id = "translation-cost-title";
+    title.textContent = panelCopy("translationCostTitle");
+    const closeButton = document.createElement("button");
+    closeButton.className = "explain-modal-close";
+    closeButton.type = "button";
+    closeButton.textContent = panelCopy("close");
+    header.append(title, closeButton);
+
+    const content = document.createElement("div");
+    content.className = "explain-modal-content";
+
+    const batches = document.createElement("p");
+    batches.className = "word-cost";
+    batches.textContent = panelCopyFormat("translationCostBatches", {
+      count: String(calls),
+    });
+    const price = document.createElement("p");
+    price.className = "word-cost";
+    price.textContent = panelCopy("translationCostPrice");
+    content.append(batches, price);
+
+    const actions = document.createElement("div");
+    actions.className = "word-confirm-actions";
+    const cancelButton = document.createElement("button");
+    cancelButton.type = "button";
+    cancelButton.className = "enhance-btn";
+    cancelButton.id = "translationCostCancelBtn";
+    cancelButton.textContent = panelCopy("translationCostCancel");
+    const confirmButton = document.createElement("button");
+    confirmButton.type = "button";
+    confirmButton.className = "primary-btn";
+    confirmButton.id = "translationCostConfirmBtn";
+    confirmButton.textContent = panelCopy("translationCostConfirm");
+    actions.append(cancelButton, confirmButton);
+    content.appendChild(actions);
+
+    dialog.append(header, content);
+    modal.appendChild(dialog);
+    document.body.appendChild(modal);
+
+    // Everything behind the dialog is out of reach while it is open. The
+    // announcers stay live so a state change is still spoken.
+    const releaseBackground = makeBackgroundInert(modal);
+
+    let settled = false;
+    const finish = (answer) => {
+      if (settled) return;
+      settled = true;
+      document.removeEventListener("keydown", onKeydown, true);
+      releaseBackground();
+      modal.remove();
+      resolve(answer);
+    };
+
+    // Escape closes the dialog, and Tab cycles inside it. The listener sits
+    // on the document in the capture phase, so the dialog owns the keyboard
+    // for as long as it is open.
+    const onKeydown = createDialogKeyHandler(dialog, () => finish(false));
+    document.addEventListener("keydown", onKeydown, true);
+
+    closeButton.addEventListener("click", () => finish(false));
+    cancelButton.addEventListener("click", () => finish(false));
+    confirmButton.addEventListener("click", () => finish(true));
+    modal.addEventListener("click", (event) => {
+      if (event.target === modal) finish(false);
+    });
+
+    dialog.focus();
+  });
+}
+
+/**
+ * Asks the user what a language switch costs, and switches if they agree.
+ *
+ * This is the path the user's click takes. Switching to Chinese or to the
+ * bilingual view sends the whole transcript to the provider in small
+ * batches, and every batch is a call: a twenty-minute talk is about
+ * forty-three of them. The user is told how many calls it takes and what
+ * it costs, and the switch only happens when they say yes.
+ *
+ * @param {string} mode - the language the user picked.
+ */
+async function requestDisplayLanguageModeChange(mode) {
+  if (!DISPLAY_LANGUAGE_MODES.has(mode)) return;
+  if (mode === currentTranscriptMode) return;
+
+  if (mode !== "original") {
+    const confirmedKey = `${currentVideoId}:${mode}`;
+    if (!translationPriceConfirmed.has(confirmedKey)) {
+      const calls = translationCallsToPayFor();
+      if (calls > 0) {
+        const agreed = await confirmTranslationCost(calls);
+        if (!agreed) {
+          // The panel stays where it was, so the buttons keep showing the
+          // language that is really on screen.
+          setTranscriptModeButtons(currentTranscriptMode);
+          return;
+        }
+      }
+      translationPriceConfirmed.add(confirmedKey);
+    }
+  }
+
+  await handleDisplayLanguageModeChange(mode);
+}
+
+/**
+ * Switches the display language, after the user has agreed to pay for it.
+ *
+ * The switch itself starts a paid translation, and the price was never on
+ * the screen when it happened. The question therefore lives one level up,
+ * in requestDisplayLanguageModeChange, which is the path the user's click
+ * takes. Everything that is not a click (a saved choice being restored,
+ * a test) switches without asking, because there is nobody there to ask.
+ *
+ * @param {string} mode - the language to show.
+ */
 async function handleDisplayLanguageModeChange(mode) {
   if (!DISPLAY_LANGUAGE_MODES.has(mode)) return;
   if (mode === currentTranscriptMode) return;
@@ -6667,7 +7516,7 @@ function renderTranscriptModeRows(segments, mode) {
     // The timestamp is a real button here too, so a translated transcript
     // is no less reachable with the keyboard than the original one.
     div.innerHTML = `
-      <button class="transcript-time" type="button" style="border: none; background: none; text-align: left; align-self: flex-start; cursor: pointer;" aria-label="${escapeHtml(panelCopyFormat("jumpTo", { time: timestamp }))}">${timestamp}</button>
+      <button class="transcript-time" type="button" aria-label="${escapeHtml(panelCopyFormat("jumpTo", { time: timestamp }))}">${timestamp}</button>
       ${renderTranscriptSegmentContent(segment, mode, cached, "")}
     `;
     const timeButton = div.querySelector(".transcript-time");
@@ -7036,6 +7885,7 @@ globalThis.__YTD_PANEL_TESTING__ = {
   formatTimestamp: (seconds) => YTD_SETTINGS.formatTimestamp(seconds),
   extractVideoId,
   loadNotesDroppedNotice,
+  loadWordsDroppedNotice,
   showState,
   loadNotes,
   refreshNotesCurrentTime,
