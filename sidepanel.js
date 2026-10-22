@@ -1549,17 +1549,41 @@ document.addEventListener("DOMContentLoaded", async () => {
 async function loadPanelContent() {
   awaitingApiKey = false;
   await refreshGithubSyncStatus();
-  // Pull cloud changes when the panel opens (no-op when signed out). The
-  // verdict carries a reason code, so a dead token shows the re-login chip
-  // instead of resolving quietly: the old chain swallowed exactly the failure
-  // that silently ended the backup.
-  const notesSync = await chrome.runtime
-    .sendMessage({ action: "syncNotes" })
-    .catch(() => null);
-  await applySyncSessionSignal(notesSync);
+  // The panel paints from what is on this device. The pull from the
+  // account is the network, and the network is not allowed to hold up the
+  // paint: the panel used to wait for a download of every note in the
+  // account before drawing the first line, so a signed-in user with a
+  // large account watched an empty panel for seconds and concluded the
+  // extension was broken. The subtitles, the notes and the words are all
+  // here already; the merged list arrives when it arrives.
   await loadNotes(notesFilterShowAll ? null : currentVideoId);
   await updateWelcomeCounts();
   await checkCurrentTab();
+  void syncInBackground();
+}
+
+/**
+ * Pulls the account's changes after the panel is on screen.
+ *
+ * The verdict carries a reason code, so a dead token shows the re-login
+ * chip instead of resolving quietly: the old chain swallowed exactly the
+ * failure that silently ended the backup. It is applied when it lands,
+ * and the notes are read again so the user sees the merged list.
+ */
+async function syncInBackground() {
+  try {
+    const notesSync = await chrome.runtime.sendMessage({ action: "syncNotes" });
+    const expired = await applySyncSessionSignal(notesSync);
+    if (notesSync?.success || expired) {
+      await loadNotes(notesFilterShowAll ? null : currentVideoId);
+      await updateWelcomeCounts();
+    }
+  } catch (error) {
+    // A sync that cannot reach the account is not a panel failure: the
+    // device's own copy is already on screen. The chip in the header says
+    // whether the account is reachable.
+    debugLog("[YouTube Digest Panel] Background sync failed:", error?.message);
+  }
 }
 
 /**

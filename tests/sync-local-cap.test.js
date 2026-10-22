@@ -377,3 +377,54 @@ test("the panel says the words are still in the account when the account is bigg
     "the panel tells the user the words are gone when they are in their account",
   );
 });
+
+test("the panel paints before the account answers", async () => {
+  // The subtitles, the notes and the words are on the device. The pull
+  // from the account is the network, and a signed-in user with a large
+  // account used to watch an empty panel for seconds while it finished.
+  // The panel has to draw first and merge later.
+  let releaseSync;
+  const syncGate = new Promise((resolve) => {
+    releaseSync = resolve;
+  });
+  const router = workerRouter({
+    syncNotes: async () => {
+      await syncGate;
+      return { success: true };
+    },
+    getNotes: () => ({
+      success: true,
+      notes: [
+        {
+          id: "note_local",
+          text: "a note already on this device",
+          timestamp: 3,
+          videoId: "abc123",
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      ],
+    }),
+  });
+  const panel = createPanel({ sendMessageImpl: router });
+  panel.helpers.setCurrentVideo("abc123", "https://www.youtube.com/watch?v=abc123");
+
+  // The boot is not awaited: it is parked on the sync, and the panel still
+  // has to be on screen.
+  panel.boot();
+  await flush();
+
+  assert.ok(
+    panel.sentMessages.some((message) => message.action === "syncNotes"),
+    "the panel never asked the account for its changes",
+  );
+  const notesList = panel.el("notesList");
+  assert.ok(
+    notesList && notesList.children.length > 0,
+    "the panel painted nothing while the account was still answering",
+  );
+
+  // The gate is opened at the end so nothing is left pending.
+  releaseSync();
+  await flush();
+});
