@@ -492,6 +492,7 @@ const ROUTES = [
   { method: "GET", pattern: "/api/status", handler: handleStatus, public: true },
   { method: "GET", pattern: "/api/notes", handler: notes.listNotes },
   { method: "POST", pattern: "/api/notes", handler: notes.createNote },
+  { method: "DELETE", pattern: "/api/notes", handler: notes.deleteAllNotes },
   { method: "PATCH", pattern: "/api/notes/:id", handler: notes.updateNote, uuidParams: ["id"] },
   { method: "DELETE", pattern: "/api/notes/:id", handler: notes.deleteNote, uuidParams: ["id"] },
   { method: "PATCH", pattern: "/api/notes/:id/star", handler: notes.setNoteStarred, uuidParams: ["id"] },
@@ -698,7 +699,14 @@ module.exports = {
       // A raw driver message ("invalid input syntax for type uuid") leaks
       // schema details, so only our own messages reach the client.
       const message = errorMessage(error);
-      const response = json({ error: message }, status);
+      // A failure that carries a number about the limit carries it as a
+      // number too, so a UI can say it in the user's own language instead
+      // of parsing an English sentence.
+      const body = { error: message };
+      if (error instanceof StorageLimitError && Number.isFinite(error.limit)) {
+        body.limit = error.limit;
+      }
+      const response = json(body, status);
       // A few errors have to change the browser's state as well, e.g. a
       // one-time CSRF cookie that must not survive the request that spent it.
       if (error instanceof HttpError && error.headers) {

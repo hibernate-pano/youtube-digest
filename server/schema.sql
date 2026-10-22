@@ -38,6 +38,16 @@ create index if not exists notes_user_client_idx on notes (user_id, client_id);
 -- index that is a scan of every note ever written, so the index covers only
 -- the rows the query is about.
 create index if not exists notes_deleted_idx on notes (deleted_at) where deleted_at is not null;
+-- The list route answers how many notes the account holds, and the count
+-- has to be cheap: this index holds the live rows of one account only, so
+-- the count is a walk over that index and nothing else.
+create index if not exists notes_user_live_idx on notes (user_id) where deleted_at is null;
+-- The delta sync asks for the rows this account deleted since a moment
+-- ago. The predicate is an account and a moment, so the index leads with
+-- the account and follows with the moment: the old index over
+-- `deleted_at` alone could not be used for the account, and the rows of
+-- every account had to be filtered by hand.
+create index if not exists notes_user_deleted_idx on notes (user_id, deleted_at) where deleted_at is not null;
 
 create table if not exists vocabulary (
   id uuid primary key default gen_random_uuid(),
@@ -69,6 +79,10 @@ create table if not exists vocabulary (
 create index if not exists vocabulary_user_updated_idx on vocabulary (user_id, updated_at);
 create unique index if not exists vocabulary_user_sync_key_unique on vocabulary (user_id, sync_key);
 create index if not exists vocabulary_deleted_idx on vocabulary (deleted_at) where deleted_at is not null;
+-- The same two reasons as the notes: a cheap count of the live words of
+-- one account, and a delta that asks for one account's deletions.
+create index if not exists vocabulary_user_live_idx on vocabulary (user_id) where deleted_at is null;
+create index if not exists vocabulary_user_deleted_idx on vocabulary (user_id, deleted_at) where deleted_at is not null;
 
 create table if not exists review_items (
   id uuid primary key default gen_random_uuid(),

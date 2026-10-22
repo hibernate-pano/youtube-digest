@@ -3,7 +3,14 @@ const assert = require("node:assert/strict");
 
 const jwt = require("../src/jwt");
 const auth = require("../src/auth");
-const { MemoryStore, createStore, applyGrade, StorageLimitError, MAX_ACCOUNT_ROWS } = require("../src/db");
+const {
+  MemoryStore,
+  createStore,
+  applyGrade,
+  StorageLimitError,
+  MAX_ACCOUNT_ROWS,
+  MAX_EXPORT_BYTES,
+} = require("../src/db");
 const worker = require("../src/index");
 
 // The server refuses to sign or verify tokens with a secret shorter than 32
@@ -410,6 +417,429 @@ test("a Worker without a database refuses to serve instead of pretending", async
     /database/i,
     "the error has to name the database, not just say something went wrong",
   );
+});
+
+test("a deleted note is never handed back", async () => {
+  // The privacy policy says a marked row is never served. The lists keep
+  // that promise, but the three PATCH routes did not: they updated the
+  // tombstone and returned the note - the user's own words - in the
+  // answer. A second device that still held the note would star it, get
+  // the deleted text back, and put it into its own storage.
+  const env = makeEnv();
+  const token = await signIn(env, 1001, "alice");
+
+  const created = await api(env, "POST", "/api/notes", {
+    token,
+    body: {
+      note: "the sentence the user wrote and then deleted",
+      videoId: "abc123xyz",
+      clientId: "note_local_deleted",
+    },
+  });
+  assert.equal(created.status, 201);
+  const noteId = created.data.note.id;
+
+  const deleted = await api(env, "DELETE", "/api/notes/" + noteId, { token });
+  assert.equal(deleted.status, 200);
+
+  const starred = await api(env, "PATCH", "/api/notes/" + noteId + "/star", {
+    token,
+    body: { starred: true },
+  });
+  assert.equal(starred.status, 404, "a deleted note was starred");
+  assert.equal(
+    JSON.stringify(starred.data).includes("the sentence the user wrote"),
+    false,
+    `the answer carried the deleted note back: ${JSON.stringify(starred.data)}`,
+  );
+
+  const edited = await api(env, "PATCH", "/api/notes/" + noteId, {
+    token,
+    body: { note: "edited after deletion" },
+  });
+  assert.equal(edited.status, 404, "a deleted note was edited");
+  assert.equal(
+    JSON.stringify(edited.data).includes("the sentence the user wrote"),
+    false,
+    `the answer carried the deleted note back: ${JSON.stringify(edited.data)}`,
+  );
+
+  // The list keeps its promise too, and so does the export.
+  const listed = await api(env, "GET", "/api/notes", { token });
+  assert.equal(listed.data.notes.length, 0);
+});
+
+test("a deleted word is never handed back", async () => {
+  // The same promise for the words. The answer carries the word and the
+  // sentence it was seen in, which is the user's own text.
+  const env = makeEnv();
+  const token = await signIn(env, 1001, "alice");
+
+  const created = await api(env, "POST", "/api/vocabulary", {
+    token,
+    body: {
+      term: "serendipity",
+      sentence: "A happy accident, the sentence the user wrote.",
+      translation: "意外之喜",
+    },
+  });
+  assert.equal(created.status, 201);
+  const vocabId = created.data.vocabulary.id;
+
+  const deleted = await api(env, "DELETE", "/api/vocabulary/" + vocabId, { token });
+  assert.equal(deleted.status, 200);
+
+  const graded = await api(env, "PATCH", "/api/vocabulary/" + vocabId, {
+    token,
+    body: { status: "mastered" },
+  });
+  assert.equal(graded.status, 404, "a deleted word was graded");
+  assert.equal(
+    JSON.stringify(graded.data).includes("A happy accident"),
+    false,
+    `the answer carried the deleted word back: ${JSON.stringify(graded.data)}`,
+  );
+});
+
+test("the export can be asked for one part at a time", async () => {
+  // An account too big for one file used to be a dead end: the service
+  // refused, and there was no way to get the data in pieces. Asking for the
+  // notes alone, or the words alone, makes the download possible again.
+  const env = makeEnv();
+  const token = await signIn(env, 1001, "alice");
+  const user = [...env.store.users.values()][0];
+  env.store.notes.set("n1", {
+    id: "n1",
+    userId: String(user.id),
+    clientId: "c1",
+    videoId: "abc123xyz",
+    videoTitle: "Video",
+    channelName: "Channel",
+    timestampSeconds: 0,
+    quote: "",
+    note: "a note",
+    starred: false,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  });
+  env.store.vocabulary.set("w1", {
+    id: "w1",
+    userId: String(user.id),
+    term: "word",
+    translation: "translation",
+    sentence: "sentence",
+    sentenceTranslation: "",
+    videoId: "abc123xyz",
+    videoTitle: "Video",
+    timestampSeconds: 0,
+    status: "learning",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  });
+
+  const notesOnly = await api(env, "GET", "/api/export?type=notes", { token });
+  assert.equal(notesOnly.status, 200);
+  assert.equal(notesOnly.data.notes.length, 1, "the notes are missing");
+  assert.equal(
+    notesOnly.data.vocabulary,
+    undefined,
+    "the export still carries the words the caller did not ask for",
+  );
+  assert.equal(notesOnly.data.part, "notes");
+
+  const wordsOnly = await api(env, "GET", "/api/export?type=vocabulary", {
+    token,
+  });
+  assert.equal(wordsOnly.status, 200);
+  assert.equal(wordsOnly.data.vocabulary.length, 1, "the words are missing");
+  assert.equal(
+    wordsOnly.data.notes,
+    undefined,
+    "the export still carries the notes the caller did not ask for",
+  );
+
+  const both = await api(env, "GET", "/api/export", { token });
+  assert.equal(both.data.notes.length, 1, "the whole export lost a note");
+  assert.equal(
+    both.data.vocabulary.length,
+    1,
+    "the whole export lost a word",
+  );
+
+  const wrong = await api(env, "GET", "/api/export?type=nonsense", { token });
+  assert.equal(wrong.status, 400, "a nonsense type was accepted");
+});
+
+test("the export gives back every row the account holds", async () => {
+  // The promise is "all of it". The export used to hold half the account:
+  // an account with 12000 notes got the first 10000 of them and a
+  // `truncated` field nobody read. The download looked complete and was
+  // not, and the user had no way to tell.
+  const env = makeEnv();
+  const token = await signIn(env, 1001, "alice");
+  const user = [...env.store.users.values()][0];
+  for (let index = 0; index < 10_001; index += 1) {
+    env.store.notes.set("n" + index, {
+      id: "n" + index,
+      // The id the request carries is the one the token names, and the
+      // token names it as a string.
+      userId: String(user.id),
+      clientId: "c" + index,
+      videoId: "abc123xyz",
+      videoTitle: "Video",
+      channelName: "Channel",
+      timestampSeconds: 0,
+      quote: "",
+      note: "note " + index,
+      starred: false,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+  }
+
+  const result = await api(env, "GET", "/api/export", { token });
+  assert.equal(result.status, 200);
+  assert.equal(
+    result.data.notes.length,
+    10_001,
+    `the export held ${result.data.notes.length} of the account's 10001 notes`,
+  );
+  assert.equal(result.data.truncated.notes, 0, "the export says it left rows out");
+});
+
+test("an account at the cap can be exported in one file", async () => {
+  // The account may own 20000 rows, and the byte cap has to be able to hold
+  // them. The cap used to be 8MB and a full account's export is about
+  // 12.7MB, so the service refused to export the biggest account it
+  // allows: the promise "download all your data" broke at exactly the
+  // accounts that had the most of it.
+  const env = makeEnv();
+  const token = await signIn(env, 1001, "alice");
+  const user = [...env.store.users.values()][0];
+  // A realistic row: the note the user wrote, with the video it came from.
+  const text =
+    "A line of the note that the user wrote, about a hundred and twenty characters of plain English text that goes on for a while.";
+  for (let index = 0; index < MAX_ACCOUNT_ROWS; index += 1) {
+    env.store.notes.set("n" + index, {
+      id: "n" + index,
+      userId: String(user.id),
+      clientId: "c" + index,
+      videoId: "dQw4w9WgXcQ",
+      videoTitle: "How Memory Works: a talk about how memory works",
+      channelName: "Some Channel Name",
+      timestampSeconds: index,
+      quote: text,
+      note: text,
+      starred: false,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+  }
+
+  const bytes = await env.store.estimateExportBytes(String(user.id));
+  assert.ok(
+    bytes <= MAX_EXPORT_BYTES,
+    `a full account is ${bytes} bytes, which is over the ${MAX_EXPORT_BYTES} byte cap`,
+  );
+
+  const result = await api(env, "GET", "/api/export", { token });
+  assert.equal(
+    result.status,
+    200,
+    `the export of a legal account was refused: ${JSON.stringify(result.data).slice(0, 200)}`,
+  );
+  assert.equal(result.data.notes.length, MAX_ACCOUNT_ROWS, "the export left rows out");
+});
+
+test("the size of the export is measured from the whole blob, not from the text", async () => {
+  // The estimate is what the byte cap is compared with. It used to count
+  // the text of every row and nothing else, so it said 6MB for a blob of
+  // 11MB: the cap protected the Worker a third less than it claimed to,
+  // and a pathological account could still build a blob over the cap.
+  const env = makeEnv();
+  const token = await signIn(env, 1001, "alice");
+  const user = [...env.store.users.values()][0];
+  for (let index = 0; index < 50; index += 1) {
+    env.store.notes.set("n" + index, {
+      id: "n" + index,
+      userId: String(user.id),
+      clientId: "c" + index,
+      videoId: "dQw4w9WgXcQ",
+      videoTitle: "How Memory Works: a talk about how memory works",
+      channelName: "Some Channel Name",
+      timestampSeconds: index,
+      quote: "a quote",
+      note: "a note the user wrote",
+      starred: false,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+  }
+
+  const exported = await api(env, "GET", "/api/export", { token });
+  assert.equal(exported.status, 200);
+  const blob = Buffer.byteLength(
+    JSON.stringify({ notes: exported.data.notes, vocabulary: exported.data.vocabulary }),
+  );
+  const bytes = await env.store.estimateExportBytes(String(user.id));
+  assert.ok(
+    bytes >= blob,
+    `the estimate says ${bytes} bytes and the blob is ${blob}: the cap would not protect the Worker`,
+  );
+});
+
+test("the export can be asked for one part at a time", async () => {
+  // An account too big for one file is fetched in two. The estimate has to
+  // answer for the part that is asked for, or the second half is refused
+  // by the cap of the first.
+  const env = makeEnv();
+  const token = await signIn(env, 1001, "alice");
+  const user = [...env.store.users.values()][0];
+  await api(env, "POST", "/api/notes", {
+    token,
+    body: { note: "a note", videoId: "abc123xyz", clientId: "c1" },
+  });
+  await api(env, "POST", "/api/vocabulary", {
+    token,
+    body: { term: "serendipity", sentence: "A happy accident.", translation: "意外之喜" },
+  });
+
+  const notesOnly = await api(env, "GET", "/api/export?type=notes", { token });
+  assert.equal(notesOnly.status, 200);
+  assert.equal(notesOnly.data.notes.length, 1);
+  assert.equal(
+    notesOnly.data.vocabulary,
+    undefined,
+    "the words came with the notes half",
+  );
+
+  const wordsOnly = await api(env, "GET", "/api/export?type=vocabulary", { token });
+  assert.equal(wordsOnly.status, 200);
+  assert.equal(wordsOnly.data.vocabulary.length, 1);
+  assert.equal(wordsOnly.data.notes, undefined, "the notes came with the words half");
+
+  const whole = await env.store.estimateExportBytes(String(user.id));
+  const part = await env.store.estimateExportBytes(String(user.id), "notes");
+  assert.ok(part < whole, "the half is measured as if it were the whole");
+});
+
+test("the list says how many notes the account holds", async () => {
+  // The page is capped, the account is not. A dashboard that shows the
+  // number of rows it received tells the user a false number about their
+  // own data: "5000 notes" for an account that holds 5001.
+  const env = makeEnv();
+  const token = await signIn(env, 1001, "alice");
+  const user = [...env.store.users.values()][0];
+  for (let index = 0; index < 5_001; index += 1) {
+    env.store.notes.set("n" + index, {
+      id: "n" + index,
+      userId: String(user.id),
+      clientId: "c" + index,
+      videoId: "abc123xyz",
+      videoTitle: "Video",
+      channelName: "Channel",
+      timestampSeconds: 0,
+      quote: "",
+      note: "note " + index,
+      starred: false,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+  }
+
+  const listed = await api(env, "GET", "/api/notes", { token });
+  assert.equal(listed.status, 200);
+  assert.equal(listed.data.notes.length, 5_000, "the page is cut short");
+  assert.equal(listed.data.total, 5_001, "the total is not the account");
+  assert.equal(listed.data.truncated, true, "the answer does not say it was cut short");
+  assert.ok(listed.data.serverTime, "the clock travels with the rows");
+
+  // A small account is not cut short, and says so.
+  const small = makeEnv();
+  const smallToken = await signIn(small, 1002, "bob");
+  await api(small, "POST", "/api/notes", {
+    token: smallToken,
+    body: { note: "one note", videoId: "abc123xyz", clientId: "c1" },
+  });
+  const smallList = await api(small, "GET", "/api/notes", { token: smallToken });
+  assert.equal(smallList.data.total, 1);
+  assert.equal(smallList.data.truncated, false);
+});
+
+test("the word list says how many words the account holds", async () => {
+  const env = makeEnv();
+  const token = await signIn(env, 1001, "alice");
+  await api(env, "POST", "/api/vocabulary", {
+    token,
+    body: { term: "serendipity", sentence: "A happy accident.", translation: "意外之喜" },
+  });
+
+  const listed = await api(env, "GET", "/api/vocabulary", { token });
+  assert.equal(listed.status, 200);
+  assert.equal(listed.data.vocabulary.length, 1);
+  assert.equal(listed.data.total, 1, "the total is not the account");
+  assert.equal(listed.data.truncated, false);
+  assert.ok(listed.data.serverTime, "the clock travels with the rows");
+});
+
+test("deleting all notes reaches the account", async () => {
+  // "Delete all notes" that only empties the device is undone by the next
+  // sync: the account still holds the notes and they come back. The
+  // delete therefore happens where the notes are.
+  const env = makeEnv();
+  const token = await signIn(env, 1001, "alice");
+  for (const clientId of ["c1", "c2", "c3"]) {
+    const created = await api(env, "POST", "/api/notes", {
+      token,
+      body: { note: "note " + clientId, videoId: "abc123xyz", clientId },
+    });
+    assert.equal(created.status, 201);
+  }
+
+  const deleted = await api(env, "DELETE", "/api/notes", { token });
+  assert.equal(deleted.status, 200);
+  assert.equal(deleted.data.ok, true, "the answer does not say it worked");
+  assert.equal(deleted.data.deleted, 3, "the count is not the number of notes");
+
+  const listed = await api(env, "GET", "/api/notes", { token });
+  assert.equal(listed.data.notes.length, 0, "the account still holds the notes");
+  assert.equal(listed.data.total, 0);
+
+  // The rows are tombstones, not gone: the scheduled purge is what drops
+  // them, and a device that still holds a note must not bring it back.
+  const rows = [...env.store.notes.values()];
+  assert.equal(rows.length, 3, "the rows were hard-deleted");
+  assert.ok(
+    rows.every((row) => row.deletedAt),
+    "the rows were not marked as deleted",
+  );
+  const pushed = await api(env, "POST", "/api/notes", {
+    token,
+    body: { note: "note c1", videoId: "abc123xyz", clientId: "c1" },
+  });
+  assert.equal(pushed.status, 201);
+  const afterPush = await api(env, "GET", "/api/notes", { token });
+  assert.equal(afterPush.data.notes.length, 0, "a deleted note came back");
+});
+
+test("the account limit carries the number the limit is", async () => {
+  // The message is English. A UI that has to say the limit in the user's
+  // own language needs the number as a number, not as a sentence.
+  const env = makeEnv();
+  const token = await signIn(env, 1001, "alice");
+  env.store.createNote = async () => {
+    throw new StorageLimitError(
+      "This account already holds 20000 notes and words, which is the limit of 20000.",
+      MAX_ACCOUNT_ROWS,
+    );
+  };
+
+  const result = await api(env, "POST", "/api/notes", {
+    token,
+    body: { note: "text", clientId: "n1" },
+  });
+  assert.equal(result.status, 409);
+  assert.equal(result.data.limit, MAX_ACCOUNT_ROWS, "the answer does not carry the cap");
 });
 
 test("the in-memory store is used only when it is asked for", () => {

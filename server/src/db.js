@@ -12,9 +12,6 @@ const DEFAULT_REVIEW_LIMIT = 50;
 /** Hard cap on the rows a list endpoint returns. */
 const MAX_LIST_ROWS = 5_000;
 
-/** Hard cap on the rows an export blob contains. */
-const MAX_EXPORT_ROWS = 10_000;
-
 /**
  * Hard cap on the rows one account may own.
  *
@@ -26,13 +23,56 @@ const MAX_EXPORT_ROWS = 10_000;
 const MAX_ACCOUNT_ROWS = 20_000;
 
 /**
+ * Hard cap on the rows an export blob contains.
+ *
+ * The export is the user's own data, and the promise is that it holds ALL
+ * of it. The cap used to be half the account cap, so an account that held
+ * 20000 rows got the first 10000 of them and a `truncated` field nobody
+ * read: the download looked complete and was not. The export therefore
+ * holds as many rows as the account may own, and the only limit left is the
+ * size of the blob, which fails loudly with a reason instead of quietly
+ * dropping rows.
+ */
+const MAX_EXPORT_ROWS = MAX_ACCOUNT_ROWS;
+
+/**
  * Hard cap on the size of an export, in bytes.
  *
  * The export is a single JSON blob that the browser downloads, so a blob of
  * a few hundred megabytes does not arrive: the download simply dies. The
  * cap is checked before the blob is built, so the Worker never holds one.
+ *
+ * The number is not free: it has to be able to hold what the account cap
+ * allows. An account may own 20000 rows, and a full account of ordinary
+ * rows is about 12.7MB (measured: 20000 realistic notes, each ~570 bytes
+ * of JSON, plus the review rows that belong to the words). The old cap was
+ * 8MB, so the biggest account the service allows was the one account it
+ * refused to export - and the promise "download all your data" broke at
+ * exactly the accounts that had the most of it.
+ *
+ * 32MB holds such an account with room to spare, and still leaves the
+ * Worker enough headroom to build the blob. The absolute worst case - a
+ * note may be 20000 characters long, so an account may hold far more than
+ * that - cannot fit in any single blob; such an account is served in two
+ * parts (`?type=notes` and `?type=vocabulary`), and if a part still does
+ * not fit, the answer says so instead of quietly dropping rows.
  */
-const MAX_EXPORT_BYTES = 8 * 1024 * 1024;
+const MAX_EXPORT_BYTES = 32 * 1024 * 1024;
+
+/**
+ * What a row costs in the export besides its text.
+ *
+ * The export is JSON, so every row carries its id, its keys, its quotes
+ * and its timestamps. The size was measured on the text alone, which made
+ * the estimate about a third too small: the byte cap was compared with a
+ * number that did not describe the blob, so it protected the Worker less
+ * than it claimed to. These are the measured overheads of one row - the
+ * smallest possible note still costs 264 bytes of scaffolding - with room
+ * to spare.
+ */
+const NOTE_ROW_OVERHEAD_BYTES = 320;
+const WORD_ROW_OVERHEAD_BYTES = 320;
+const REVIEW_ROW_OVERHEAD_BYTES = 160;
 
 /** How long a deletion is remembered, in days. */
 const TOMBSTONE_RETENTION_DAYS = 30;
@@ -63,10 +103,13 @@ class DatabaseNotConfiguredError extends Error {
  * a 409 with a message the user can act on.
  */
 class StorageLimitError extends Error {
-  constructor(message) {
+  constructor(message, limit) {
     super(message);
     this.name = "StorageLimitError";
     this.code = "storage_limit_reached";
+    // The number the limit is, so a UI can say it in the user's own
+    // language instead of parsing an English sentence.
+    if (Number.isFinite(limit)) this.limit = limit;
   }
 }
 
@@ -347,6 +390,36 @@ class MemoryStore {
       .map(rowToNote);
   }
 
+  /**
+   * How many notes the account holds.
+   *
+   * The same truth as the Neon store: the page is capped, the account is
+   * not, and a UI that shows the page size tells a false number.
+   */
+  async countNotes(userId) {
+    let count = 0;
+    for (const row of this.notes.values()) {
+      if (row.userId === userId && !row.deletedAt) count += 1;
+    }
+    return count;
+  }
+
+  /**
+   * Marks every note of the account as deleted, the way a single delete
+   * does, and answers how many rows were marked.
+   */
+  async deleteAllNotes(userId) {
+    const now = this.clock().toISOString();
+    let deleted = 0;
+    for (const row of this.notes.values()) {
+      if (row.userId !== userId || row.deletedAt) continue;
+      row.deletedAt = now;
+      row.updatedAt = now;
+      deleted += 1;
+    }
+    return deleted;
+  }
+
   async createNote(userId, note) {
     const now = this.clock().toISOString();
     await this.assertNoteRoom(userId, note.clientId);
@@ -373,7 +446,10 @@ class MemoryStore {
 
   async setNoteStarred(userId, noteId, starred) {
     const row = this.notes.get(noteId);
-    if (!row || row.userId !== userId) return null;
+    // A note that was deleted stays deleted, and its text is never handed
+    // back. The row is a tombstone, not a row: serving it would put the
+    // user's own words back in front of them after they deleted them.
+    if (!row || row.userId !== userId || row.deletedAt) return null;
     row.starred = !!starred;
     row.updatedAt = this.clock().toISOString();
     return rowToNote(row);
@@ -391,7 +467,9 @@ class MemoryStore {
 
   async updateNote(userId, noteId, patch) {
     const row = this.notes.get(noteId);
-    if (!row || row.userId !== userId) return null;
+    // A deleted note is not edited and not returned. The answer is the same
+    // as for a note that never existed: it is not there.
+    if (!row || row.userId !== userId || row.deletedAt) return null;
     // Mirror the Neon tri-state rule: an absent `starred` leaves the stored
     // flag alone, so the two stores agree on what a note update does.
     const next = Object.assign({}, patch);
@@ -426,6 +504,20 @@ class MemoryStore {
       .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
       .slice(0, limit)
       .map(rowToVocabulary);
+  }
+
+  /**
+   * How many words the account holds.
+   *
+   * The same truth as the Neon store: the page is capped, the account is
+   * not, and a UI that shows the page size tells a false number.
+   */
+  async countVocabulary(userId) {
+    let count = 0;
+    for (const row of this.vocabulary.values()) {
+      if (row.userId === userId && !row.deletedAt) count += 1;
+    }
+    return count;
   }
 
   async upsertVocabulary(userId, vocab) {
@@ -465,7 +557,9 @@ class MemoryStore {
 
   async updateVocabularyStatus(userId, vocabId, status) {
     const row = this.vocabulary.get(vocabId);
-    if (!row || row.userId !== userId) return null;
+    // A deleted word is not graded and not returned: the answer carries the
+    // word and the sentence it was seen in.
+    if (!row || row.userId !== userId || row.deletedAt) return null;
     row.status = status;
     row.updatedAt = this.clock().toISOString();
     return rowToVocabulary(row);
@@ -620,6 +714,7 @@ class MemoryStore {
     if (used >= MAX_ACCOUNT_ROWS) {
       throw new StorageLimitError(
         `This account already holds ${used} notes and words, which is the limit of ${MAX_ACCOUNT_ROWS}.`,
+        MAX_ACCOUNT_ROWS,
       );
     }
   }
@@ -657,15 +752,25 @@ class MemoryStore {
    * measured BEFORE it is built: a blob of a few hundred megabytes does not
    * arrive, the download simply dies.
    */
-  async estimateExportBytes(userId) {
+  async estimateExportBytes(userId, part) {
     let bytes = 0;
-    for (const row of this.notes.values()) {
-      if (row.userId !== userId || row.deletedAt) continue;
-      bytes += noteBytes(row);
+    if (part !== "vocabulary") {
+      for (const row of this.notes.values()) {
+        if (row.userId !== userId || row.deletedAt) continue;
+        bytes += noteBytes(row) + NOTE_ROW_OVERHEAD_BYTES;
+      }
     }
+    if (part === "notes") return bytes;
     for (const row of this.vocabulary.values()) {
       if (row.userId !== userId || row.deletedAt) continue;
-      bytes += vocabularyBytes(row);
+      bytes += vocabularyBytes(row) + WORD_ROW_OVERHEAD_BYTES;
+    }
+    // The review of a word travels with it in the export.
+    for (const review of this.reviews.values()) {
+      if (review.userId !== userId) continue;
+      const vocabulary = this.vocabulary.get(review.vocabularyId);
+      if (!vocabulary || vocabulary.deletedAt) continue;
+      bytes += REVIEW_ROW_OVERHEAD_BYTES;
     }
     return bytes;
   }
@@ -844,6 +949,38 @@ class NeonStore {
     return rows.map(rowToNote);
   }
 
+  /**
+   * How many notes the account holds.
+   *
+   * The list is capped, so the page is not the account: a dashboard that
+   * shows the number of rows it received tells the user a false number
+   * about their own data. The count covers every live row, not the page.
+   */
+  async countNotes(userId) {
+    const rows = await this.sql`
+      select count(*) as count from notes
+      where user_id = ${userId} and deleted_at is null
+    `;
+    return rows.length ? Number(rows[0].count) || 0 : 0;
+  }
+
+  /**
+   * Marks every note of the account as deleted.
+   *
+   * The same tombstone a single delete leaves behind: the rows stay until
+   * the scheduled purge drops them, so a device that still holds a note
+   * cannot bring it back. The count is the number of rows that were
+   * marked, which is the number the user had.
+   */
+  async deleteAllNotes(userId) {
+    const rows = await this.sql`
+      update notes set deleted_at = now(), updated_at = now()
+      where user_id = ${userId} and deleted_at is null
+      returning id
+    `;
+    return rows.length;
+  }
+
   async createNote(userId, note) {
     // Tri-state `starred`: null means the client did not mention it. The
     // insert falls back to the column default, and the conflict branch keeps
@@ -891,7 +1028,7 @@ class NeonStore {
   async setNoteStarred(userId, noteId, starred) {
     const rows = await this.sql`
       update notes set starred = ${!!starred}, updated_at = now()
-      where id = ${noteId} and user_id = ${userId}
+      where id = ${noteId} and user_id = ${userId} and deleted_at is null
       returning id, client_id as "clientId", starred, video_id as "videoId",
         video_title as "videoTitle", channel_name as "channelName",
         timestamp_seconds as "timestampSeconds", quote, note,
@@ -943,7 +1080,9 @@ class NeonStore {
       assignments,
       [
         { before: " where id = ", after: " and user_id = ", value: noteId },
-        { before: "", after: "", value: userId },
+        // A deleted note is not edited, and its text is not returned. The
+        // tombstone is a row that is not there.
+        { before: "", after: " and deleted_at is null", value: userId },
       ],
       // Without `returning` the driver reports no rows, and the route would
       // answer "Note not found." for the note it had just updated.
@@ -971,6 +1110,19 @@ class NeonStore {
       order by updated_at desc limit ${limit}
     `;
     return rows.map(rowToVocabulary);
+  }
+
+  /**
+   * How many words the account holds.
+   *
+   * The same truth as countNotes: the page is capped, the account is not.
+   */
+  async countVocabulary(userId) {
+    const rows = await this.sql`
+      select count(*) as count from vocabulary
+      where user_id = ${userId} and deleted_at is null
+    `;
+    return rows.length ? Number(rows[0].count) || 0 : 0;
   }
 
   async upsertVocabulary(userId, vocab) {
@@ -1011,7 +1163,7 @@ class NeonStore {
   async updateVocabularyStatus(userId, vocabId, status) {
     const rows = await this.sql`
       update vocabulary set status = ${status}, updated_at = now()
-      where id = ${vocabId} and user_id = ${userId}
+      where id = ${vocabId} and user_id = ${userId} and deleted_at is null
       returning id, term, translation, sentence, sentence_translation as "sentenceTranslation",
         video_id as "videoId", video_title as "videoTitle", timestamp_seconds as "timestampSeconds", status,
         created_at as "createdAt", updated_at as "updatedAt"
@@ -1224,6 +1376,7 @@ class NeonStore {
     if (used >= MAX_ACCOUNT_ROWS) {
       throw new StorageLimitError(
         `This account already holds ${used} notes and words, which is the limit of ${MAX_ACCOUNT_ROWS}.`,
+        MAX_ACCOUNT_ROWS,
       );
     }
   }
@@ -1257,22 +1410,48 @@ class NeonStore {
    * measured BEFORE it is built: a blob of a few hundred megabytes does not
    * arrive, the download simply dies.
    */
-  async estimateExportBytes(userId) {
-    const notes = await this.sql`
-      select coalesce(sum(
-        octet_length(note) + octet_length(quote) + octet_length(video_title) + octet_length(channel_name)
-      ), 0) as bytes
-      from notes where user_id = ${userId} and deleted_at is null
-    `;
-    const vocabulary = await this.sql`
-      select coalesce(sum(
-        octet_length(term) + octet_length(translation) + octet_length(sentence)
-        + octet_length(sentence_translation) + octet_length(video_title)
-      ), 0) as bytes
-      from vocabulary where user_id = ${userId} and deleted_at is null
-    `;
-    return (notes.length ? Number(notes[0].bytes) || 0 : 0) +
-      (vocabulary.length ? Number(vocabulary[0].bytes) || 0 : 0);
+  async estimateExportBytes(userId, part) {
+    // The export can be asked for one part at a time. An account too big
+    // for one file is then fetched in two, which is the difference between
+    // "too big" and "impossible". The estimate has to answer for that part
+    // alone, or the second half is refused by the cap of the first.
+    //
+    // The words bring their reviews with them: the route drops the reviews
+    // from the notes half and keeps them in the words half, so the estimate
+    // counts them there and not there.
+    const wantsNotes = part !== "vocabulary";
+    const wantsWords = part !== "notes";
+    let bytes = 0;
+    if (wantsNotes) {
+      const notes = await this.sql`
+        select coalesce(sum(
+          octet_length(note) + octet_length(quote) + octet_length(video_title) + octet_length(channel_name)
+          + ${NOTE_ROW_OVERHEAD_BYTES}
+        ), 0) as bytes
+        from notes where user_id = ${userId} and deleted_at is null
+      `;
+      bytes += notes.length ? Number(notes[0].bytes) || 0 : 0;
+    }
+    if (wantsWords) {
+      const vocabulary = await this.sql`
+        select coalesce(sum(
+          octet_length(term) + octet_length(translation) + octet_length(sentence)
+          + octet_length(sentence_translation) + octet_length(video_title)
+          + ${WORD_ROW_OVERHEAD_BYTES}
+        ), 0) as bytes
+        from vocabulary where user_id = ${userId} and deleted_at is null
+      `;
+      bytes += vocabulary.length ? Number(vocabulary[0].bytes) || 0 : 0;
+      const reviews = await this.sql`
+        select count(*) as count
+        from review_items ri
+        join vocabulary v on v.id = ri.vocabulary_id
+        where ri.user_id = ${userId} and v.user_id = ${userId} and v.deleted_at is null
+      `;
+      bytes +=
+        (reviews.length ? (Number(reviews[0].count) || 0) : 0) * REVIEW_ROW_OVERHEAD_BYTES;
+    }
+    return bytes;
   }
 
   async deleteUserData(userId) {

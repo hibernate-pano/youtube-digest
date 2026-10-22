@@ -14,7 +14,18 @@ async function listNotes(ctx) {
   // The server's own clock travels with the rows: the client needs it to
   // tell which side of a conflict is newer without trusting the device
   // clock.
-  return json({ notes: rows, serverTime: serverTime() });
+  //
+  // The page is capped, the account is not. `total` is how many notes the
+  // account really holds and `truncated` says whether this page holds all
+  // of them: a UI that shows the length of the page alone tells the user a
+  // false number about their own data.
+  const total = await ctx.store.countNotes(ctx.user.id);
+  return json({
+    notes: rows,
+    total,
+    truncated: rows.length < total,
+    serverTime: serverTime(),
+  });
 }
 
 async function createNote(ctx) {
@@ -65,11 +76,24 @@ async function deleteNote(ctx) {
   return json({ deleted: true });
 }
 
+/**
+ * Deletes every note of the account.
+ *
+ * "Delete all notes" that only empties the device is undone by the next
+ * sync: the account still holds the notes, and they come back. The delete
+ * therefore happens where the notes are.
+ */
+async function deleteAllNotes(ctx) {
+  const deleted = await ctx.store.deleteAllNotes(ctx.user.id);
+  return json({ ok: true, deleted });
+}
+
 module.exports = {
   listNotes,
   createNote,
   updateNote,
   deleteNote,
+  deleteAllNotes,
   deleteNoteByClientId,
   setNoteStarred,
   readObjectBody,

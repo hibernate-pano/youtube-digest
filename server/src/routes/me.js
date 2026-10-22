@@ -30,19 +30,38 @@ async function exportData(ctx) {
   // hundred megabytes does not arrive: the download simply dies, and the
   // user is left with nothing. The size is measured BEFORE the blob is
   // built, so the Worker never holds one either.
-  const bytes = await ctx.store.estimateExportBytes(ctx.user.id);
+  //
+  // `?type=notes` or `?type=vocabulary` asks for one part at a time. An
+  // account too big for one file can then be fetched in two, which is the
+  // difference between "too big" and "impossible".
+  const url = new URL(ctx.request.url);
+  const type = url.searchParams.get("type");
+  const part = type === "notes" || type === "vocabulary" ? type : null;
+  if (type !== null && !part) {
+    throw new HttpError(400, "type must be notes or vocabulary.");
+  }
+  const bytes = await ctx.store.estimateExportBytes(ctx.user.id, part);
   if (bytes > MAX_EXPORT_BYTES) {
     const megabytes = (bytes / (1024 * 1024)).toFixed(1);
     const limit = Math.round(MAX_EXPORT_BYTES / (1024 * 1024));
     throw new HttpError(
       413,
-      `Your notes and words add up to ${megabytes} MB, which is more than the ${limit} MB export limit. Delete what you no longer need and try again.`,
+      `Your notes and words add up to ${megabytes} MB, which is more than the ${limit} MB export limit. Download the notes and the words separately, or delete what you no longer need and try again.`,
     );
   }
   const data = await ctx.store.getAllUserData(ctx.user.id);
+  if (part === "notes") {
+    delete data.vocabulary;
+    delete data.reviews;
+    if (data.truncated) data.truncated.vocabulary = 0;
+  } else if (part === "vocabulary") {
+    delete data.notes;
+    if (data.truncated) data.truncated.notes = 0;
+  }
   return json({
     exportedAt: new Date().toISOString(),
     format: "youtube-digest-export-v1",
+    ...(part ? { part } : {}),
     ...data,
   });
 }

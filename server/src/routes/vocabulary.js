@@ -7,7 +7,18 @@ async function listVocabulary(ctx) {
   // The server's own clock travels with the rows: the client needs it to
   // tell which side of a conflict is newer without trusting the device
   // clock.
-  return json({ vocabulary: rows, serverTime: serverTime() });
+  //
+  // The page is capped, the account is not: `total` is how many words the
+  // account really holds, and `truncated` says whether this page holds all
+  // of them. A UI that shows the length of the page alone tells the user a
+  // false number about their own data.
+  const total = await ctx.store.countVocabulary(ctx.user.id);
+  return json({
+    vocabulary: rows,
+    total,
+    truncated: rows.length < total,
+    serverTime: serverTime(),
+  });
 }
 
 async function upsertVocabulary(ctx) {

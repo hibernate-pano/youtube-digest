@@ -246,6 +246,147 @@ describe("the store's SQL is executable by a real PostgreSQL", async (t) => {
     assert.equal(data.vocabulary.length, 0);
   });
 
+  await t.test("a deleted note is never handed back", async () => {
+    await resetTables(pool);
+    const store = realStore();
+    const user = await store.upsertUser({ githubId: 1010, login: "tombstone" });
+    const created = await store.createNote(user.id, {
+      clientId: "c1",
+      videoId: "vid1",
+      videoTitle: "Title",
+      channelName: "Channel",
+      timestampSeconds: 10,
+      quote: "the quote the user wrote",
+      note: "the note the user wrote and then deleted",
+    });
+    assert.equal(await store.deleteNote(user.id, created.id), true);
+
+    // The promise is that a marked row is never served. The lists kept it,
+    // the three update paths did not: they updated the tombstone and
+    // returned the row - the user's own words - in the answer.
+    const starred = await store.setNoteStarred(user.id, created.id, true);
+    assert.equal(starred, null, "a deleted note was starred and handed back");
+    const edited = await store.updateNote(user.id, created.id, { note: "after" });
+    assert.equal(edited, null, "a deleted note was edited and handed back");
+
+    // The word is the same promise.
+    const word = await store.upsertVocabulary(user.id, {
+      term: "serendipity",
+      translation: "意外之喜",
+      sentence: "A happy accident.",
+      sentenceTranslation: "",
+      videoId: "vid1",
+      videoTitle: "Title",
+      timestampSeconds: 10,
+      status: "learning",
+    });
+    assert.equal(await store.deleteVocabulary(user.id, word.id), true);
+    const graded = await store.updateVocabularyStatus(user.id, word.id, "mastered");
+    assert.equal(graded, null, "a deleted word was graded and handed back");
+  });
+
+  await t.test("a part of the export is measured on its own", async () => {
+    await resetTables(pool);
+    const store = realStore();
+    const user = await store.upsertUser({ githubId: 1014, login: "part" });
+    await store.createNote(user.id, {
+      clientId: "c1",
+      videoId: "vid1",
+      videoTitle: "Title",
+      channelName: "Channel",
+      timestampSeconds: 10,
+      quote: "a quote",
+      note: "the note the user wrote",
+    });
+    await store.upsertVocabulary(user.id, {
+      term: "serendipity",
+      translation: "意外之喜",
+      sentence: "A happy accident.",
+      sentenceTranslation: "",
+      videoId: "vid1",
+      videoTitle: "Title",
+      timestampSeconds: 10,
+      status: "learning",
+    });
+
+    // The two stores have to answer the same way: the estimate of a part
+    // is smaller than the estimate of the whole, or the second half of a
+    // big account is refused by the cap of the first.
+    const whole = await store.estimateExportBytes(user.id);
+    const notesOnly = await store.estimateExportBytes(user.id, "notes");
+    const wordsOnly = await store.estimateExportBytes(user.id, "vocabulary");
+    assert.ok(notesOnly > 0, "the notes half is not measured at all");
+    assert.ok(wordsOnly > 0, "the words half is not measured at all");
+    assert.ok(notesOnly < whole, "the notes half is measured as the whole");
+    assert.ok(wordsOnly < whole, "the words half is measured as the whole");
+  });
+
+  await t.test("deleting all notes marks every note of the account", async () => {
+    await resetTables(pool);
+    const store = realStore();
+    const user = await store.upsertUser({ githubId: 1011, login: "delete-all" });
+    const other = await store.upsertUser({ githubId: 1012, login: "other" });
+    for (const clientId of ["c1", "c2", "c3"]) {
+      await store.createNote(user.id, {
+        clientId,
+        videoId: "vid1",
+        videoTitle: "Title",
+        channelName: "Channel",
+        timestampSeconds: 10,
+        quote: "",
+        note: "note " + clientId,
+      });
+    }
+    await store.createNote(other.id, {
+      clientId: "c1",
+      videoId: "vid1",
+      videoTitle: "Title",
+      channelName: "Channel",
+      timestampSeconds: 10,
+      quote: "",
+      note: "someone else's note",
+    });
+
+    const deleted = await store.deleteAllNotes(user.id);
+    assert.equal(deleted, 3, "the count is not the number of notes");
+    assert.equal((await store.listNotes(user.id)).length, 0);
+    assert.equal((await store.countNotes(user.id)), 0);
+
+    // The rows are tombstones, not gone: the scheduled purge is what drops
+    // them, and another account's notes are not touched.
+    const rows = await pool.query(
+      "select deleted_at from notes where user_id = $1",
+      [user.id],
+    );
+    assert.equal(rows.rows.length, 3, "the rows were hard-deleted");
+    assert.ok(
+      rows.rows.every((row) => row.deleted_at),
+      "the rows were not marked as deleted",
+    );
+    assert.equal((await store.listNotes(other.id)).length, 1, "another account lost notes");
+  });
+
+  await t.test("the counts and the export hold every row", async () => {
+    await resetTables(pool);
+    const store = realStore();
+    const user = await store.upsertUser({ githubId: 1013, login: "big" });
+    // More rows than the export used to hold: the export was capped at half
+    // the account, so a big account got half of its own data and a
+    // `truncated` field nobody read.
+    await pool.query(
+      `insert into notes (user_id, client_id, video_id, video_title, channel_name,
+        timestamp_seconds, quote, note)
+       select $1, 'c' || g, 'vid1', 'Title', 'Channel', 10, '', 'note ' || g
+       from generate_series(1, 10001) as g`,
+      [user.id],
+    );
+
+    assert.equal(await store.countNotes(user.id), 10_001, "the count is not the account");
+    const data = await store.getAllUserData(user.id);
+    assert.equal(data.notes.length, 10_001, "the export dropped rows");
+    assert.equal(data.truncated.notes, 0, "the export says it left rows out");
+  });
+
   await t.test("deleting an account removes the account and everything in it", async () => {
     await resetTables(pool);
     const store = realStore();
