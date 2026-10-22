@@ -112,7 +112,7 @@ YouTube Digest 是一个需要自行提供 API Key 的开源项目，通过 GitH
 
 YouTube Digest 需要一个你所选 AI 服务的 Key，另外可选配一个 Supadata Key：
 
-1. **AI 服务 Key**，从 DeepSeek、MiniMax（国内版）或 OpenCode Go 中选择，用于生成摘要、讲解内容、翻译和自动润色笔记。这个是必需的。
+1. **AI 服务 Key**，从 DeepSeek、MiniMax（国内版）或 OpenCode Go 中选择，用于生成摘要、讲解内容、翻译和自动润色笔记。没有它面板也能打开：字幕、笔记和生词都在你自己的机器上工作，面板会告诉你哪一半在等这个 Key。
 2. **Supadata API Key**，只作为兜底。字幕直接从你已经打开的 YouTube 页面里读，所以大多数视频不需要它，也不消耗任何 Supadata 额度。如果你希望在本地读不到字幕的视频上还有一条退路，就配上它。
 
 ### 获取 Supadata API Key（可选）

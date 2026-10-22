@@ -110,7 +110,7 @@ Because this is an unpacked extension, it does not update automatically. After d
 
 YouTube Digest needs one API key from your chosen AI provider, and optionally a Supadata key:
 
-1. An **AI provider key** from DeepSeek, MiniMax (China), or OpenCode Go, for summaries, explanations, translation, and automatic note polishing. This one is required.
+1. An **AI provider key** from DeepSeek, MiniMax (China), or OpenCode Go, for summaries, explanations, translation, and automatic note polishing. The panel opens without one: the transcript, the notes and the vocabulary all work on your own machine, and the panel tells you which half is waiting for a key.
 2. A **Supadata API key**, used only as a fallback. Transcripts are read out of the YouTube page you already have open, so most videos work without it and no Supadata credit is spent. Add it if you want the fallback for videos whose captions cannot be read locally.
 
 ### Get a Supadata API key (optional)
