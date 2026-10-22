@@ -169,6 +169,16 @@ var YTD_SETTINGS = (() => {
   const PENDING_LOGIN_NONCE_KEY = "ytd_pending_login_nonce";
 
   /**
+   * Where the id of this browser is kept.
+   *
+   * The id names the browser a sign-in was started from, so the session
+   * that comes back is only good in this browser. It lives in the local
+   * store and not in the session store: it has to survive the browser being
+   * closed, or every restart would lock the user out of their own account.
+   */
+  const DEVICE_ID_KEY = "ytd_device_id";
+
+  /**
    * Local storage namespace for saved notes.
    *
    * The namespace depends on the signed-in account so one learner's notes
@@ -500,8 +510,12 @@ var YTD_SETTINGS = (() => {
    *
    * The nonce ties the sign-in to this client: the sync service hands it
    * back with the token, and a token that arrives without it is not ours.
+   *
+   * The device id is the name of this browser. The sync service binds the
+   * session it issues to that name and refuses it in any other browser, so
+   * a token that was copied out of here is worth nothing there.
    */
-  function buildGithubLoginUrl(language, baseUrl, nonce) {
+  function buildGithubLoginUrl(language, baseUrl, nonce, device) {
     const base = String(baseUrl || "").replace(/\/+$/, "");
     if (!base) throw new Error("The sync service URL is not configured.");
     const normalized = normalizeUiLanguage(language);
@@ -509,6 +523,10 @@ var YTD_SETTINGS = (() => {
     const cleanNonce = String(nonce || "").trim();
     if (/^[A-Za-z0-9_-]{16,64}$/.test(cleanNonce)) {
       params.push(`nonce=${encodeURIComponent(cleanNonce)}`);
+    }
+    const cleanDevice = String(device || "").trim();
+    if (/^[A-Za-z0-9_-]{16,64}$/.test(cleanDevice)) {
+      params.push(`device=${encodeURIComponent(cleanDevice)}`);
     }
     return `${base}/api/auth/login?${params.join("&")}`;
   }
@@ -528,6 +546,25 @@ var YTD_SETTINGS = (() => {
     let nonce = "";
     for (const byte of bytes) nonce += byte.toString(16).padStart(2, "0");
     return nonce;
+  }
+
+  /**
+   * The name of this browser, used to bind a sign-in to it.
+   *
+   * The sync service puts the name into the session it issues and refuses
+   * that session in any other browser. The shape is the one the service
+   * accepts: letters, digits, dashes and underscores, 16 to 64 of them.
+   *
+   * The value is random and is kept by the caller: it has to be the same
+   * one for the sign-in and for every request that follows it.
+   */
+  function createDeviceId() {
+    if (typeof crypto === "undefined" || !crypto.getRandomValues) return "";
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    let id = "";
+    for (const byte of bytes) id += byte.toString(16).padStart(2, "0");
+    return id;
   }
 
   /**
@@ -616,6 +653,7 @@ var YTD_SETTINGS = (() => {
     LOCAL_CAPTION_START_TIMEOUT_MS,
     UI_LANGUAGE_STORAGE_KEY,
     PENDING_LOGIN_NONCE_KEY,
+    DEVICE_ID_KEY,
     NOTES_STORAGE_KEY,
     MAX_LOCAL_NOTES,
     NOTES_DROPPED_KEY,
@@ -633,6 +671,7 @@ var YTD_SETTINGS = (() => {
     translateSyncCopy,
     buildGithubLoginUrl,
     createLoginNonce,
+    createDeviceId,
     isQuotaExceededError,
     withRequestTimeout,
     PROVIDERS,

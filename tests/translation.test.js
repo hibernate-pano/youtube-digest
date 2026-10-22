@@ -4,6 +4,11 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
+const {
+  createStorageMock,
+  loadBackgroundHelpers,
+} = require("./helpers/background-harness.js");
+
 const root = path.resolve(__dirname, "..");
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
 
@@ -73,151 +78,6 @@ function loadSidepanelHelpers({
   sandbox.globalThis = sandbox;
   vm.runInNewContext(read("sidepanel.js"), sandbox);
   return sandbox.__YTD_TRANSCRIPT_TESTING__;
-}
-
-/**
- * A stand-in for chrome.storage that behaves like the real one: the values
- * are copied on the way in and on the way out.
- *
- * The real storage clones what it keeps. A mock that hands back the very
- * array it was given would let a list that was read before an upload change
- * under the caller's feet, and a bug that loses a note in the browser would
- * stay invisible in the test.
- */
-function createStorageMock(initial = {}) {
-  const values = { ...initial };
-  const copy = (value) => structuredClone(value);
-  return {
-    async get(keys) {
-      if (keys === null) return copy(values);
-      const requested = Array.isArray(keys) ? keys : [keys];
-      const result = {};
-      for (const key of requested) {
-        if (Object.hasOwn(values, key)) result[key] = copy(values[key]);
-      }
-      return result;
-    },
-    async set(items) {
-      for (const [key, value] of Object.entries(items)) {
-        values[key] = copy(value);
-      }
-    },
-    async remove(keys) {
-      for (const key of Array.isArray(keys) ? keys : [keys]) {
-        delete values[key];
-      }
-    },
-    async clear() {
-      for (const key of Object.keys(values)) delete values[key];
-    },
-  };
-}
-
-function loadBackgroundHelpers({
-  settings = {
-    provider: "deepseek",
-    aiApiKey: "test-key",
-    aiBaseUrl: "https://api.deepseek.com",
-    aiModel: "deepseek-v4-flash",
-  },
-  fetchImpl = fetch,
-  setTimeoutImpl = () => 0,
-  clearTimeoutImpl = () => {},
-  storageMock,
-  tabs = {},
-  sidePanel = {
-    setPanelBehavior() {},
-    setOptions: () => Promise.resolve(),
-    close: () => Promise.resolve(),
-  },
-} = {}) {
-  const listeners = { addListener() {} };
-  const messageListeners = [];
-  const localStorage = { ytd_settings: settings };
-  const openedLoginTabs = [];
-  const sandbox = {
-    console,
-    URL,
-    TextDecoder,
-    TextEncoder,
-    fetch: fetchImpl,
-    AbortController,
-    // The service worker builds note ids with crypto.randomUUID(). A bare vm
-    // context has no crypto, so the harness provides the real one.
-    crypto: globalThis.crypto,
-    setTimeout: setTimeoutImpl,
-    clearTimeout: clearTimeoutImpl,
-    importScripts() {},
-    chrome: {
-      storage: {
-        local: {
-          setAccessLevel: () => Promise.resolve(),
-          get: async (key) => {
-            if (storageMock) return storageMock.get(key);
-            if (key === null) return { ...localStorage };
-            if (Array.isArray(key)) {
-              return Object.fromEntries(key.map((item) => [item, localStorage[item]]));
-            }
-            return { [key]: localStorage[key] };
-          },
-          set: async (values) => {
-            if (storageMock) return storageMock.set(values);
-            return Object.assign(localStorage, values);
-          },
-          remove: async (keys) => {
-            if (storageMock) return storageMock.remove(keys);
-            for (const key of Array.isArray(keys) ? keys : [keys]) {
-              delete localStorage[key];
-            }
-          },
-        },
-      },
-      action: { onClicked: listeners },
-      sidePanel,
-      runtime: {
-        onInstalled: listeners,
-        onMessage: {
-          addListener(listener) {
-            messageListeners.push(listener);
-          },
-        },
-        openOptionsPage() {},
-        getURL: (resourcePath) => `chrome-extension://test/${resourcePath}`,
-        sendMessage: () => Promise.resolve({ success: true }),
-      },
-      tabs: {
-        onUpdated: listeners,
-        onActivated: listeners,
-        // Spread first so the recording create() below stays authoritative and
-        // every opened login URL can be asserted.
-        ...tabs,
-        create:
-          tabs.create ??
-          (async (options) => {
-            openedLoginTabs.push(options.url);
-            return { id: openedLoginTabs.length, url: options.url };
-          }),
-      },
-    },
-    // The real settings module, with only the deployment value redirected.
-    // The worker reads its provider registry, its chat endpoint and its
-    // canonical URL builder from here, so a hand-written copy of those
-    // functions would test a module that no longer exists: a wrong endpoint
-    // in settings.js would still leave every test in this file green.
-    YTD_SETTINGS: {
-      ...require("../settings.js"),
-      SERVER_BASE_URL: "https://sync.test",
-    },
-  };
-  sandbox.globalThis = sandbox;
-  // cloud-sync.js is imported by background.js via importScripts; the test
-  // sandbox stubs importScripts, so load it explicitly first.
-  vm.runInNewContext(read("cloud-sync.js"), sandbox);
-  vm.runInNewContext(read("background.js"), sandbox);
-  const helpers = sandbox.__YTD_TRANSLATION_TESTING__;
-  helpers.openedLoginTabs = openedLoginTabs;
-  helpers.messageListeners = messageListeners;
-  return helpers;
 }
 
 test("non-YouTube tabs explicitly close before their panel is disabled", async () => {
@@ -322,7 +182,8 @@ test("the header exposes one universal language control for all result tabs", ()
   assert.match(html, /data-transcript-mode="original"[\s\S]*?>Original</);
   assert.match(html, /data-transcript-mode="zh"[\s\S]*?>\u4e2d\u6587</);
   assert.match(html, /data-transcript-mode="bilingual"[\s\S]*?>\u53cc\u8bed</);
-  assert.match(js, /handleDisplayLanguageModeChange\(button\.dataset\.transcriptMode\)/);
+  assert.match(js, /requestDisplayLanguageModeChange\(button\.dataset\.transcriptMode\)/);
+  assert.match(js, /handleDisplayLanguageModeChange\(mode\)/);
   assert.match(js, /contentType: "transcriptBatch"/);
   assert.match(js, /contentType: "interfaceBatch"/);
   assert.match(js, /translateOverviewContent/);
@@ -1697,11 +1558,21 @@ test("the sign-in page is opened in the language the user picked", async () => {
 
   await helpers.handleStartGithubLogin();
   assert.equal(helpers.openedLoginTabs.length, 1);
-  // The URL carries the language and the nonce of this sign-in: the nonce
-  // is what makes the returned token ours.
+  // The URL carries the language, the nonce of this sign-in and the name of
+  // this browser. The nonce is what makes the returned token ours; the
+  // browser is what makes the session good only here.
   assert.match(
     helpers.openedLoginTabs[0],
-    /^https:\/\/sync\.test\/api\/auth\/login\?lang=zh-CN&nonce=[A-Za-z0-9_-]{16,64}$/,
+    /^https:\/\/sync\.test\/api\/auth\/login\?lang=zh-CN&nonce=[A-Za-z0-9_-]{16,64}&device=[A-Za-z0-9_-]{16,64}$/,
+  );
+  // The name in the URL is the one this device keeps, so the next request
+  // can say the same thing.
+  const stored = await storageMock.get(null);
+  const device = String(stored.ytd_device_id || "");
+  assert.ok(device, "this browser was never given a name");
+  assert.ok(
+    helpers.openedLoginTabs[0].endsWith(`device=${device}`),
+    `the sign-in names a browser the device did not keep: ${helpers.openedLoginTabs[0]}`,
   );
 });
 

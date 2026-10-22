@@ -12,8 +12,16 @@
  * The record is what the panel reads, so the user is told about the loss
  * instead of finding a note missing. Only a real drop is recorded: a store
  * that is under the cap leaves no trace.
+ *
+ * The reason is recorded with it, because the two drops are not the same
+ * news: a note that falls off when the user saves is a note the device
+ * let go of, and a note that falls off when the account syncs is still in
+ * the account. The panel says which one it was.
+ *
+ * @param {number} count how many notes were dropped.
+ * @param {"save" | "sync"} [reason] what made the store drop them.
  */
-async function recordDroppedNotes(count) {
+async function recordDroppedNotes(count, reason) {
   if (!count) return;
   try {
     const session = await getGithubSession();
@@ -26,6 +34,7 @@ async function recordDroppedNotes(count) {
         total: total + count,
         lastCount: count,
         lastAt: Date.now(),
+        lastReason: reason === "sync" ? "sync" : "save",
       },
     });
   } catch (error) {
@@ -41,7 +50,7 @@ async function recordDroppedNotes(count) {
  * instead of finding a word missing. Only a real drop is recorded: a store
  * that is under the cap leaves no trace.
  */
-async function recordDroppedVocabulary(count) {
+async function recordDroppedVocabulary(count, reason) {
   if (!count) return;
   try {
     const session = await getGithubSession();
@@ -54,6 +63,7 @@ async function recordDroppedVocabulary(count) {
         total: total + count,
         lastCount: count,
         lastAt: Date.now(),
+        lastReason: reason === "sync" ? "sync" : "save",
       },
     });
   } catch (error) {
@@ -593,12 +603,62 @@ async function getGithubSession() {
   return session && session.token ? session : null;
 }
 
+/**
+ * The name of this browser, used to bind a sign-in to it.
+ *
+ * The sync service puts the name into the session it issues and refuses
+ * that session in any other browser, so a token that was copied out of this
+ * browser is worth nothing there.
+ *
+ * The id is created once and then kept. A new id would lock the user out
+ * of the account they are already signed into, so it is read from the
+ * device's own storage and only written when there is none. It lives in
+ * the local store, not in the session store: it has to survive the browser
+ * being closed.
+ *
+ * The background is the only place that writes it. Two surfaces that each
+ * made their own would race, and the one that made the sign-in could end up
+ * naming a different browser than the one that made the requests.
+ */
+let deviceIdPromise = null;
+async function getDeviceId() {
+  if (!deviceIdPromise) {
+    deviceIdPromise = (async () => {
+      try {
+        const stored = await chrome.storage.local.get(YTD_SETTINGS.DEVICE_ID_KEY);
+        const existing = String(stored?.[YTD_SETTINGS.DEVICE_ID_KEY] || "").trim();
+        if (/^[A-Za-z0-9_-]{16,64}$/.test(existing)) return existing;
+        const fresh = YTD_SETTINGS.createDeviceId();
+        if (!fresh) return "";
+        await setStorageWithRecovery({ [YTD_SETTINGS.DEVICE_ID_KEY]: fresh });
+        return fresh;
+      } catch (error) {
+        // Without an id the sign-in is simply not bound to this browser.
+        // That is the old behaviour, and it is better than refusing to work.
+        console.warn(
+          "[YouTube Digest] This browser could not be given an id:",
+          error.message,
+        );
+        return "";
+      }
+    })();
+  }
+  return deviceIdPromise;
+}
+
 async function cloudFetch(path, options) {
   const token = (options && options.token) || "";
   const method = (options && options.method) || "GET";
   const body = options && options.body;
   const headers = { "Content-Type": "application/json" };
-  if (token) headers.Authorization = "Bearer " + token;
+  if (token) {
+    headers.Authorization = "Bearer " + token;
+    // A session that was bound to this browser only works in this browser.
+    // The service compares this header with the name the session was
+    // issued to, and refuses the request when they differ.
+    const deviceId = await getDeviceId();
+    if (deviceId) headers["X-Device-Id"] = deviceId;
+  }
   const requestStartedAt = Date.now();
   // The request runs under a deadline. A server that stops answering used to
   // hang the whole sync: the service worker was suspended while it waited,
@@ -788,14 +848,73 @@ async function patchStoredItem(namespace, id, changes) {
 }
 
 /**
+ * How recent a stored item is, in milliseconds.
+ *
+ * A note that was edited is newer than one that was not, so the edit time
+ * is what says which of two items is the older one. The creation time is
+ * the fallback for an item that was never edited.
+ */
+function localItemRecency(item) {
+  const updated = Number(item && item.updatedAt);
+  if (Number.isFinite(updated) && updated > 0) return updated;
+  const created = Number(item && item.createdAt);
+  if (Number.isFinite(created) && created > 0) return created;
+  return 0;
+}
+
+/**
+ * Keeps the newest items of a local list and lets the rest go.
+ *
+ * The device holds a limited number of notes and words. The limit belongs
+ * to the store, so it has to be enforced by every writer of a list, not
+ * only by the one that adds an item: the sync writes a merged list back,
+ * and an account with more notes than the device can hold is not an edge
+ * case. A limit that only one writer knows about is a limit that leaks.
+ *
+ * The items that do not fit are the oldest ones. The order of the items
+ * that do fit is only touched when the list was over the limit: the panel
+ * shows them newest first, and a merged list can arrive out of order.
+ *
+ * An item whose upload failed is never dropped. It exists on this device
+ * and nowhere else, so it is the one thing the cap must not touch.
+ */
+function applyLocalCap(items, limit, options) {
+  const list = Array.isArray(items) ? items : [];
+  const max = Number(limit);
+  if (!Number.isFinite(max) || max <= 0 || list.length <= max) {
+    return { items: list, dropped: 0 };
+  }
+  const settings = options || {};
+  const keyOf = typeof settings.keyOf === "function" ? settings.keyOf : () => "";
+  const protect = settings.protect instanceof Set ? settings.protect : new Set();
+  const ranked = list
+    .map((item, index) => ({ index, at: localItemRecency(item) }))
+    .sort((a, b) => b.at - a.at || a.index - b.index);
+  const kept = new Set(
+    ranked.slice(0, max).map((entry) => entry.index),
+  );
+  list.forEach((item, index) => {
+    if (protect.has(keyOf(item))) kept.add(index);
+  });
+  const keptItems = list.filter((_, index) => kept.has(index));
+  keptItems.sort((a, b) => localItemRecency(b) - localItemRecency(a));
+  return { items: keptItems, dropped: list.length - keptItems.length };
+}
+
+/**
  * Writes a merged list without dropping what was saved meanwhile.
  *
  * The merge took a while, and the user may have saved a note in between.
  * That note is not in the merged list, so writing the merged list as it is
  * would throw the note away. Every item of the merge is written into the
  * list as it is now, and the items the merge never saw are kept.
+ *
+ * The device's limit is applied here too. The merged list can be longer
+ * than the device can hold - an account with a thousand notes is a normal
+ * account - and the limit is the store's, not the merge's.
  */
-async function reconcileStoredList(namespace, mergedItems, keyOf) {
+async function reconcileStoredList(namespace, mergedItems, keyOf, options) {
+  const settings = options || {};
   return withNamespaceLock(namespace, async () => {
     const current = await chrome.storage.local.get(namespace);
     const items = current[namespace] || [];
@@ -811,8 +930,22 @@ async function reconcileStoredList(namespace, mergedItems, keyOf) {
       (item) => !items.some((existing) => keyOf(existing) === keyOf(item)),
     );
     const next = unseen.concat(mergedOnly, added);
-    await setStorageWithRecovery({ [namespace]: next });
-    return next;
+    const capped = applyLocalCap(next, settings.limit, {
+      keyOf,
+      protect: settings.protect,
+    });
+    if (capped.dropped) {
+      // The user is told what the device did not take. The items are in the
+      // account, not lost, and the notice has to say which of the two it is.
+      if (typeof settings.recordDropped === "function") {
+        await settings.recordDropped(capped.dropped, "sync");
+      }
+      console.warn(
+        `[YouTube Digest] ${capped.dropped} ${settings.label || "item(s)"} were not downloaded: the local store keeps the newest ${settings.limit}.`,
+      );
+    }
+    await setStorageWithRecovery({ [namespace]: capped.items });
+    return capped.items;
   });
 }
 
@@ -1285,10 +1418,10 @@ async function runFullSync({
   cloudIdOf,
   pickCloud,
   readLocal,
-  writeLocal,
   merge,
   tombstones,
   onPushed,
+  localCap,
 }) {
   const session = await getGithubSession();
   if (!session) return { success: true, synced: false, reason: "not signed in" };
@@ -1325,6 +1458,9 @@ async function runFullSync({
   // clock and the server clock is known before the merge happens.
   const clock = await readClockContext();
   const { mergedItems, toPush } = merge(local, cloud, clock, tombstones);
+  // The items whose upload failed. They exist on this device and nowhere
+  // else, so the device's limit must not drop them.
+  const failedPushes = new Set();
   for (const item of toPush) {
     try {
       const payload = toCloudPayload(item);
@@ -1352,6 +1488,7 @@ async function runFullSync({
       if (onPushed) onPushed(item);
     } catch (error) {
       reportSyncSessionExpired(error);
+      failedPushes.add(keyOfLocal(item));
       console.warn("[YouTube Digest] Sync push failed (kept locally):", error.message);
     }
   }
@@ -1359,7 +1496,12 @@ async function runFullSync({
   // the user may have saved something in the meantime. The merged list is
   // written into the list as it is now, and what the merge never saw is
   // kept: a note saved during a sync must not disappear because of it.
-  const written = await reconcileStoredList(namespace, mergedItems, keyOfLocal);
+  const written = await reconcileStoredList(namespace, mergedItems, keyOfLocal, {
+    limit: localCap.limit,
+    recordDropped: localCap.recordDropped,
+    label: localCap.label,
+    protect: failedPushes,
+  });
   return { success: true, synced: true, count: written.length };
 }
 
@@ -1387,9 +1529,15 @@ async function fullSyncNotes() {
     cloudIdOf: (pushed) => pushed && pushed.note && pushed.note.id,
     pickCloud: (data) => (data && Array.isArray(data.notes) ? data.notes : []),
     readLocal: readLocalNotes,
-    writeLocal: writeLocalNotes,
     merge: mergeNotesForSync,
     tombstones,
+    // The device keeps a limited number of notes. The limit belongs to the
+    // store, so the merge hands it over instead of keeping its own.
+    localCap: {
+      limit: YTD_SETTINGS.MAX_LOCAL_NOTES,
+      recordDropped: recordDroppedNotes,
+      label: "note(s)",
+    },
     // A note that is written again is newer than the delete that is still
     // on its way: the delete is dropped, so a note the user re-created is
     // not eaten by a stale intent.
@@ -1416,6 +1564,68 @@ async function handleGetGithubSession() {
       : null,
     expired: session ? await isSyncSessionExpiredForAccount() : false,
   };
+}
+
+/**
+ * Asks the sync service whether the stored session is still good.
+ *
+ * The request goes through the background because that is where the
+ * request lives: the session is bound to this browser, and the browser is
+ * named by a header that the background adds to every call. A surface that
+ * asked the service on its own would have to remember to name the browser
+ * too, and the day it forgets, the reader is told their session expired
+ * when it has not.
+ *
+ * The answer distinguishes the three things that look alike from the
+ * outside: a good session, a session the service refused, and a service
+ * that is not answering. Only the second one ends the session.
+ */
+async function handleVerifyGithubSession() {
+  const session = await getGithubSession();
+  if (!session) return { success: true, session: null, expired: false };
+  let data = null;
+  try {
+    data = await cloudFetch("/api/me", { token: session.token });
+  } catch (error) {
+    if (isSyncSessionExpired(error)) {
+      return { success: true, session: null, expired: true };
+    }
+    // The service is slow or broken. That is not the session's fault, and
+    // the reader is not signed out because of it.
+    return {
+      success: false,
+      session: null,
+      expired: false,
+      error: error.message,
+    };
+  }
+  const user = data && data.user;
+  if (!user) {
+    return { success: false, session: null, expired: false, error: "No user." };
+  }
+  return {
+    success: true,
+    expired: false,
+    session: { login: user.login, githubId: user.githubId },
+  };
+}
+
+/**
+ * Deletes the account on the sync service.
+ *
+ * The local copy of the account's data is removed by the surface that
+ * asked, because it knows which keys hold it. This only removes the
+ * account itself.
+ */
+async function handleDeleteGithubAccount() {
+  const session = await getGithubSession();
+  if (!session) return { success: false, error: "Not signed in." };
+  try {
+    await cloudFetch("/api/account", { method: "DELETE", token: session.token });
+  } catch (error) {
+    return { success: false, error: error.message, status: error.status };
+  }
+  return { success: true };
 }
 
 async function handleLogoutGithub() {
@@ -1724,9 +1934,15 @@ async function fullSyncVocabulary() {
     cloudIdOf: (pushed) => pushed && pushed.vocabulary && pushed.vocabulary.id,
     pickCloud: (data) => (data && Array.isArray(data.vocabulary) ? data.vocabulary : []),
     readLocal: readLocalVocabulary,
-    writeLocal: writeLocalVocabulary,
     merge: mergeVocabularyForSync,
     tombstones,
+    // The device keeps a limited number of words, the same way it keeps a
+    // limited number of notes.
+    localCap: {
+      limit: YTD_SETTINGS.MAX_LOCAL_VOCABULARY,
+      recordDropped: recordDroppedVocabulary,
+      label: "word(s)",
+    },
     // A word that is captured again is newer than the delete that is still
     // on its way: the delete is dropped, so a word the user re-captured is
     // not eaten by a stale intent.
@@ -2303,10 +2519,14 @@ async function handleStartGithubLogin() {
   // a link carrying somebody else's token would otherwise switch the user
   // to that account and hand it the notes saved here.
   const nonce = await startPendingLogin();
+  // The device is named as well, so the session the sync service issues is
+  // bound to this browser and is refused in any other one.
+  const deviceId = await getDeviceId();
   const loginUrl = YTD_SETTINGS.buildGithubLoginUrl(
     language,
     YTD_SETTINGS.SERVER_BASE_URL,
     nonce,
+    deviceId,
   );
   const tab = await chrome.tabs.create({ url: loginUrl });
   return { success: true, tabId: tab.id, replacedExpiredSession: !!session };
