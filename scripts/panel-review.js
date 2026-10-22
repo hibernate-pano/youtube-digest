@@ -423,10 +423,15 @@ function buildChromeStub(payload) {
             // The panel must be able to get past its own configuration gate,
             // otherwise every tab renders the "API Keys Missing" dead end
             // and the review photographs an error screen.
+            //
+            // `hasAiKey: false` is a state a real user is in: the free half
+            // of the product works without a key, and the panel says which
+            // half does not. The gate reviews that state too, because a
+            // notice nobody looked at is a notice nobody checked.
             return {
               success: true,
-              hasSupadataKey: true,
-              hasAiKey: true,
+              hasSupadataKey: payload.hasSupadataKey !== false,
+              hasAiKey: payload.hasAiKey !== false,
               provider: "DeepSeek",
             };
           case "getUiLanguage":
@@ -711,9 +716,14 @@ const READ_CONTRAST = () => {
   return problems;
 };
 
-async function main() {
-  fs.mkdirSync(outDir, { recursive: true });
-  const browser = await chromium.launch();
+/**
+ * Opens the panel with a given configuration.
+ *
+ * The panel is opened in its own browser context because the configuration
+ * is decided when the page loads: a user without a key is a different state
+ * of the product, not a different click inside one state.
+ */
+async function openPanel(browser, payloadOverrides = {}) {
   const context = await browser.newContext({
     viewport: { width: 420, height: 900 },
     deviceScaleFactor: 2,
@@ -739,6 +749,7 @@ async function main() {
         analysis: ANALYSIS,
         videoInfo: VIDEO_INFO,
         now: NOW,
+        ...payloadOverrides,
       },
     },
   );
@@ -752,6 +763,30 @@ async function main() {
 
   await page.goto(`file://${path.join(root, "sidepanel.html")}`);
   await page.waitForTimeout(900);
+
+  return { context, page, errors };
+}
+
+/**
+ * Reads what the panel says about the key it does not have.
+ */
+const READ_KEY_NOTICE = () => {
+  const notice = document.getElementById("aiKeyNotice");
+  const button = document.getElementById("summaryGenerateBtn");
+  const gate = document.getElementById("summaryGate");
+  return {
+    missing: !notice,
+    hidden: notice ? notice.hidden : true,
+    text: notice ? notice.textContent.trim() : "",
+    button: button ? button.textContent.trim() : "",
+    gate: gate ? gate.textContent.trim() : "",
+  };
+};
+
+async function main() {
+  fs.mkdirSync(outDir, { recursive: true });
+  const browser = await chromium.launch();
+  const { context, page, errors } = await openPanel(browser);
 
   const failures = [];
 
@@ -907,6 +942,77 @@ async function main() {
     }
   }
   await page.setViewportSize({ width: 420, height: 900 });
+
+  // The panel without a key is a state every user starts in. It has to
+  // open, it has to say which half of the product is waiting for a key,
+  // and the notice has to be readable in both themes and at every width.
+  const noKey = await openPanel(browser, { hasAiKey: false });
+  const noKeyState = await noKey.page.evaluate(READ_PANEL_STATE);
+  if (noKeyState.error === "visible") {
+    failures.push(
+      `Without a key the panel shows its error screen ("${noKeyState.errorTitle}: ` +
+        `${noKeyState.errorMessage}"). The free half of the product has to open ` +
+        `without a key.`,
+    );
+  }
+  if (noKeyState.results !== "visible") {
+    failures.push(
+      `Without a key the panel never reaches its results view (welcome=${noKeyState.welcome}, ` +
+        `loading=${noKeyState.loading}, error=${noKeyState.error}, results=${noKeyState.results}).`,
+    );
+  }
+
+  const notice = await noKey.page.evaluate(READ_KEY_NOTICE);
+  if (notice.missing) {
+    failures.push("The panel has no notice for the features that are waiting for a key.");
+  } else {
+    if (notice.hidden) {
+      failures.push("The panel has no AI key and does not say that anything is waiting for one.");
+    }
+    if (!/summary/i.test(notice.text)) {
+      failures.push(`The notice does not name the feature that needs a key: "${notice.text}".`);
+    }
+    if (!/notes|vocabulary|reading/i.test(notice.text)) {
+      failures.push(`The notice does not say what works without a key: "${notice.text}".`);
+    }
+  }
+  if (notice.button !== "Open Settings") {
+    failures.push(
+      `Without a key the summary button says "${notice.button}" instead of "Open Settings". ` +
+        `The button has to do the one thing that can change the situation.`,
+    );
+  }
+  if (/AI call/i.test(notice.gate)) {
+    failures.push(
+      `Without a key the summary gate still quotes the price of a call: "${notice.gate}".`,
+    );
+  }
+  await noKey.page.screenshot({ path: path.join(outDir, "no-key.png"), fullPage: true });
+
+  for (const scheme of ["light", "dark"]) {
+    await noKey.page.emulateMedia({ colorScheme: scheme });
+    await noKey.page.waitForTimeout(220);
+    const problems = await noKey.page.evaluate(READ_CONTRAST);
+    for (const problem of problems) {
+      failures.push(`Without a key, in the ${scheme} theme: ${problem}`);
+    }
+  }
+  await noKey.page.emulateMedia({ colorScheme: "light" });
+  for (const width of LAYOUT_WIDTHS) {
+    await noKey.page.setViewportSize({ width, height: 900 });
+    await noKey.page.waitForTimeout(220);
+    const problems = await noKey.page.evaluate(READ_LAYOUT);
+    for (const problem of problems) {
+      failures.push(`Without a key, at ${width}px: ${problem}`);
+    }
+  }
+  if (noKey.errors.length) {
+    failures.push(
+      `The panel logged ${noKey.errors.length} console error(s) without a key:\n` +
+        noKey.errors.map((error) => `    ${error}`).join("\n"),
+    );
+  }
+  await noKey.context.close();
 
   if (failures.length) {
     console.error("\nPANEL REVIEW FAILED:");
