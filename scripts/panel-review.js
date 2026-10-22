@@ -6,6 +6,20 @@
  * the five tabs, and writes a screenshot of each one.
  *
  * Usage: node scripts/panel-review.js [outputDir]
+ *
+ * This is a GATE, not a picture generator. It fails (non-zero exit) when the
+ * panel cannot actually be driven:
+ *
+ *   - a chrome API the panel uses is missing from the stub, so the panel
+ *     throws while it loads and every tab renders the error screen;
+ *   - the panel logs a console error or throws an uncaught exception;
+ *   - a tab does not reach its loaded state;
+ *   - the panel shows an error screen instead of the product.
+ *
+ * The first version of this script had none of those checks. It wrote a
+ * screenshot of whatever was on screen and called it a review, so a panel
+ * that was completely broken still produced six handsome pictures of an
+ * error message. A gate that cannot fail is not a gate.
  */
 
 const fs = require("node:fs");
@@ -69,7 +83,11 @@ const NOTES = [
     channelName: "Some Channel",
     timestampSeconds: 92,
     quote: "memory is not a recording but a reconstruction",
-    note: "This is the key idea: every time you remember, you rewrite it.",
+    // The panel reads the note body out of `text`. The worker's note object
+    // carries it under that name, and a stub that uses `note` instead leaves
+    // a note card with a timestamp and nothing written on it.
+    text: "This is the key idea: every time you remember, you rewrite it.",
+    timestampedUrl: "https://www.youtube.com/watch?v=abc123xyz&t=92",
     starred: true,
     createdAt: NOW - 3600000,
     updatedAt: NOW - 3600000,
@@ -82,7 +100,8 @@ const NOTES = [
     channelName: "Some Channel",
     timestampSeconds: 240,
     quote: "sleep is when the brain files things away",
-    note: "Sleep is not downtime, it is the filing cabinet.",
+    text: "Sleep is not downtime, it is the filing cabinet.",
+    timestampedUrl: "https://www.youtube.com/watch?v=abc123xyz&t=240",
     starred: false,
     createdAt: NOW - 7200000,
     updatedAt: NOW - 7200000,
@@ -151,12 +170,47 @@ const ANALYSIS = {
   ],
 };
 
+/**
+ * A word that is due for review.
+ *
+ * The shape is the one the server really sends: the scheduler's numbers in
+ * `review`, the word itself in `vocabulary`. The panel reads
+ * `review.vocabulary.term`, so a stub that puts the term at the top level
+ * produces a review card with nothing on it.
+ */
 const SAMPLE_REVIEW = {
-  term: "ephemeral",
-  sentence: "the trend proved ephemeral",
-  translation: "短暂的",
-  explanation: "lasting a very short time",
-  due: true,
+  review: {
+    dueAt: NOW,
+    intervalDays: 0,
+    ease: 2.5,
+    reps: 0,
+    lapses: 0,
+  },
+  vocabulary: {
+    id: "vocab_1",
+    term: "ephemeral",
+    translation: "短暂的",
+    sentenceTranslation: "lasting a very short time",
+    sentence: "the trend proved ephemeral",
+    videoId: "abc123xyz",
+    videoTitle: "How Memory Works",
+    timestampSeconds: 92,
+    status: "learning",
+    createdAt: NOW - 86400000,
+    updatedAt: NOW - 86400000,
+  },
+};
+
+/**
+ * The panel asks the worker for the video it is looking at. The stub answers
+ * with the same video the transcript belongs to, so the panel shows a real
+ * video instead of an empty state.
+ */
+const VIDEO_INFO = {
+  title: "How Memory Works",
+  channelName: "Some Channel",
+  description: "A talk about how memory reconstructs instead of recording.",
+  duration: 900,
 };
 
 function storageArea(initial) {
@@ -190,8 +244,23 @@ function makeChrome() {
     ytd_notes: NOTES,
     ytd_vocabulary: WORDS,
     ytd_vocabulary_dropped: { total: 3, lastCount: 2, lastAt: NOW },
-    ytd_library: LIBRARY,
     ytd_github_session: { token: "t", login: "jasper", githubId: 1001, savedAt: NOW },
+    // The library is not a list of its own: it is every `digest_*` entry in
+    // local storage, minus the video the user is looking at right now. The
+    // stub has to store one, or the Library tab can only ever show its
+    // empty state — and an empty state is not a review of the product.
+    digest_def456uvw: {
+      analysis: null,
+      transcript: [],
+      transcriptText: "",
+      transcriptTimestamped: "",
+      transcriptLanguage: null,
+      videoTitle: "Building Teams That Last",
+      channelName: "Another Channel",
+      paragraphCache: {},
+      interfaceCache: {},
+      timestamp: NOW - 3 * 86400000,
+    },
   });
   const session = storageArea({});
   return {
@@ -228,6 +297,241 @@ function makeChrome() {
   };
 }
 
+/**
+ * The chrome API the panel actually uses.
+ *
+ * Every name here is one the panel calls at load time. A missing name is
+ * not a small problem: `chrome.tabs.onActivated.addListener(...)` sits at the
+ * top level of sidepanel.js, so a stub without it throws during script
+ * evaluation, every later `const` in the file stays in its temporal dead
+ * zone, and the panel renders the "API Keys Missing" error screen instead
+ * of the product. That is exactly what happened: the first version of this
+ * stub did not have `chrome.tabs.onActivated`, so every screenshot in the
+ * repository was a picture of an error message.
+ *
+ * Keep this list in step with the panel. When the panel starts using a new
+ * chrome API, add it here — and the gate below will tell you when you
+ * forgot.
+ *
+ * This function is stringified into the page, so it must not close over
+ * anything outside itself.
+ */
+function buildChromeStub(payload) {
+  const formatStamp = (total) => {
+    const seconds = Math.max(0, Number(total) || 0);
+    const minutes = Math.floor(seconds / 60);
+    const rest = seconds % 60;
+    if (minutes >= 60) {
+      const hours = Math.floor(minutes / 60);
+      return `${hours}:${String(minutes % 60).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
+    }
+    return `${minutes}:${String(rest).padStart(2, "0")}`;
+  };
+  const area = (initial) => {
+    const values = { ...initial };
+    return {
+      values,
+      async get(keys) {
+        if (keys === null || keys === undefined) return { ...values };
+        const wanted = Array.isArray(keys) ? keys : [keys];
+        const out = {};
+        for (const key of wanted) {
+          if (Object.hasOwn(values, key)) out[key] = values[key];
+        }
+        return out;
+      },
+      async set(items) {
+        Object.assign(values, items);
+      },
+      async remove(keys) {
+        for (const key of Array.isArray(keys) ? keys : [keys]) {
+          delete values[key];
+        }
+      },
+    };
+  };
+  const local = area(payload.local);
+  const session = area({});
+  return {
+    runtime: {
+      onMessage: { addListener() {} },
+      sendMessage: async (message) => {
+        switch (message?.action) {
+          case "getVocabulary":
+            return { success: true, items: payload.words };
+          case "getNotes":
+            return { success: true, notes: payload.notes };
+          case "getDueReviews":
+            return { success: true, reviews: [payload.review], count: 1 };
+          case "getLibrary":
+            return { success: true, items: payload.library };
+          case "getTranscript":
+            return { success: true, segments: payload.transcript };
+          case "getAnalysis":
+            return { success: true, analysis: payload.analysis };
+          case "fetchTranscript":
+            // The panel asks the worker for the captions. The stub hands
+            // back the same transcript the page would have produced.
+            return {
+              success: true,
+              transcript: payload.transcript,
+              transcriptText: payload.transcript
+                .map((segment) => segment.text)
+                .join(" "),
+              transcriptTextTimestamped: payload.transcript
+                .map(
+                  (segment) => `[${formatStamp(segment.start)}] ${segment.text}`,
+                )
+                .join("\n"),
+              language: "en",
+            };
+          case "analyzeTranscript":
+            return { success: true, analysis: payload.analysis };
+          case "getSettings":
+            return { success: true, settings: {} };
+          case "getVideoInfo":
+            return { success: true, ...payload.videoInfo };
+          case "relayToContent":
+            // The panel asks the worker, which relays to the page. The
+            // stub answers as if the page had replied.
+            if (message?.payload?.action === "getVideoInfo") {
+              return { success: true, response: payload.videoInfo };
+            }
+            if (message?.payload?.action === "getCurrentTime") {
+              // The panel reads `currentTime` out of the reply. A reply
+              // that carries `seconds` instead leaves the note composer
+              // saying it cannot know the moment.
+              return { success: true, response: { currentTime: 92 } };
+            }
+            return { success: true, response: {} };
+          case "getGithubSession":
+            return {
+              success: true,
+              session: { login: "jasper", githubId: 1001, savedAt: payload.now },
+              expired: false,
+            };
+          case "checkConfig":
+            // The panel must be able to get past its own configuration gate,
+            // otherwise every tab renders the "API Keys Missing" dead end
+            // and the review photographs an error screen.
+            return {
+              success: true,
+              hasSupadataKey: true,
+              hasAiKey: true,
+              provider: "DeepSeek",
+            };
+          case "getUiLanguage":
+            return { success: true, language: "en" };
+          case "getCurrentTime":
+            return { success: true, seconds: 92 };
+          case "getDueReviewsCount":
+            return { success: true, count: 4 };
+          default:
+            return { success: true };
+        }
+      },
+      getURL: (resourcePath) => `chrome-extension://test/${resourcePath}`,
+      getManifest: () => ({ version: "1.7.3" }),
+    },
+    storage: { local, session, onChanged: { addListener() {} } },
+    tabs: {
+      query: async () => [{ id: 1, url: "https://www.youtube.com/watch?v=abc123xyz" }],
+      get: async () => ({
+        id: 1,
+        url: "https://www.youtube.com/watch?v=abc123xyz",
+        windowId: 1,
+      }),
+      sendMessage: async () => ({}),
+      onUpdated: { addListener() {} },
+      onActivated: { addListener() {} },
+      create: async () => ({ id: 1 }),
+      remove: async () => {},
+    },
+    windows: { getCurrent: async () => ({ id: 1 }) },
+    i18n: { getMessage: (key) => key },
+    action: { setBadgeText: async () => {} },
+  };
+}
+
+/**
+ * Reads the panel's own state out of the page.
+ *
+ * The panel keeps its state in module-scope variables, so the only honest
+ * way to ask "is the panel showing the product or an error?" is to look at
+ * the DOM the user looks at.
+ */
+const READ_PANEL_STATE = () => {
+  const visible = (id) => {
+    const element = document.getElementById(id);
+    if (!element) return "missing";
+    if (element.hidden) return "hidden";
+    if (element.style && element.style.display === "none") return "hidden";
+    return "visible";
+  };
+  const panelFor = (name) => {
+    const panel = document.querySelector(`[data-panel="${name}"]`);
+    if (!panel) return "missing";
+    if (panel.hidden) return "hidden";
+    // The panels are shown and hidden with a CSS class, not with the hidden
+    // attribute, so the only honest check is the one the browser makes:
+    // what is actually painted.
+    const display = window.getComputedStyle(panel).display;
+    if (display === "none") return "hidden";
+    return "visible";
+  };
+  const text = (id) => (document.getElementById(id)?.textContent || "").trim();
+  return {
+    welcome: visible("welcomeState"),
+    loading: visible("loadingState"),
+    error: visible("errorState"),
+    results: visible("resultsState"),
+    errorTitle: text("errorTitle"),
+    errorMessage: text("errorMessage"),
+    transcript: panelFor("transcript"),
+    overview: panelFor("overview"),
+    activePanel: (() => {
+      const active = document.querySelector(".tab-panel.active");
+      return active ? active.dataset.panel : "";
+    })(),
+    notes: panelFor("notes"),
+    words: panelFor("words"),
+    library: panelFor("library"),
+    transcriptSegments: document.querySelectorAll("#transcriptList > *").length,
+    chapterItems: document.querySelectorAll("#chapterList > *").length,
+    noteItems: document.querySelectorAll("#notesList > *").length,
+    wordItems: document.querySelectorAll("#wordsList > *").length,
+    libraryItems: document.querySelectorAll("#libraryList > *").length,
+    summaryText: text("summaryText"),
+    // The review card is the one place where a wrong payload shape produces
+    // a card with a button on it and nothing to review: the term lives in
+    // `review.vocabulary.term`, and the panel reads it from exactly there.
+    reviewTerm: text("reviewTerm"),
+    reviewSentence: text("reviewSentence"),
+    reviewCardHidden: document.getElementById("reviewCard")?.hidden !== false,
+  };
+};
+
+/**
+ * Each tab has to reach a loaded state, not just exist.
+ *
+ * The keys are the tab's own `data-tab` value, so the script cannot click a
+ * button that does not exist. The first version of this script clicked
+ * `[data-tab="summary"]`; the tab is called `overview` in the markup and
+ * only reads "Summary" on screen, so that click did nothing and the file
+ * it wrote was a second picture of the transcript.
+ *
+ * The Summary tab needs the analysis the stub provides; the others need
+ * their own list drawn. A tab that is present but empty is a broken tab,
+ * and the first version of this script called that "shown".
+ */
+const TAB_EXPECTATIONS = {
+  transcript: { panel: "transcript", atLeast: 1, countKey: "transcriptSegments" },
+  overview: { panel: "overview", atLeast: 1, countKey: "summaryText", text: true },
+  notes: { panel: "notes", atLeast: 1, countKey: "noteItems" },
+  words: { panel: "words", atLeast: 1, countKey: "wordItems" },
+  library: { panel: "library", atLeast: 1, countKey: "libraryItems" },
+};
+
 async function main() {
   fs.mkdirSync(outDir, { recursive: true });
   const browser = await chromium.launch();
@@ -237,121 +541,158 @@ async function main() {
   });
 
   const chrome = makeChrome();
-  await context.addInitScript((payload) => {
-    const area = (initial) => {
-      const values = { ...initial };
-      return {
-        values,
-        async get(keys) {
-          if (keys === null || keys === undefined) return { ...values };
-          const wanted = Array.isArray(keys) ? keys : [keys];
-          const out = {};
-          for (const key of wanted) {
-            if (Object.hasOwn(values, key)) out[key] = values[key];
-          }
-          return out;
-        },
-        async set(items) {
-          Object.assign(values, items);
-        },
-        async remove(keys) {
-          for (const key of Array.isArray(keys) ? keys : [keys]) {
-            delete values[key];
-          }
-        },
-      };
-    };
-    const local = area(payload.local);
-    const session = area({});
-    window.chrome = {
-      runtime: {
-        onMessage: { addListener() {} },
-        sendMessage: async (message) => {
-          switch (message?.action) {
-            case "getVocabulary":
-              return { success: true, items: payload.words };
-            case "getNotes":
-              return { success: true, items: payload.notes };
-            case "getDueReviews":
-              return { success: true, item: payload.review, count: 4 };
-            case "getLibrary":
-              return { success: true, items: payload.library };
-            case "getTranscript":
-              return { success: true, segments: payload.transcript };
-            case "getAnalysis":
-              return { success: true, analysis: payload.analysis };
-            case "getSettings":
-              return { success: true, settings: {} };
-            case "getGithubSession":
-              return {
-                success: true,
-                session: { login: "jasper", githubId: 1001, savedAt: payload.now },
-                expired: false,
-              };
-            default:
-              return { success: true };
-          }
-        },
-        getURL: (resourcePath) => `chrome-extension://test/${resourcePath}`,
-        getManifest: () => ({ version: "1.6.0" }),
+  await context.addInitScript(
+    ({ buildSource, payload }) => {
+      // The stub is rebuilt inside the page from its own source, because an
+      // init script only receives plain data.
+      const build = new Function(`return (${buildSource});`)();
+      window.chrome = build(payload);
+    },
+    {
+      buildSource: buildChromeStub.toString(),
+      payload: {
+        local: chrome.local.values,
+        words: WORDS,
+        notes: NOTES,
+        review: SAMPLE_REVIEW,
+        library: LIBRARY,
+        transcript: TRANSCRIPT,
+        analysis: ANALYSIS,
+        videoInfo: VIDEO_INFO,
+        now: NOW,
       },
-      storage: { local, session, onChanged: { addListener() {} } },
-      tabs: {
-        query: async () => [{ id: 1, url: "https://www.youtube.com/watch?v=abc123xyz" }],
-        sendMessage: async () => ({}),
-        onUpdated: { addListener() {} },
-        create: async () => ({ id: 1 }),
-        remove: async () => {},
-      },
-      windows: { getCurrent: async () => ({ id: 1 }) },
-      i18n: { getMessage: (key) => key },
-      action: { setBadgeText: async () => {} },
-    };
-  }, {
-    local: chrome.local.values,
-    words: WORDS,
-    notes: NOTES,
-    review: SAMPLE_REVIEW,
-    library: LIBRARY,
-    transcript: TRANSCRIPT,
-    analysis: ANALYSIS,
-    now: NOW,
-  });
+    },
+  );
 
   const page = await context.newPage();
   const errors = [];
   page.on("console", (message) => {
     if (message.type() === "error") errors.push(message.text());
   });
-  page.on("pageerror", (error) => errors.push(String(error)));
+  page.on("pageerror", (error) => errors.push(String(error && error.stack ? error.stack : error)));
 
   await page.goto(`file://${path.join(root, "sidepanel.html")}`);
-  await page.waitForTimeout(700);
+  await page.waitForTimeout(900);
 
-  const tabs = ["transcript", "summary", "notes", "words", "library"];
+  const failures = [];
+
+  const boot = await page.evaluate(READ_PANEL_STATE);
+  if (boot.error === "visible") {
+    failures.push(
+      `The panel booted into its error screen ("${boot.errorTitle}: ${boot.errorMessage}"). ` +
+        `A review that photographs an error screen is not a review of the product.`,
+    );
+  }
+  if (boot.results !== "visible") {
+    failures.push(
+      `The panel never reached its results view (welcome=${boot.welcome}, ` +
+        `loading=${boot.loading}, error=${boot.error}, results=${boot.results}).`,
+    );
+  }
+
+  const tabs = Object.keys(TAB_EXPECTATIONS);
   for (const tab of tabs) {
     await page.evaluate((name) => {
       const button = document.querySelector(`[data-tab="${name}"]`);
       if (button) button.click();
     }, tab);
     await page.waitForTimeout(600);
+
+    // The summary is behind a paywall gate on purpose: it costs the user
+    // money, so it is never bought by opening the tab. A review has to walk
+    // through the gate the user walks through, or it never sees the summary
+    // at all.
+    if (tab === "overview") {
+      const gateVisible = await page.evaluate(() => {
+        const gate = document.getElementById("summaryGate");
+        return gate ? !gate.hidden : false;
+      });
+      if (gateVisible) {
+        await page.evaluate(() => {
+          document.getElementById("summaryGenerateBtn")?.click();
+        });
+        await page.waitForTimeout(1200);
+      }
+    }
+
     await page.screenshot({ path: path.join(outDir, `${tab}.png`), fullPage: true });
-    const visible = await page.evaluate((name) => {
-      const panel = document.querySelector(`[data-panel="${name}"]`);
-      if (!panel) return "no panel";
-      return panel.classList.contains("hidden") || panel.hidden ? "hidden" : "shown";
-    }, tab);
-    console.log(`${tab}: ${visible}`);
+
+    const state = await page.evaluate(READ_PANEL_STATE);
+    const expectation = TAB_EXPECTATIONS[tab];
+
+    // The tab that was clicked has to be the tab that is on screen. A panel
+    // that quietly shows the wrong tab is a broken panel, and the first
+    // version of this gate missed exactly that.
+    const activeTab = await page.evaluate(() => {
+      const active = document.querySelector(".tab-panel.active");
+      return active ? active.dataset.panel : "";
+    });
+    if (activeTab !== expectation.panel) {
+      failures.push(
+        `Clicking the ${tab} tab showed the "${activeTab}" panel, ` +
+          `not the "${expectation.panel}" one.`,
+      );
+      console.log(`${tab}: WRONG PANEL (${activeTab})`);
+      continue;
+    }
+
+    if (state[expectation.panel] !== "visible") {
+      failures.push(`The ${tab} tab is not visible (${state[expectation.panel]}).`);
+      console.log(`${tab}: panel ${state[expectation.panel]}`);
+      continue;
+    }
+    if (expectation.text) {
+      const text = state[expectation.countKey];
+      if (!text) {
+        failures.push(`The ${tab} tab is visible but empty (no ${expectation.countKey}).`);
+        console.log(`${tab}: visible, EMPTY`);
+        continue;
+      }
+    } else {
+      const count = state[expectation.countKey];
+      if (typeof count !== "number" || count < expectation.atLeast) {
+        failures.push(
+          `The ${tab} tab is visible but shows ${count} item(s); ` +
+            `at least ${expectation.atLeast} was expected.`,
+        );
+        console.log(`${tab}: visible, ${count} item(s)`);
+        continue;
+      }
+    }
+
+    // A card with nothing on it is not a card. The review card reads its
+    // term out of `review.vocabulary.term`, so a payload with the wrong
+    // shape leaves the user with a "Show answer" button and no word.
+    if (tab === "words" && !state.reviewCardHidden && !state.reviewTerm) {
+      failures.push(
+        "The review card is showing but has no term on it. The panel reads " +
+          "the term from review.vocabulary.term; a payload with a different " +
+          "shape leaves an empty card.",
+      );
+      console.log(`${tab}: loaded, but the review card is empty`);
+      continue;
+    }
+
+    console.log(`${tab}: loaded`);
   }
 
   if (errors.length) {
-    console.log("\nCONSOLE ERRORS:");
-    for (const error of errors) console.log("  " + error);
-  } else {
-    console.log("\nNo console errors.");
+    failures.push(
+      `The panel logged ${errors.length} console error(s) while loading:\n` +
+        errors.map((error) => `    ${error}`).join("\n"),
+    );
   }
-  console.log(`\nScreenshots in ${outDir}`);
 
+  if (failures.length) {
+    console.error("\nPANEL REVIEW FAILED:");
+    for (const failure of failures) console.error(`  - ${failure}`);
+    console.error(`\nScreenshots in ${outDir} (they show the broken state, not the product).`);
+    await browser.close();
+    process.exit(1);
+  }
+
+  console.log("\nThe panel loaded every tab with no console error.");
+  console.log(`Screenshots in ${outDir}`);
   await browser.close();
 }
 
