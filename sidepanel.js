@@ -7296,16 +7296,45 @@ const translationPriceConfirmed = new Set();
  * the number of lines that are not translated yet. A transcript that is
  * already translated costs nothing, and there is nothing to ask about.
  *
+ * The summary and the notes screens are translated as well, and they are
+ * not free either: each one is its own batch, and a long summary is more
+ * than one. They used to be left out of this number and bought later, on a
+ * tab the user had only opened - so a user who agreed to "43 calls" for the
+ * transcript was charged a further thirty for reading their own summary.
+ * The number the user agrees to is the whole bill for this video.
+ *
  * @returns {number} the number of calls, 0 when there is nothing to pay for.
  */
 function translationCallsToPayFor() {
-  const segments = getActiveTranscriptSegments();
-  const pending = segments.filter(
-    (segment) =>
-      !transcriptParagraphCache.has(transcriptTranslationCacheKey(segment)),
+  const batches = (segments, isCached) => {
+    const pending = segments.filter((segment) => !isCached(segment));
+    if (!pending.length) return 0;
+    return Math.ceil(pending.length / TRANSLATION_BATCH_SIZE);
+  };
+
+  const transcriptSegments = getActiveTranscriptSegments();
+  let calls = batches(transcriptSegments, (segment) =>
+    transcriptParagraphCache.has(transcriptTranslationCacheKey(segment)),
   );
-  if (!pending.length) return 0;
-  return Math.max(1, Math.ceil(pending.length / TRANSLATION_BATCH_SIZE));
+
+  // The interface text is keyed by the surface and the text, so a summary
+  // that was already translated is not paid for twice.
+  const interfaceCalls = (surface, segments) =>
+    batches(segments, (segment) =>
+      interfaceTranslationCache.has(
+        interfaceTranslationCacheKey(surface, segment.id, segment.text),
+      ),
+    );
+  calls += interfaceCalls("overview", getOverviewTranslationSegments());
+  calls += interfaceCalls(
+    "notes",
+    currentNotes.map((note, index) => ({
+      id: getNoteTranslationId(note, index),
+      text: note.text || "",
+    })),
+  );
+
+  return calls;
 }
 
 /**

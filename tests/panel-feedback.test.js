@@ -2013,3 +2013,66 @@ test("the word card keeps the time in its own element", async () => {
   assert.ok(stamp, "the time is still glued to the video title");
   assert.equal(stamp.textContent, "1:30", "the chip does not say the moment");
 });
+
+test("the price the user agrees to covers the summary and the notes too", async () => {
+  // The question named the transcript's batches and left out the other two
+  // screens. A user who agreed to "14 calls" was charged more than twenty
+  // when they opened their own summary, and nothing asked them again.
+  const calls = [];
+  const router = workerRouter({
+    analyzeTranscript: async () => {
+      calls.push("analyze");
+      return {
+        success: true,
+        analysis: {
+          summary: "A summary the reader will want in Chinese.",
+          chapters: [
+            { title: "A chapter", summary: "A chapter summary", timestampSeconds: 1 },
+          ],
+          keyQuotes: [{ quote: "A quote", timestampSeconds: 2 }],
+        },
+      };
+    },
+    translateContent: async () => {
+      calls.push("translate");
+      return { success: true, translatedContent: { segments: [] } };
+    },
+  });
+  const panel = createPanel({ sendMessageImpl: router });
+  await waitForBoot(panel);
+  await panel.helpers.startDigest(
+    "videoA",
+    "https://www.youtube.com/watch?v=videoA",
+  );
+  await flush();
+  // The user asked for a summary, so there is a summary to translate. The
+  // digest does not build one on its own: the summary is paid for, so it
+  // waits for the button.
+  await panel.helpers.triggerAnalysis();
+  await flush();
+
+  // The user picks Chinese and reads the number the panel is asking for.
+  await panel.click(panel.el("contentLanguageChinese"));
+  const modal = panel.el("translationCostModal");
+  assert.ok(modal, "the switch started paying without asking");
+  const stated = Number(
+    (modal.textContent.match(/at least\s+(\d+)\s+times?/i) || [])[1],
+  );
+  assert.ok(stated > 0, `the question states no number of calls: ${modal.textContent}`);
+
+  // The summary and the notes are translated by the same switch, so the
+  // number has to be big enough to pay for them as well.
+  await panel.click(panel.el("translationCostConfirmBtn"));
+  await flush();
+  await panel.helpers.switchTab("overview");
+  await flush();
+  await panel.helpers.switchTab("notes");
+  await flush();
+
+  const spent = calls.filter((call) => call === "translate").length;
+  assert.ok(
+    spent <= stated,
+    `the panel asked for ${stated} calls and made ${spent}: the price it ` +
+      `named did not cover the screens it then translated`,
+  );
+});
