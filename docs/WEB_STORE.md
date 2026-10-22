@@ -121,8 +121,11 @@ and words you choose to back up are mirrored to this project's own sync service,
 linked to your GitHub account. There is no advertising, no analytics, and no
 telemetry. The privacy policy linked from this listing describes every data flow.
 
-The extension needs one AI provider key before it can do anything. A Supadata key
-is optional and only used as a fallback when the page cannot be read.
+The extension works without any key: the transcript, the notes and the vocabulary
+all run on your own machine. One AI provider key (DeepSeek, MiniMax, or OpenCode
+Go) turns on the summary, the translation and the explanations, and the panel
+says which half is waiting for one. A Supadata key is optional and only used as a
+fallback when the page cannot be read.
 ```
 
 **类别**：Productivity / Education
@@ -155,7 +158,10 @@ is optional and only used as a fallback when the page cannot be read.
 稳定可用的下载地址（README 里用的是相对路径，复制到别处贴不出来）。文件名里有
 空格，URL 里必须写成 `%20`。
 
-**5 张已经齐了**，都在 `store/` 目录，全部是 1280x800（商店要的 16:10）：
+**5 张在位，尺寸对，但内容已经落后一个版本。** 都在 `store/` 目录，全部是
+1280x800（商店要的 16:10）。第五轮改过界面（时间戳统一成一颗药丸、列表改成
+真列表、语言切换改成单选组、费用说明挪到字幕页），这五张拍的是改之前的样子；
+上架前要用 `.review/` 这一轮新拍的图重做。详见下面的「拍不到的那几张」。
 
 | 文件 | 拍的是什么 | 怎么来的 |
 | --- | --- | --- |
@@ -245,5 +251,8 @@ GitHub 登录名。它们不参与上架。
 - [ ] **支持邮箱**。商店要求一个有人看的联系方式，仓库现在没有。
 - [ ] **`manifest.json` 的 `name`**。如果因为商标问题换商店名称，这个文件要同步改
       （不在本文档组的改动范围内）。
-- [x] **版本号**。`manifest.json` 和 `package.json` 已经一起 bump 到 **1.7.3**，
-      `dist/youtube-digest-v1.7.3.zip` 已生成。上架时用这个包。
+- [x] **版本号**。`manifest.json` 和 `package.json` 已经一起 bump 到 **1.7.3**。
+- [ ] **重新打包**。`dist/youtube-digest-v1.7.3.zip` 是第五轮改界面**之前**
+      打的包，里面没有这一轮的修复。上架前在仓库根目录跑一次 `npm run package`，
+      用新生成的包。`tests/release.test.js` 现在会核对包里的文件就是白名单里那一份，
+      但它核对不了「这个包是不是当前代码打的」——所以这一步只能靠人。
