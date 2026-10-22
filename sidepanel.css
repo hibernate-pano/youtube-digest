@@ -111,6 +111,10 @@ body {
   flex-direction: column;
   align-items: flex-end;
   gap: var(--sp-2);
+  /* The video info is hidden when there is no video, and then the actions
+     would be the only thing in the row and would sit at the left edge.
+     They belong at the right in every state. */
+  margin-left: auto;
 }
 
 .settings-btn,
@@ -1974,6 +1978,35 @@ body.toast-visible .follow-playback-btn {
 .notes-current-time.is-warning {
   font-family: var(--font-sans);
   color: var(--danger);
+}
+
+/* ============================================================
+   THE HEADER
+   ============================================================ */
+
+/* The panel says which of its features need a key. It is a note about
+   what is missing, not a failure, so it reads like a note. */
+.key-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-raised);
+}
+
+.key-notice[hidden] {
+  display: none;
+}
+
+.key-notice-text {
+  font-family: var(--font-sans);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--text-secondary);
 }
 
 .notes-meta {

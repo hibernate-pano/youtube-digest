@@ -183,6 +183,9 @@ const PANEL_ELEMENT_IDS = [
   "syncAccount",
   "copyTranscriptBtn",
   "exportTranscriptBtn",
+  "aiKeyNotice",
+  "aiKeyNoticeText",
+  "aiKeyNoticeBtn",
 ];
 
 function createStorageArea(initial = {}) {
@@ -501,12 +504,12 @@ test("a broken background is reported with its own message, not a missing key", 
   assert.doesNotMatch(harness.el("errorMessage").textContent, /API key/);
 });
 
-test("adding the missing key later brings the panel back to life", async () => {
+test("adding the missing key later clears the notice", async () => {
   let hasKey = false;
   const harness = createPanelHarness({
     sendMessageImpl: async (message) => {
       if (message.action === "checkConfig") {
-        return { hasSupadataKey: hasKey, hasAiKey: false };
+        return { hasSupadataKey: true, hasAiKey: hasKey };
       }
       if (message.action === "getNotes") return { success: true, notes: [] };
       if (message.action === "syncNotes") return { success: true };
@@ -516,15 +519,31 @@ test("adding the missing key later brings the panel back to life", async () => {
   });
 
   await harness.fire("DOMContentLoaded");
-  assert.equal(harness.el("errorState").style.display, "block");
+
+  // The panel is open: a missing key does not stop it, because reading,
+  // notes and the vocabulary do not need one.
+  assert.notEqual(
+    harness.el("errorState").style.display,
+    "block",
+    "a missing key stops the whole panel",
+  );
+  assert.equal(
+    harness.el("aiKeyNotice").hidden,
+    false,
+    "the panel does not say which features are waiting for a key",
+  );
 
   hasKey = true;
   harness.fireStorageChange({
-    ytd_settings: { oldValue: {}, newValue: { supadataApiKey: "sd_test" } },
+    ytd_settings: { oldValue: {}, newValue: { aiApiKey: "test" } },
   });
   await harness.flush();
 
-  assert.notEqual(harness.el("errorState").style.display, "block");
+  assert.equal(
+    harness.el("aiKeyNotice").hidden,
+    true,
+    "the panel still asks for a key the user has already added",
+  );
 });
 
 test("adding the fallback key later brings the transcript back", async () => {

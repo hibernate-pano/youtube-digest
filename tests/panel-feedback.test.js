@@ -807,7 +807,7 @@ test("the panel works without a Supadata key and says so once", async () => {
   );
 });
 
-test("the panel stops when both keys are missing", async () => {
+test("the panel opens without any key and says which features need one", async () => {
   const panel = createPanel({
     sendMessageImpl: workerRouter({
       checkConfig: { hasSupadataKey: false, hasAiKey: false },
@@ -815,13 +815,25 @@ test("the panel stops when both keys are missing", async () => {
   });
   await panel.boot();
 
+  // The subtitles are read out of the page and the notes and the
+  // vocabulary stay on this device, so no key may stop the panel from
+  // opening. Locking the free half behind the paid half was a fossil of
+  // the time when the transcript key was required.
   assert.equal(
     panel.el("errorState").style.display,
-    "block",
-    "the panel runs without any key at all",
+    "none",
+    "the panel refuses to open without a key",
   );
-  const message = panel.el("errorMessage").textContent;
-  assert.match(message, /AI provider key/i, "the missing AI key is not named");
+
+  const notice = panel.el("aiKeyNotice");
+  assert.equal(notice.hidden, false, "the panel does not say what needs a key");
+  const text = panel.el("aiKeyNoticeText").textContent;
+  assert.match(text, /summary/i, "the notice does not name what is waiting");
+  assert.match(
+    text,
+    /notes/i,
+    "the notice does not say what works without a key",
+  );
 });
 
 test("the video the panel just read is cached for next time", async () => {

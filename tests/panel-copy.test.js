@@ -72,6 +72,29 @@ test("the copy table has no bracket in it", () => {
   );
 });
 
+test("no sentence in the copy table is written twice", () => {
+  // A key that appears twice is a key that was renamed once and the old
+  // name was left behind. The reader sees the second one; the first one
+  // is a sentence nobody chose, and a translator has to guess what it
+  // was for.
+  const source = read("sidepanel.js");
+  const table = source.match(/const PANEL_COPY = \{[\s\S]*?\n\};/);
+  assert.ok(table, "the panel needs a copy table");
+  const blocks = [
+    ["English", table[0].split('"zh-CN":')[0]],
+    ["Chinese", table[0].split('"zh-CN":')[1]],
+  ];
+  for (const [language, block] of blocks) {
+    const keys = [...block.matchAll(/^ {4}([A-Za-z0-9]+):/gm)].map((match) => match[1]);
+    const twice = keys.filter((key, index) => keys.indexOf(key) !== index);
+    assert.deepEqual(
+      twice,
+      [],
+      `the ${language} copy table says ${twice.join(", ")} twice`,
+    );
+  }
+});
+
 /* ============================================================
    The note composer has to say where the note will land.
 

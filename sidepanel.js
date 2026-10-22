@@ -35,6 +35,13 @@ let errorAction = null;
 // settings watcher uses it to know when a settings change should bring the
 // panel back to life.
 let awaitingApiKey = false;
+/**
+ * Whether the user has an AI key.
+ *
+ * The panel uses it to say what is waiting for a key instead of refusing
+ * to open. The AI features are the only ones that need one.
+ */
+let hasAiKey = false;
 // Which AI provider the user picked. The panel says whose key is missing,
 // and it can only say that if it knows the name.
 let activeProviderName = "";
@@ -258,12 +265,6 @@ const PANEL_COPY = {
     serviceErrorTitle: "YouTube Digest could not start",
     tryAgain: "Try Again",
     openSettings: "Open Settings",
-    apiKeysMissingTitle: "API Keys Missing",
-    addSupadataKey: "Add your Supadata API key in YouTube Digest Settings.",
-    // The subtitles are read out of the page itself, so the Supadata key is
-    // only a fallback. The AI key is what the summary and the translation
-    // need, so that is the one the dead end names first.
-    addAiKey: "Add your AI provider key in YouTube Digest Settings.",
     // The title says what happened, not what is missing from the setup. The
     // key is the second half of the story, and the body tells it.
     noCaptionsNoKeyTitle: "No subtitles to read",
@@ -314,6 +315,12 @@ const PANEL_COPY = {
       "No notes saved yet. Hover over a video and click Note to save.",
     costDisclosure:
       "AI calls use your own provider balance. Transcripts are read out of the page, so they cost nothing; only the fallback uses a Supadata credit.",
+    aiKeyNotice:
+      "The summary, the translation and the explanations need an AI key. Reading, notes and the vocabulary do not.",
+    summaryNeedsKey:
+      "Add an AI key to generate the summary. Reading, notes and the vocabulary work without one.",
+    aiKeyAdded:
+      "AI key added. The summary, the translation and the explanations are available now.",
     translationUnavailable: "Translation unavailable.",
     translationFailed: "Translation failed.",
     translationCancelled: "Translation cancelled.",
@@ -395,7 +402,6 @@ const PANEL_COPY = {
     wordStatusReviewing: "Reviewing",
     wordStatusMastered: "Mastered",
     deleteWord: "Delete word",
-    deleteNote: "Delete note",
     reviewTitle: "Review",
     reviewSignIn:
       "Sign in with GitHub to review your words on a schedule.",
@@ -518,11 +524,6 @@ const PANEL_COPY = {
     serviceErrorTitle: "YouTube Digest 无法启动",
     tryAgain: "重试",
     openSettings: "打开设置",
-    apiKeysMissingTitle: "缺少 API 密钥",
-    addSupadataKey: "请在 YouTube Digest 设置中填写 Supadata API 密钥。",
-    // 字幕直接从页面里读，Supadata 密钥只是兜底。摘要和翻译要的是 AI 密钥，
-    // 所以死胡同先说它。
-    addAiKey: "请在 YouTube Digest 设置中填写你的 AI 服务商密钥。",
     // 标题说发生了什么，而不是设置里少了什么。密钥是故事的另一半，
     // 正文会把它说出来。
     noCaptionsNoKeyTitle: "没有字幕可读",
@@ -565,6 +566,11 @@ const PANEL_COPY = {
       "还没有保存任何笔记。把鼠标移到视频上并点击视频上的「笔记」按钮即可保存。",
     costDisclosure:
       "AI 调用使用你自己的服务额度。字幕直接从页面里读，不花钱；只有兜底那一次会消耗 1 个 Supadata 额度。",
+    aiKeyNotice:
+      "摘要、翻译和讲解需要 AI 密钥。阅读、笔记和词汇本不需要。",
+    summaryNeedsKey:
+      "填入 AI 密钥后可以生成摘要。阅读、笔记和词汇本不需要密钥。",
+    aiKeyAdded: "AI 密钥已添加。摘要、翻译和讲解现在可以用了。",
     translationUnavailable: "翻译不可用。",
     translationFailed: "翻译失败。",
     translationCancelled: "翻译已取消。",
@@ -646,7 +652,6 @@ const PANEL_COPY = {
     wordStatusReviewing: "复习中",
     wordStatusMastered: "已掌握",
     deleteWord: "删除生词",
-    deleteNote: "删除笔记",
     reviewTitle: "复习",
     reviewSignIn: "使用 GitHub 登录后，可以按计划复习你的生词。",
     reviewEmptyState: "现在没有需要复习的生词。",
@@ -880,6 +885,26 @@ function applyPanelCopy() {
   if (document.documentElement) {
     document.documentElement.lang = panelLanguage;
   }
+
+  // The summary button's label says what the button will do, and what it
+  // will do depends on the key. The static copy cannot own it: a button
+  // that says "build the summary" and opens the settings is a button that
+  // lies, and changing the language is enough to make it lie.
+  updateSummaryButtonLabel();
+}
+
+/**
+ * Says what the summary button will do.
+ *
+ * Without a key the call cannot be made, so the button does the one thing
+ * that can change that: it opens the settings page. With a key it buys the
+ * summary. The label is the promise the button makes, so it is set wherever
+ * the language is set and wherever the gate is drawn.
+ */
+function updateSummaryButtonLabel() {
+  const button = document.getElementById("summaryGenerateBtn");
+  if (!button) return;
+  button.textContent = hasAiKey ? panelCopy("generateSummary") : panelCopy("openSettings");
 }
 
 /**
@@ -1428,8 +1453,13 @@ async function loadPanelContent() {
 
 /**
  * Reads the configuration and decides what the panel can do.
- * Only the transcript key gates the start: the AI key is required lazily by
- * the Overview tab, which explains the missing key where it is needed.
+ *
+ * Nothing gates the start. The subtitles are read out of the page, the
+ * notes and the vocabulary stay on this device, and only the AI features
+ * need a key — and they say so where they are used. The panel used to
+ * stop dead when both keys were missing, which was right while the
+ * transcript key was required and is a fossil now that it is not: it
+ * locked the free half of the product behind the paid half.
  */
 async function bootPanel() {
   const configStatus = await chrome.runtime
@@ -1446,14 +1476,10 @@ async function bootPanel() {
   // The panel says whose key is missing when one is. It can only say that
   // if it knows which provider the user picked.
   activeProviderName = String(configStatus?.provider || "").trim();
-
-  // A Supadata key is no longer a dead end. The subtitles are read out of
-  // the page itself first, and the key is only needed for the fallback. A
-  // user without one still gets the transcript of most videos.
-  if (!configStatus?.hasSupadataKey && !configStatus?.hasAiKey) {
-    showConfigError(configStatus);
-    return;
-  }
+  hasAiKey = Boolean(configStatus?.hasAiKey);
+  renderAiKeyNotice();
+  // The button promises what it will do, and what it will do just changed.
+  updateSummaryButtonLabel();
 
   // Only the fallback key is missing. The panel still works, so it says so
   // once and then gets out of the way: a notice that stays on screen would
@@ -1464,6 +1490,22 @@ async function bootPanel() {
   }
 
   await loadPanelContent();
+}
+
+/**
+ * Says which features are waiting for a key.
+ *
+ * The notice is in the header, so it is on every tab. It names the
+ * features that need a key and the ones that do not, because a user who
+ * is told only what is missing cannot tell whether the product is worth
+ * the key.
+ */
+function renderAiKeyNotice() {
+  const notice = document.getElementById("aiKeyNotice");
+  if (!notice) return;
+  const text = document.getElementById("aiKeyNoticeText");
+  if (text) text.textContent = panelCopy("aiKeyNotice");
+  notice.hidden = hasAiKey;
 }
 
 /**
@@ -1496,11 +1538,25 @@ function setupSettingsWatcher() {
  * already working keeps its state; only the dead end is left behind.
  */
 async function handleSettingsChanged() {
-  if (!awaitingApiKey) return;
   const configStatus = await chrome.runtime
     .sendMessage({ action: "checkConfig" })
     .catch(() => null);
   if (!configStatus || configStatus.error) return;
+
+  // The key may have arrived while the panel was open. The notice has to
+  // go with it, or the panel keeps telling the user to add a key they
+  // have already added.
+  const hadAiKey = hasAiKey;
+  hasAiKey = Boolean(configStatus.hasAiKey);
+  if (hadAiKey !== hasAiKey) {
+    renderAiKeyNotice();
+    updateSummaryButtonLabel();
+    if (hasAiKey) {
+      announceStatus(panelCopy("aiKeyAdded"), { notice: true });
+    }
+  }
+
+  if (!awaitingApiKey) return;
   if (!configStatus.hasSupadataKey && !configStatus.hasAiKey) return;
   await bootPanel();
 }
@@ -1772,8 +1828,19 @@ function setupEventListeners() {
   document
     .getElementById("summaryGenerateBtn")
     ?.addEventListener("click", () => {
+      // Without a key the call cannot be made, so the button does the one
+      // thing that can change that: it opens the settings page.
+      if (!hasAiKey) {
+        openOptions();
+        return;
+      }
       void triggerAnalysis();
     });
+
+  // The notice in the header carries the same offer.
+  document.getElementById("aiKeyNoticeBtn")?.addEventListener("click", () => {
+    openOptions();
+  });
 
   // Notes: compose, export.
   document
@@ -3390,28 +3457,6 @@ function openOptions() {
 }
 
 /**
- * Shows the missing transcript key and waits for the user to add it. The
- * settings watcher brings the panel back once the key shows up.
- */
-function showConfigError(configStatus) {
-  awaitingApiKey = true;
-  showState("error");
-  // Which key is named first depends on which one the product cannot work
-  // without right now. Without an AI key there is no summary and no
-  // translation; without a Supadata key the fallback is gone, but the
-  // subtitles are read out of the page itself, so most videos still work.
-  const errorTitle = panelCopy("apiKeysMissingTitle");
-  const errorMessage = configStatus?.hasAiKey
-    ? panelCopy("addSupadataKey")
-    : panelCopy("addAiKey");
-  document.getElementById("errorTitle").textContent = errorTitle;
-  document.getElementById("errorMessage").textContent = errorMessage;
-  document.getElementById("errorBtn").textContent = panelCopy("openSettings");
-  announceAlert(`${errorTitle}. ${errorMessage}`, { notice: false });
-  errorAction = openOptions;
-}
-
-/**
  * Asks for the transcript again.
  *
  * A failed lookup leaves the ledger, so the retry really buys a second
@@ -3728,6 +3773,10 @@ function switchTab(tabName) {
  * The summary costs the user money, so the panel never buys it on its own.
  * The card states what the call costs, and the button is the only thing that
  * starts it. The user knows the price at the moment they agree to pay it.
+ *
+ * Without a key the call cannot be made at all, so the card does not quote
+ * a price for it. It says what is missing, and the button opens the
+ * settings page.
  */
 function renderSummaryGate() {
   const gate = document.getElementById("summaryGate");
@@ -3739,8 +3788,8 @@ function renderSummaryGate() {
   const button = document.getElementById("summaryGenerateBtn");
   if (button) {
     button.disabled = !hasVideo || isAnalysisInFlight();
-    button.textContent = panelCopy("generateSummary");
   }
+  updateSummaryButtonLabel();
 
   // The cost line sits right above the button, so the price is read at the
   // moment the user is about to spend it.
@@ -3750,7 +3799,9 @@ function renderSummaryGate() {
     cost.className = "summary-gate-cost";
     gate.appendChild(cost);
   }
-  cost.textContent = panelCopy("summaryCostNote");
+  cost.textContent = hasAiKey
+    ? panelCopy("summaryCostNote")
+    : panelCopy("summaryNeedsKey");
 }
 
 /**
@@ -6934,7 +6985,6 @@ globalThis.__YTD_PANEL_TESTING__ = {
   loadNotesFilter,
   showError,
   showTranscriptError,
-  showConfigError,
   showServiceError,
   renderAnalysisFailure,
   renderLocalizedContent,

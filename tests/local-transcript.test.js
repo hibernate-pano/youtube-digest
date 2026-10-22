@@ -871,20 +871,22 @@ test("the panel tells the worker which tab to read", () => {
   );
 });
 
-test("the panel does not stop at a missing Supadata key", () => {
+test("no key stops the panel from opening", () => {
   const source = read("sidepanel.js");
-  // The AI key is what the summary and the translation need. The Supadata
-  // key is only the fallback, so it must not be a dead end on its own.
+  // The subtitles are read out of the page, and the notes and the
+  // vocabulary stay on this device. Nothing about a missing key may stop
+  // the panel from opening: the free half of the product cannot live
+  // behind the paid half. The AI features say what they need where they
+  // are used.
   assert.doesNotMatch(
     source,
-    /if\s*\(\s*!configStatus\?\.hasSupadataKey\s*\)\s*\{\s*showConfigError/,
-    "a missing Supadata key still blocks the whole panel",
+    /if\s*\(\s*!configStatus\?\.has(?:Supadata|Ai)Key[^)]*\)\s*\{\s*showConfigError/,
+    "a missing key still stops the whole panel",
   );
-  // Both keys missing is still a dead end. The check has to keep that case.
-  assert.match(
+  assert.doesNotMatch(
     source,
-    /if\s*\(\s*!configStatus\?\.hasSupadataKey\s*&&\s*!configStatus\?\.hasAiKey\s*\)/,
-    "the panel no longer stops when both keys are missing",
+    /hasSupadataKey\s*&&\s*!configStatus\?\.hasAiKey/,
+    "the panel still stops when both keys are missing",
   );
 });
 

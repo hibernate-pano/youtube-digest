@@ -147,6 +147,22 @@
         the page, so they cost nothing; only the fallback uses a Supadata credit.
       </p>
 
+      <!--
+        The AI features need a key. Reading, notes and the vocabulary do
+        not, so the panel says which is which instead of refusing to open.
+      -->
+      <div class="key-notice" id="aiKeyNotice" hidden>
+        <span class="key-notice-text" id="aiKeyNoticeText"></span>
+        <button
+          class="enhance-btn"
+          id="aiKeyNoticeBtn"
+          type="button"
+          data-i18n="openSettings"
+        >
+          Open Settings
+        </button>
+      </div>
+
       <!-- Tab navigation -->
       <div
         class="tabs"

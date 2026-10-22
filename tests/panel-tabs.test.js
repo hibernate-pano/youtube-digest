@@ -1118,8 +1118,13 @@ test("a saved copy says so, so a note is filed under the right video", async () 
    The summary gate states the price once
    ============================================================ */
 
-test("the summary gate states the price once", () => {
-  const panel = createPanel({ sendMessageImpl: workerRouter() });
+test("the summary gate states the price once", async () => {
+  const panel = createPanel({
+    sendMessageImpl: workerRouter({
+      checkConfig: { hasSupadataKey: true, hasAiKey: true },
+    }),
+  });
+  await panel.helpers.bootPanel();
 
   panel.helpers.renderSummaryGate();
 
@@ -1133,6 +1138,87 @@ test("the summary gate states the price once", () => {
     priceLines.length,
     1,
     `the price is stated ${priceLines.length} times: ${JSON.stringify(priceLines)}`,
+  );
+});
+
+test("the summary gate does not quote a price for a call that cannot be made", async () => {
+  const panel = createPanel({
+    sendMessageImpl: workerRouter({
+      checkConfig: { hasSupadataKey: true, hasAiKey: false },
+    }),
+  });
+  await panel.helpers.bootPanel();
+
+  panel.helpers.renderSummaryGate();
+
+  const gate = panel.el("summaryGate");
+  assert.doesNotMatch(
+    gate.textContent,
+    /AI call/i,
+    "the gate quotes the price of a call the user cannot make",
+  );
+  assert.match(
+    gate.textContent,
+    /key/i,
+    "the gate does not say what is missing",
+  );
+  assert.equal(
+    panel.el("summaryGenerateBtn").textContent,
+    "Open Settings",
+    "the button does not do the one thing that can help",
+  );
+});
+
+test("the summary button opens the settings when there is no key", async () => {
+  const router = workerRouter({
+    checkConfig: { hasSupadataKey: true, hasAiKey: false },
+  });
+  const panel = createPanel({ sendMessageImpl: router });
+  // The panel has to know that it has no key: the button offers the one
+  // thing that can change that, and only when the call cannot be made.
+  await panel.helpers.bootPanel();
+  await panel.helpers.startDigest("videoA", VIDEO_URL);
+  await flush();
+
+  panel.helpers.renderSummaryGate();
+  await panel.click(panel.el("summaryGenerateBtn"));
+
+  // The panel is a live document: it keeps a timer running for the video
+  // it is showing. The window is closed here so the test file does not
+  // wait for a panel nobody is looking at any more. It happens before the
+  // assertions, so a panel that starts an analysis it cannot finish does
+  // not keep the test file alive either.
+  panel.dom.window.close();
+
+  assert.equal(
+    router.calls.filter((call) => call.action === "analyzeTranscript").length,
+    0,
+    "the button tried to buy a summary that cannot be made",
+  );
+  assert.equal(
+    router.calls.filter((call) => call.action === "openOptions").length,
+    1,
+    "the button did not open the settings",
+  );
+});
+
+test("the summary button still says what it will do after the language changes", async () => {
+  const panel = createPanel({
+    sendMessageImpl: workerRouter({
+      checkConfig: { hasSupadataKey: true, hasAiKey: false },
+    }),
+    language: "zh-CN",
+  });
+  await panel.helpers.bootPanel();
+  // The language is applied again, the way it is when the user changes it
+  // on the settings page while the panel is open.
+  await panel.helpers.loadPanelLanguage();
+  await flush();
+
+  assert.equal(
+    panel.el("summaryGenerateBtn").textContent,
+    "打开设置",
+    "the button says it will build a summary it cannot build",
   );
 });
 
