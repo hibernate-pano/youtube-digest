@@ -36,6 +36,8 @@ server/backups/
 # Environment
 .env
 .env.*
+# 但模板要提交：它是变量契约的说明书，不含真值
+!.env.example
 *.pem
 *.key
 
