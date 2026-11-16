@@ -28,10 +28,14 @@ The absolute address of the image above, for use outside this repository. The fi
 - Deleting your account removes what the account left on this device, including the deletions that had not reached the server yet.
 - "Delete all notes" now deletes on your account as well as on this device. If the account cannot do it, the extension says so and deletes nothing, instead of letting you find out later.
 - The first time you sign in, the extension tells you how many notes and words moved into your account.
-- The price of a translation is agreed before it is spent. Switching to Chinese or to the bilingual view asks once and says how many calls it takes, and the panel keeps to that number: a summary that arrives later, a tab you open, a note you write, none of them spends past what you agreed to.
+- The price of a translation is agreed before it is spent. Switching to Chinese or to the bilingual view asks once and says the most calls it will make, and the panel never makes more: a summary that arrives later, a tab you open, a note you write, each one asks before it spends past what you agreed to, and the retries the panel makes on its own are inside the number it named, not extra.
 - A missing provider key opens a dialog that takes you to Settings, instead of a sentence that says your word could not be read.
 - The sync service can hand out your notes and your words separately, so an account too large for one file can still be taken out, and it says when it could not answer the whole question.
 - Your notes are really deleted on the account when you ask for it. The service marks them deleted and clears them for good after thirty days, and the extension tells you how many were removed.
+- The mark of the line being spoken follows the video. It used to stay on a line you had already scrolled past, so the panel pointed at the wrong place in the talk.
+- The keyboard stays where you left it in the transcript: moving the window to draw the next screenful no longer drops you back to the top of the panel.
+- A word that could not be deleted says the word could not be deleted, instead of the sentence about saving.
+- A selection that runs past one screenful is drawn at both ends, so holding shift can carry the selection the whole way down the transcript. The search is read again when you change the display language, so the count is never the answer for the language that went away.
 
 ## New in v1.7.3
 
