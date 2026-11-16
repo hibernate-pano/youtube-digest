@@ -750,8 +750,9 @@ MUTATIONS = [
             # agreed to. Without the question the panel spends the user's
             # balance on a summary that landed after the price was stated.
             (
-                """  const missing = budget.spent + wanted - budget.confirmed;
-  const agreed = await confirmTranslationCost(missing);
+                """  const agreed = await confirmTranslationCost(
+    translationCallsInTotal(budget.spent + wanted, budget.failures),
+  );
   if (!agreed) {
     translationBudgetLedger.set(key, budget);
     return false;
@@ -1004,6 +1005,37 @@ MUTATIONS = [
             (
                 "panel-scale.test.js",
                 "the sign-out asks about the items that only exist on this device",
+            ),
+        ],
+    },
+    {
+        "name": "M40 the stated price forgets the retries already paid for",
+        "file": "sidepanel.js",
+        "hunks": [
+            # The number the price question names is the ceiling for every
+            # call this video makes. Subtracting the retries that have
+            # already gone out names a smaller total than the panel can
+            # still reach, so the reader agrees to six calls and is
+            # charged seven.
+            (
+                """function translationCallsInTotal(work, retries = 0) {
+  return (
+    Math.max(0, Number(work) || 0) +
+    Math.max(TRANSLATION_FAILURE_ALLOWANCE, Number(retries) || 0)
+  );
+}""",
+                """function translationCallsInTotal(work, retries = 0) {
+  return (
+    Math.max(0, Number(work) || 0) +
+    Math.max(0, TRANSLATION_FAILURE_ALLOWANCE - (Number(retries) || 0))
+  );
+}""",
+            ),
+        ],
+        "expect": [
+            (
+                "panel-feedback.test.js",
+                "a retry that already went out is counted in the next price question",
             ),
         ],
     },

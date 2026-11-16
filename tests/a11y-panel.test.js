@@ -1371,6 +1371,35 @@ test("selecting text near the left edge keeps the toolbar on the panel", async (
   assert.ok(left <= 360 - 73, "the toolbar ends inside the panel");
 });
 
+// ============================================================
+// P1-4: the keyboard stays where the reader left it
+// ============================================================
+
+test("the keyboard stays on the control the reader was on when the list is drawn again", async () => {
+  const harness = await createLoadedHarness();
+
+  const button = harness.document.querySelector("#transcriptList .transcript-time");
+  assert.ok(button, "the transcript row has a timestamp control");
+  button.focus();
+  assert.ok(
+    harness.document.activeElement === button,
+    "the control did not take the keyboard",
+  );
+
+  // The list is drawn again from scratch every time the window moves. The
+  // control the reader was on is thrown away with the old row, and the
+  // keyboard has to go with the new one that took its place.
+  harness.helpers.renderTranscript();
+  await harness.flush();
+
+  const drawn = harness.document.querySelector("#transcriptList .transcript-time");
+  assert.ok(drawn, "the transcript is on the screen");
+  assert.ok(
+    harness.document.activeElement === drawn,
+    "the keyboard was dropped when the list was drawn again",
+  );
+});
+
 // The harness is exported so other test files can drive the panel the same
 // way. The extension never reads this module.
 module.exports = {

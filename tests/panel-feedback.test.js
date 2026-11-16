@@ -1473,6 +1473,40 @@ test("deleting a word says the word was deleted", async () => {
   );
 });
 
+test("a word that could not be deleted says so", async () => {
+  const router = workerRouter({
+    getVocabulary: {
+      success: true,
+      items: [{ id: "vocab_1", term: "spaced repetition", translation: "间隔重复" }],
+    },
+    deleteVocabulary: { success: false, error: "The store is read only." },
+  });
+  const panel = createPanel({ sendMessageImpl: router });
+  await panel.boot();
+  await panel.helpers.loadVocabulary();
+
+  await panel.click(panel.el("wordsList").querySelector(".word-delete"));
+  await flush();
+
+  // The word is still on the screen, so the panel has to say that the word
+  // could not be deleted. "Could not save" is about something else, and a
+  // screen reader user who hears it cannot tell what happened to the word.
+  assert.match(
+    panel.el("panelAlert").textContent,
+    /could not be deleted/i,
+    "the panel did not say that the word could not be deleted",
+  );
+  assert.doesNotMatch(
+    panel.el("panelAlert").textContent,
+    /could not save/i,
+    "the panel said something about saving instead of about the word",
+  );
+  assert.ok(
+    panel.el("wordsList").querySelector(".word-delete"),
+    "the word is gone even though the delete failed",
+  );
+});
+
 test("the same message is announced again the second time", async () => {
   // A live region only speaks when its text changes. Writing the same
   // sentence twice left the region untouched the second time, so a user
@@ -2094,7 +2128,7 @@ test("the price the user agrees to covers the summary and the notes too", async 
   const modal = panel.el("translationCostModal");
   assert.ok(modal, "the switch started paying without asking");
   const stated = Number(
-    (modal.textContent.match(/at least\s+(\d+)\s+times?/i) || [])[1],
+    (modal.textContent.match(/at most\s+(\d+)\s+times?/i) || [])[1],
   );
   assert.ok(stated > 0, `the question states no number of calls: ${modal.textContent}`);
 
@@ -2119,7 +2153,7 @@ test("the price the user agrees to covers the summary and the notes too", async 
  * The number of provider calls the price question names.
  */
 function statedCalls(modal) {
-  return Number((modal.textContent.match(/at least\s+(\d+)\s+times?/i) || [])[1]);
+  return Number((modal.textContent.match(/at most\s+(\d+)\s+times?/i) || [])[1]);
 }
 
 test("a summary that lands after the price was agreed to asks again", async () => {
@@ -2220,6 +2254,150 @@ test("a summary that lands after the price was agreed to asks again", async () =
   assert.ok(
     requests.length <= agreed,
     `the panel spent ${requests.length} calls for a price of ${agreed}`,
+  );
+});
+
+test("the panel makes no more calls than the price it asked for", async () => {
+  // The provider keeps refusing. The panel tries again, because a rate
+  // limit goes away on its own, and every try is a call the reader's
+  // balance pays for. The number the price question named has to cover
+  // them all: the panel must never make a call the reader was not asked
+  // about.
+  const requests = [];
+  const router = workerRouter({
+    translateContent: async (message) => {
+      requests.push(message);
+      return {
+        success: false,
+        error: "Rate limited - try again in a moment",
+        code: "RATE_LIMITED",
+      };
+    },
+  });
+  const panel = createPanel({ sendMessageImpl: router });
+  await waitForBoot(panel);
+  await panel.helpers.startDigest(
+    "videoA",
+    "https://www.youtube.com/watch?v=videoA",
+  );
+  await flush();
+
+  // The user picks Chinese and reads the number the panel is asking for.
+  await panel.click(panel.el("contentLanguageChinese"));
+  const modal = panel.el("translationCostModal");
+  assert.ok(modal, "the switch started paying without asking");
+  const stated = statedCalls(modal);
+  assert.ok(stated > 0, `the question states no number of calls: ${modal.textContent}`);
+
+  await panel.click(panel.el("translationCostConfirmBtn"));
+  await flush();
+
+  // The clock runs long past every wait the panel would use, so every
+  // attempt it wants to make has been made.
+  panel.clock.advance(60_000);
+  await flush();
+
+  assert.ok(
+    requests.length <= stated,
+    `the panel asked for ${stated} calls and made ${requests.length}`,
+  );
+});
+
+test("a retry that already went out is counted in the next price question", async () => {
+  // The transcript hits a rate limit on its first try and the panel pays
+  // for a second call. A summary then lands late, so the panel asks again.
+  // The number it states has to be the ceiling for every call this video
+  // makes - including the retry that already went out. The panel used to
+  // subtract the retries already spent from the stated number, which named
+  // a total the panel could still pass: the reader agreed to six and was
+  // charged seven.
+  const requests = [];
+  let transcriptAttempts = 0;
+  let summaryLanded = false;
+  const router = workerRouter({
+    analyzeTranscript: {
+      success: true,
+      analysis: {
+        summary: "A summary the reader will want in Chinese.",
+        chapters: [
+          { title: "A chapter", summary: "A chapter summary", timestampSeconds: 1 },
+        ],
+        keyQuotes: [{ quote: "A quote", timestampSeconds: 3 }],
+      },
+    },
+    translateContent: async (message) => {
+      requests.push(message);
+      if (!summaryLanded && transcriptAttempts++ === 0) {
+        return {
+          success: false,
+          error: "Rate limited - try again in a moment",
+          code: "RATE_LIMITED",
+        };
+      }
+      if (summaryLanded) {
+        return {
+          success: false,
+          error: "Rate limited - try again in a moment",
+          code: "RATE_LIMITED",
+        };
+      }
+      return {
+        success: true,
+        translatedContent: {
+          segments: (message.content?.segments || []).map((segment) => ({
+            id: segment.id,
+            text: "译文",
+          })),
+        },
+      };
+    },
+  });
+  const panel = createPanel({ sendMessageImpl: router });
+  await waitForBoot(panel);
+  await panel.helpers.startDigest(
+    "videoA",
+    "https://www.youtube.com/watch?v=videoA",
+  );
+  await flush();
+
+  // The reader pays for the transcript. The first call is refused and the
+  // panel pays for one more, so that retry is a call the panel already
+  // made when the next question is asked.
+  await panel.click(panel.el("contentLanguageChinese"));
+  assert.ok(panel.el("translationCostModal"), "the switch started paying without asking");
+  await panel.click(panel.el("translationCostConfirmBtn"));
+  await flush();
+  panel.clock.advance(5000);
+  await flush();
+  assert.equal(requests.length, 2, "the retry did not go out");
+
+  // The summary lands after the price was agreed to.
+  summaryLanded = true;
+  await panel.helpers.triggerAnalysis();
+  await flush();
+  await panel.helpers.switchTab("overview");
+  await flush();
+
+  const second = panel.el("translationCostModal");
+  assert.ok(second, "the summary was paid for without asking again");
+  const stated = statedCalls(second);
+  assert.ok(stated > 0, `the question states no number of calls: ${second.textContent}`);
+
+  await panel.click(panel.el("translationCostConfirmBtn"));
+  await flush();
+
+  // Every attempt the panel wants to make has been made, including the
+  // retries it is allowed to pay for on its own. The wait between two
+  // attempts is polled, so the clock is moved in steps and the panel is
+  // given a turn after each one.
+  for (let step = 0; step < 12; step += 1) {
+    panel.clock.advance(10_000);
+    await flush();
+  }
+
+  assert.ok(
+    requests.length <= stated,
+    `the panel stated at most ${stated} calls and made ${requests.length}`,
   );
 });
 

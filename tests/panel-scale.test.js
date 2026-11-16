@@ -132,6 +132,47 @@ test("the transcript window follows the reader", async () => {
   );
 });
 
+test("the search reads the words that are on the screen again", async () => {
+  const panel = await panelWithTranscript(3000, {
+    translateContent: (message) => ({
+      success: true,
+      translatedContent: {
+        segments: message.content.segments.map((segment) => ({
+          id: segment.id,
+          text: "译文",
+        })),
+      },
+    }),
+  });
+
+  await search(panel, "caption");
+  assert.match(
+    panel.el("transcriptSearchCount").textContent,
+    /3000 found/,
+    "the word is not in the transcript",
+  );
+
+  // The reader reads the video in Chinese. The rows say something else
+  // now, and the word is not in what they say.
+  await panel.helpers.handleDisplayLanguageModeChange("zh");
+  await flush();
+  assert.doesNotMatch(
+    panel.el("transcriptSearchCount").textContent,
+    /3000 found/,
+    "the search still counts the words of the language that went away",
+  );
+
+  // The reader goes back to the original language. The words are the
+  // original words again, so the search has to find them again.
+  await panel.helpers.handleDisplayLanguageModeChange("original");
+  await flush();
+  assert.match(
+    panel.el("transcriptSearchCount").textContent,
+    /3000 found/,
+    "the search kept the answer of the language that went away",
+  );
+});
+
 // ============================================================
 // D4 - the word notebook is drawn a window at a time
 // ============================================================
@@ -287,6 +328,39 @@ test("the caret reads the rows it walks and not the whole transcript", async () 
   );
 });
 
+test("the caret walks past the first screenful while a selection grows", async () => {
+  const panel = await panelWithTranscript(3000);
+  const list = panel.el("transcriptList");
+  list.focus();
+
+  const press = () =>
+    list.dispatchEvent(
+      new panel.window.KeyboardEvent("keydown", {
+        key: "ArrowDown",
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+
+  // The reader holds the shift key and walks down the talk. A screenful
+  // is ninety rows, so the caret has to leave it behind.
+  for (let index = 0; index < 120; index += 1) press();
+
+  const selection = panel.window.getSelection();
+  const caretRow =
+    selection.focusNode?.parentElement?.closest?.(".transcript-entry")
+      ?.dataset.rowIndex;
+  assert.ok(
+    Number(caretRow) >= 100,
+    `the caret stopped at row ${caretRow} of the hundred and twenty the reader walked`,
+  );
+  assert.ok(
+    (selection.toString() || "").length > 100,
+    "the selection the reader made is gone",
+  );
+});
+
 // ============================================================
 // The features the window must not break
 // ============================================================
@@ -296,6 +370,46 @@ test("the playback highlight lands on the row that is being spoken", async () =>
   panel.helpers.highlightActiveEntry(300 * 3);
 
   const active = panel.all("#transcriptList .transcript-entry.active-playback");
+  assert.equal(active.length, 1, "the row that is spoken is not marked");
+  assert.equal(
+    active[0].dataset.seconds,
+    String(300 * 3),
+    "the wrong row is marked",
+  );
+});
+
+test("the playback mark leaves the row that is no longer spoken", async () => {
+  const panel = await panelWithTranscript(3000);
+
+  // The reader looked for a word, so the panel stopped following the
+  // playback and left the reader where they are.
+  await search(panel, "caption");
+
+  panel.helpers.highlightActiveEntry(0);
+  assert.equal(
+    panel.all(".transcript-entry.active-playback").length,
+    1,
+    "the row that is spoken is not marked",
+  );
+
+  // The video goes on, and the row that is spoken now is not on the
+  // screen. The panel does not pull the reader there, because the reader
+  // is not following the playback. The mark still has to follow the video.
+  panel.helpers.highlightActiveEntry(300 * 3);
+  assert.equal(
+    panel.all(".transcript-entry.active-playback").length,
+    0,
+    "the row that is no longer spoken is still marked",
+  );
+
+  // The reader scrolls to the row that is being spoken, and the mark is
+  // waiting for them there.
+  const area = panel.el("contentArea");
+  area.scrollTop = 300 * 68;
+  area.dispatchEvent(new panel.window.Event("scroll"));
+  await flush();
+
+  const active = panel.all(".transcript-entry.active-playback");
   assert.equal(active.length, 1, "the row that is spoken is not marked");
   assert.equal(
     active[0].dataset.seconds,

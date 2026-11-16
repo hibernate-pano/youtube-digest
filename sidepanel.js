@@ -73,6 +73,14 @@ const TRANSLATION_BATCH_SIZE = 3;
 // the panel gives up on it. This is how many times the panel asks on its
 // own: one try plus TRANSLATION_MAX_AUTO_RETRIES retries.
 const TRANSLATION_MAX_AUTO_RETRIES = 3;
+// The calls the panel may make on its own, over and above the work the
+// reader agreed to pay for. A batch that the provider refused is tried
+// again, and a hiccup must not cost the reader the translation they asked
+// for. The panel tries a refused batch three times on its own, and the
+// reader can ask for it once by hand: every one of those calls is paid
+// for, and the price question names them, so the whole bill is on the
+// screen before the first call goes out.
+const TRANSLATION_FAILURE_ALLOWANCE = TRANSLATION_MAX_AUTO_RETRIES + 1;
 // The pause between two attempts grows with every retry, so a provider that
 // is throttling the panel is given room to breathe.
 const TRANSLATION_RETRY_BASE_DELAY_MS = 2000;
@@ -357,7 +365,7 @@ const PANEL_COPY = {
     // out, because the number of calls is the number of bills.
     translationCostTitle: "Translate this video?",
     translationCostBatches:
-      "The whole transcript goes to the provider in small batches, so the provider is called at least {count} times.",
+      "The whole transcript goes to the provider in small batches, so the provider is called at most {count} times.",
     translationCostPrice:
       "A 20-minute video costs about $0.002 to $0.015 this way. The price depends on your provider and on the length of the video, and it comes out of your own provider balance.",
     translationCostConfirm: "Translate now",
@@ -456,6 +464,7 @@ const PANEL_COPY = {
     wordStatusMastered: "Mastered",
     deleteWord: "Delete word",
     wordDeleted: "Word deleted.",
+    wordDeleteFailed: "The word could not be deleted. Try again.",
     reviewTitle: "Review",
     reviewSignIn:
       "Sign in with GitHub to review your words on a schedule.",
@@ -662,7 +671,7 @@ const PANEL_COPY = {
     // 多少次、大概要花多少钱，因为调用次数就是账单次数。
     translationCostTitle: "要翻译这个视频吗？",
     translationCostBatches:
-      "整份字幕会分成小批次发给 AI 服务，所以至少会调用 {count} 次。",
+      "整份字幕会分成小批次发给 AI 服务，所以最多会调用 {count} 次。",
     translationCostPrice:
       "20 分钟的视频这样翻译大约 $0.002 到 $0.015。具体价格取决于你的服务方和视频长度，这笔费用从你自己的服务额度里扣。",
     translationCostConfirm: "现在翻译",
@@ -758,6 +767,7 @@ const PANEL_COPY = {
     wordStatusMastered: "已掌握",
     deleteWord: "删除生词",
     wordDeleted: "生词已删除。",
+    wordDeleteFailed: "生词删除失败，请重试。",
     reviewTitle: "复习",
     reviewSignIn: "使用 GitHub 登录后，可以按计划复习你的生词。",
     reviewEmptyState: "现在没有需要复习的生词。",
@@ -1427,11 +1437,22 @@ function translationRetryDelay(attempt, isStale) {
  * attempt already failed, and the payload never changes, so the cache key of
  * the batch stays the same.
  *
+ * Every attempt is a call to the provider, and every attempt is paid for.
+ * The first one is paid for by the caller, before it goes out. The retries
+ * are paid for here, out of the small number of calls the reader was told
+ * about: the panel does not put a second question on the screen in the
+ * middle of a translation.
+ *
  * `isStale` is asked before every attempt. When the user has moved on - a
  * different video, a different language mode - the panel stops instead of
  * paying for a result nobody is waiting for.
+ *
+ * @param {Object} message - the message for the worker.
+ * @param {Function} isStale - whether the answer is still wanted.
+ * @param {Function} [spendFailure] - pays for one more attempt.
+ * @returns {Promise<Object>} what the provider answered.
  */
-async function sendTranslationWithRetry(message, isStale) {
+async function sendTranslationWithRetry(message, isStale, spendFailure) {
   const stale = typeof isStale === "function" ? isStale : () => false;
   let lastResult = null;
   let lastError = null;
@@ -1443,6 +1464,19 @@ async function sendTranslationWithRetry(message, isStale) {
         error: panelCopy("translationCancelled"),
         cancelled: true,
       };
+    }
+    if (attempt > 0 && typeof spendFailure === "function") {
+      // The attempt after the first one is another call to the provider, and
+      // the reader's balance pays for it. When the calls the reader agreed
+      // to are used up, the panel stops instead of calling again: the row
+      // keeps its error, and the button that asks for it by hand is there.
+      if (!spendFailure()) {
+        return lastResult || {
+          success: false,
+          error: panelCopy("translationFailed"),
+          budgetSpent: true,
+        };
+      }
     }
     try {
       const result = await sendTranslationMessage(message);
@@ -1803,24 +1837,94 @@ function windowedListRange(state) {
   );
 
   // The pinned rows have to be on the screen whatever the reader is
-  // looking at.
+  // looking at: both ends of a selection have to be drawn for the range
+  // between them to exist.
   const pinStart = Math.min(state.pinStart, state.pinEnd);
   const pinEnd = Math.max(state.pinStart, state.pinEnd);
-  if (pinStart >= 0) {
-    start = Math.min(start, pinStart);
-    end = Math.max(end, pinEnd + 1);
-  }
-
-  if (end - start > state.rowsOnScreen) end = start + state.rowsOnScreen;
-  if (end - start > WINDOWED_LIST_MAX_ROWS) {
+  const pinned = pinStart >= 0 ? pinEnd - pinStart + 1 : 0;
+  if (pinned > WINDOWED_LIST_MAX_ROWS) {
     // The pinned rows are further apart than a list may hold. The window
     // follows the reader and the pin is let go.
-    end = start + WINDOWED_LIST_MAX_ROWS;
     state.pinStart = -1;
     state.pinEnd = -1;
+  } else if (pinned > 0) {
+    const wantedStart = Math.min(start, pinStart);
+    const wantedEnd = Math.max(end, pinEnd + 1);
+    if (wantedEnd - wantedStart > WINDOWED_LIST_MAX_ROWS) {
+      // The rows the reader is looking at and the selection do not fit
+      // together. The selection wins: it is what the reader is working
+      // with, and the far end of it has to be drawn.
+      start = pinStart;
+      end = pinEnd + 1;
+    } else {
+      // A selection that is wider than the screen needs more rows than the
+      // screen holds, or the far end of it would never be drawn.
+      start = wantedStart;
+      end = wantedEnd;
+    }
+  } else if (end - start > state.rowsOnScreen) {
+    // Without a selection the window is a screenful of rows, and it
+    // follows the reader.
+    end = start + state.rowsOnScreen;
   }
   if (end <= start) end = Math.min(state.rows.length, start + 1);
   return { start, end };
+}
+
+/**
+ * The classes of an element as one piece of text.
+ *
+ * The control that is drawn again is a new element, so the two are told
+ * apart by the classes they carry, not by their identity. The classes are
+ * read as text because the class list of an element is not the same thing
+ * in every document the panel runs in.
+ *
+ * @param {Element} element - the element to read.
+ * @returns {string} the classes, separated by spaces.
+ */
+function elementClassText(element) {
+  if (!element || typeof element.getAttribute !== "function") return "";
+  return element.getAttribute("class") || "";
+}
+
+/**
+ * Remembers the control the reader is on, so a redraw can give it back.
+ *
+ * The list is drawn again from scratch every time the window moves, and a
+ * control that is thrown away takes the keyboard with it. The reader would
+ * have to find their place again for no reason.
+ *
+ * @param {HTMLElement} list - the list that is about to be drawn.
+ * @returns {{rowIndex: number, classes: string}|null} what to look for.
+ */
+function rememberFocusedControl(list) {
+  const focused = document.activeElement;
+  if (!focused || !list.contains(focused)) return null;
+  const row = focused.closest?.("[data-row-index]");
+  if (!row) return null;
+  const rowIndex = Number(row.dataset.rowIndex);
+  if (!Number.isInteger(rowIndex)) return null;
+  return {
+    rowIndex,
+    classes: elementClassText(focused),
+  };
+}
+
+/**
+ * Gives the keyboard back to the control the reader was on.
+ *
+ * @param {HTMLElement} list - the list that was drawn.
+ * @param {{rowIndex: number, classes: string}|null} memory - what
+ *   rememberFocusedControl found.
+ */
+function restoreFocusedControl(list, memory) {
+  if (!memory) return;
+  const row = list.querySelector(`[data-row-index="${memory.rowIndex}"]`);
+  if (!row) return;
+  const control = [...row.querySelectorAll("*")].find(
+    (element) => elementClassText(element) === memory.classes,
+  );
+  if (control && typeof control.focus === "function") control.focus();
 }
 
 /**
@@ -1835,6 +1939,10 @@ function drawWindowedList(state, start, end) {
   // reader's eyes would move, and the anchor is what puts it back.
   const anchor = state.start;
   const anchorBefore = state.offsets[anchor] || 0;
+
+  // The control the reader is on is remembered before the list is thrown
+  // away.
+  const focused = rememberFocusedControl(list);
 
   list.innerHTML = "";
   const elements = new Array(state.rows.length).fill(null);
@@ -1875,6 +1983,9 @@ function drawWindowedList(state, start, end) {
   }
 
   state.onRender?.(state);
+
+  // The keyboard goes back to where it was.
+  restoreFocusedControl(list, focused);
 }
 
 /**
@@ -2929,9 +3040,6 @@ function pruneTranslationCachesForVideo(videoId) {
   for (const key of [...interfaceTranslationCache.keys()]) {
     if (!key.startsWith(prefix)) interfaceTranslationCache.delete(key);
   }
-  for (const key of [...translationPaidText]) {
-    if (!key.startsWith(prefix)) translationPaidText.delete(key);
-  }
 }
 
 function getInterfaceTranslation(surface, id, text) {
@@ -2969,12 +3077,12 @@ async function retryInterfaceTranslation(surface, id) {
   }
   if (surface === "overview") {
     if (currentAnalysis) renderAnalysisResults(currentAnalysis);
-    void translateOverviewContent();
+    void translateOverviewContent(true);
     return;
   }
   if (surface === "notes") {
     if (currentNotes.length) renderNotes(currentNotes, currentNotesFilterVideoId);
-    void translateNotesContent();
+    void translateNotesContent(true);
   }
 }
 
@@ -3004,7 +3112,12 @@ function getLocalizedPlainText(text, surface, id) {
   return original;
 }
 
-async function translateInterfaceSegments(surface, segments, rerender) {
+async function translateInterfaceSegments(
+  surface,
+  segments,
+  rerender,
+  askedAgain = false,
+) {
   if (currentTranscriptMode === "original" || !segments.length) return;
   const generation = translationGeneration;
   const videoId = currentVideoId;
@@ -3038,21 +3151,16 @@ async function translateInterfaceSegments(surface, segments, rerender) {
   missing.forEach((segment) => interfaceTranslationInFlight.add(segment.cacheKey));
   setTranslatingSpinner(true);
   try {
-    // The batch is paid for out of the budget the user agreed to. A
+    // The batches are paid for out of the budget the user agreed to. A
     // summary that lands after the question costs more calls than the
     // question named, so the difference goes to the user before it is
-    // spent. Text the panel already paid for is not a new purchase: a
-    // "Retry" the user presses is the same text again.
-    const fresh = missing.filter(
-      (segment) => !translationPaidText.has(segment.cacheKey),
-    );
-    const calls = fresh.length
-      ? Math.ceil(missing.length / TRANSLATION_BATCH_SIZE)
-      : 0;
-    const allowed = await spendTranslationCalls(
-      calls,
-      translationBudgetKey(videoId, mode),
-    );
+    // spent. Every call is paid for: a "Retry" the reader presses is
+    // another call to the provider, and it is not a free one.
+    const budgetKey = translationBudgetKey(videoId, mode);
+    const calls = Math.ceil(missing.length / TRANSLATION_BATCH_SIZE);
+    const allowed = askedAgain
+      ? await spendTranslationFailureCalls(calls, budgetKey)
+      : await spendTranslationCalls(calls, budgetKey);
     if (!allowed) {
       // The user said no. The text stays untranslated and the deny list
       // offers the button that asks again.
@@ -3062,7 +3170,6 @@ async function translateInterfaceSegments(surface, segments, rerender) {
       rerender();
       return;
     }
-    missing.forEach((segment) => translationPaidText.add(segment.cacheKey));
     for (
       let start = 0;
       start < missing.length;
@@ -3085,6 +3192,9 @@ async function translateInterfaceSegments(surface, segments, rerender) {
             videoTitle: currentVideoTitle,
           },
           isStaleBatch,
+          // Every attempt after the first one is another call to the
+          // provider, and the reader's balance pays for it.
+          () => spendTranslationFailureCall(budgetKey),
         );
       } catch (error) {
         console.error("[YouTube Digest] Interface batch error:", error);
@@ -3148,7 +3258,7 @@ function getOverviewTranslationSegments() {
   return segments;
 }
 
-function translateOverviewContent() {
+function translateOverviewContent(askedAgain = false) {
   return translateInterfaceSegments(
     "overview",
     getOverviewTranslationSegments(),
@@ -3158,6 +3268,7 @@ function translateOverviewContent() {
       renderAnalysisResults(currentAnalysis);
       if (contentArea) contentArea.scrollTop = scrollTop;
     },
+    askedAgain,
   );
 }
 
@@ -3168,17 +3279,22 @@ function getNoteTranslationId(note, index) {
   return `note-${stablePart || index}`;
 }
 
-function translateNotesContent() {
+function translateNotesContent(askedAgain = false) {
   const segments = currentNotes.map((note, index) => ({
     id: getNoteTranslationId(note, index),
     text: note.text || "",
   }));
-  return translateInterfaceSegments("notes", segments, () => {
-    const contentArea = document.getElementById("contentArea");
-    const scrollTop = contentArea?.scrollTop || 0;
-    renderNotes(currentNotes, currentNotesFilterVideoId);
-    if (contentArea) contentArea.scrollTop = scrollTop;
-  });
+  return translateInterfaceSegments(
+    "notes",
+    segments,
+    () => {
+      const contentArea = document.getElementById("contentArea");
+      const scrollTop = contentArea?.scrollTop || 0;
+      renderNotes(currentNotes, currentNotesFilterVideoId);
+      if (contentArea) contentArea.scrollTop = scrollTop;
+    },
+    askedAgain,
+  );
 }
 
 /**
@@ -7535,7 +7651,10 @@ function buildWordCard(item) {
       announceStatus(panelCopy("wordDeleted"));
     } else {
       deleteButton.disabled = false;
-      announceAlert(panelCopy("couldNotSave"));
+      // The word did not go away, and that is what has to be said. "Could
+      // not save" is about something else, and a screen reader user who
+      // hears it has no way of telling what happened to the word.
+      announceAlert(panelCopy("wordDeleteFailed"));
     }
   });
 
@@ -8263,27 +8382,36 @@ function highlightActiveEntry(currentSeconds) {
   const index = transcriptRowIndexAtTime(rows, currentSeconds);
   if (index < 0) return;
 
+  // The row that is being spoken is the truth, whether it is on the screen
+  // or not: the reader is following the video, not the window.
+  transcriptActiveRowIndex = index;
+
   let activeEntry = transcriptWindow.elements[index];
   if (!activeEntry) {
     // The row that is being spoken is not on the screen. The panel pulls
     // the reader to it only while the reader is following the playback: a
     // reader who scrolled away is left where they are.
-    if (!autoScrollEnabled) return;
+    if (!autoScrollEnabled) {
+      // The mark of the row that was spoken before has to go. A reader who
+      // scrolls back would find the wrong row marked, and the mark is the
+      // panel's way of saying where the video is.
+      removeActiveTranscriptHighlight(transcriptList);
+      return;
+    }
     lastAutoScrollTime = Date.now();
     revealWindowedListRow(transcriptWindow, index);
     activeEntry = transcriptWindow.elements[index];
   }
-  if (!activeEntry) return;
-
-  transcriptActiveRowIndex = index;
+  if (!activeEntry) {
+    removeActiveTranscriptHighlight(transcriptList);
+    return;
+  }
 
   // Skip if this entry is already highlighted (no DOM thrashing)
   if (activeEntry.classList.contains("active-playback")) return;
 
   // Remove old highlight, add new one
-  transcriptList
-    .querySelectorAll(".transcript-entry.active-playback")
-    .forEach((entry) => entry.classList.remove("active-playback"));
+  removeActiveTranscriptHighlight(transcriptList);
   activeEntry.classList.add("active-playback");
 
   // Only scroll if auto-scroll is enabled
@@ -8291,6 +8419,17 @@ function highlightActiveEntry(currentSeconds) {
     lastAutoScrollTime = Date.now();
     activeEntry.scrollIntoView?.({ behavior: scrollBehavior(), block: "center" });
   }
+}
+
+/**
+ * Takes the playback mark off every row that carries it.
+ *
+ * @param {HTMLElement} transcriptList - the list the rows are in.
+ */
+function removeActiveTranscriptHighlight(transcriptList) {
+  transcriptList
+    .querySelectorAll(".transcript-entry.active-playback")
+    .forEach((entry) => entry.classList.remove("active-playback"));
 }
 
 /**
@@ -8576,17 +8715,14 @@ function setTranscriptModeButtons(mode) {
  *
  * The key is the video and the language. The number is a ceiling: the
  * panel may spend it without a question, and going past it asks again.
+ *
+ * `confirmed` and `spent` are the calls of the work itself. `failures` are
+ * the calls the panel made on its own, because the provider refused a batch
+ * and the panel tried again. They have their own ceiling, and the price
+ * question names it, so every call the panel makes is one the reader was
+ * told about.
  */
 const translationBudgetLedger = new Map();
-
-/**
- * The text the user has already paid for.
- *
- * A batch the provider refused is asked again by the panel itself, or by
- * the user pressing "Retry". That is the same text, so it is not a new
- * purchase: the price the user agreed to covers it.
- */
-const translationPaidText = new Set();
 
 /**
  * The budget a translation is spent from.
@@ -8600,11 +8736,40 @@ function translationBudgetKey(videoId, mode) {
 }
 
 /**
+ * A budget that has not been agreed to yet.
+ */
+function emptyTranslationBudget(confirmed = 0) {
+  return { confirmed, spent: 0, failures: 0 };
+}
+
+/**
+ * The whole bill for a translation, in provider calls.
+ *
+ * The number the panel states is a ceiling on the calls this video and
+ * this language will ever make: the work ceiling plus the retry budget.
+ * Every call already made is inside one of the two. The retry budget is
+ * not a remainder - it is at least TRANSLATION_FAILURE_ALLOWANCE, and a
+ * reader who agreed to go past it has raised it. Subtracting the retries
+ * that have already happened would name a number the panel could still
+ * pass, and the question would be a promise it breaks.
+ *
+ * @param {number} work - the ceiling of the calls of the work.
+ * @param {number} [retries] - the retry budget the reader has agreed to.
+ * @returns {number} the calls the panel may make in total.
+ */
+function translationCallsInTotal(work, retries = 0) {
+  return (
+    Math.max(0, Number(work) || 0) +
+    Math.max(TRANSLATION_FAILURE_ALLOWANCE, Number(retries) || 0)
+  );
+}
+
+/**
  * Spends provider calls out of the budget the user agreed to.
  *
  * Every paid batch goes through here. A batch that fits in the budget is
  * paid for silently. A batch that does not is put to the user again, with
- * the number of calls that are still missing: saying yes raises the
+ * the whole bill that agreeing would authorise: saying yes raises the
  * ceiling to the new total, saying no spends nothing.
  *
  * @param {number} calls - how many provider calls the batch takes.
@@ -8617,20 +8782,80 @@ async function spendTranslationCalls(
 ) {
   const wanted = Number(calls);
   if (!Number.isFinite(wanted) || wanted <= 0) return true;
-  const budget = translationBudgetLedger.get(key) || { confirmed: 0, spent: 0 };
+  const budget = translationBudgetLedger.get(key) || emptyTranslationBudget();
   if (budget.spent + wanted <= budget.confirmed) {
     budget.spent += wanted;
     translationBudgetLedger.set(key, budget);
     return true;
   }
-  const missing = budget.spent + wanted - budget.confirmed;
-  const agreed = await confirmTranslationCost(missing);
+  const agreed = await confirmTranslationCost(
+    translationCallsInTotal(budget.spent + wanted, budget.failures),
+  );
   if (!agreed) {
     translationBudgetLedger.set(key, budget);
     return false;
   }
   budget.confirmed = budget.spent + wanted;
   budget.spent += wanted;
+  translationBudgetLedger.set(key, budget);
+  return true;
+}
+
+/**
+ * Pays for one of the calls the panel makes on its own.
+ *
+ * A batch the provider refused is tried again, and the try is a call to the
+ * provider: the reader's balance pays for it, so it is counted. The panel
+ * does not ask about it in the middle of a translation. The number of these
+ * calls is small, and the price question names it.
+ *
+ * @param {string} key - the budget the call is spent from.
+ * @returns {boolean} true when the call may go out.
+ */
+function spendTranslationFailureCall(
+  key = translationBudgetKey(currentVideoId, currentTranscriptMode),
+) {
+  const budget = translationBudgetLedger.get(key);
+  if (!budget) return false;
+  if (budget.failures >= TRANSLATION_FAILURE_ALLOWANCE) return false;
+  budget.failures += 1;
+  translationBudgetLedger.set(key, budget);
+  return true;
+}
+
+/**
+ * Pays for the calls the reader asked for by hand.
+ *
+ * The reader pressed "Retry" on a row the provider refused. The call is
+ * paid for like any other call, and when the calls the reader was told
+ * about are used up, the reader is the one who says whether to go on.
+ *
+ * @param {number} calls - how many provider calls the batch takes.
+ * @param {string} key - the budget the calls are spent from.
+ * @returns {Promise<boolean>} true when the calls may go out.
+ */
+async function spendTranslationFailureCalls(
+  calls,
+  key = translationBudgetKey(currentVideoId, currentTranscriptMode),
+) {
+  const wanted = Number(calls);
+  if (!Number.isFinite(wanted) || wanted <= 0) return true;
+  const budget = translationBudgetLedger.get(key) || emptyTranslationBudget();
+  if (budget.failures + wanted <= TRANSLATION_FAILURE_ALLOWANCE) {
+    budget.failures += wanted;
+    translationBudgetLedger.set(key, budget);
+    return true;
+  }
+  // The reader is the one asking for this call, so the reader is the one
+  // who is asked when the calls they were told about are used up.
+  const agreed = await confirmTranslationCost(
+    budget.confirmed + budget.failures + wanted,
+  );
+  if (!agreed) {
+    translationBudgetLedger.set(key, budget);
+    return false;
+  }
+  budget.failures += wanted;
   translationBudgetLedger.set(key, budget);
   return true;
 }
@@ -8648,10 +8873,10 @@ async function spendTranslationCalls(
 function ensureTranslationBudget(mode) {
   const key = translationBudgetKey(currentVideoId, mode);
   if (translationBudgetLedger.has(key)) return;
-  translationBudgetLedger.set(key, {
-    confirmed: translationCallsToPayFor(),
-    spent: 0,
-  });
+  translationBudgetLedger.set(
+    key,
+    emptyTranslationBudget(translationCallsToPayFor()),
+  );
 }
 
 /**
@@ -8991,7 +9216,13 @@ async function requestDisplayLanguageModeChange(mode) {
     if (!translationBudgetLedger.has(budgetKey)) {
       const calls = translationCallsToPayFor();
       if (calls > 0) {
-        const agreed = await confirmTranslationCost(calls);
+        // The question names the whole bill: the calls of the work, and the
+        // few calls the panel may make on its own when the provider refuses
+        // a batch. The panel never makes a call the reader was not told
+        // about.
+        const agreed = await confirmTranslationCost(
+          translationCallsInTotal(calls),
+        );
         if (!agreed) {
           // The panel stays where it was, so the buttons keep showing the
           // language that is really on screen.
@@ -9001,7 +9232,10 @@ async function requestDisplayLanguageModeChange(mode) {
       }
       // The number the user agreed to is the ceiling for this video and
       // this language. Everything that goes past it asks again.
-      translationBudgetLedger.set(budgetKey, { confirmed: calls, spent: 0 });
+      translationBudgetLedger.set(
+        budgetKey,
+        emptyTranslationBudget(calls),
+      );
     }
   }
 
@@ -9053,6 +9287,10 @@ async function handleDisplayLanguageModeChange(mode) {
     document.querySelector(".tab.active")?.dataset.tab || "transcript";
 
   if (mode === "original") {
+    // The rows are about to say something else: the original text instead
+    // of the translation. The search has to read them again, or the reader
+    // is left with the answer of the language that just went away.
+    invalidateTranscriptSearch();
     renderTranscript();
     if (currentAnalysis) renderAnalysisResults(currentAnalysis);
     if (currentNotes.length) renderNotes(currentNotes, currentNotesFilterVideoId);
@@ -9199,6 +9437,7 @@ async function requestTranscriptTranslationBatch(
   generation,
   videoId,
   mode,
+  askedAgain = false,
 ) {
   const sourceBatch = indices.map((index) => segments[index]);
   // The batch belongs to the video, the mode and the generation it was
@@ -9210,19 +9449,14 @@ async function requestTranscriptTranslationBatch(
     mode !== currentTranscriptMode;
   setTranslatingSpinner(true);
   try {
-    // The batch is paid for out of the budget the user agreed to. Text the
-    // panel already paid for is not a new purchase: a "Retry" the user
-    // presses is the same text again.
-    const fresh = sourceBatch.filter(
-      (segment) =>
-        !translationPaidText.has(
-          transcriptTranslationCacheKey(segment, videoId),
-        ),
-    );
-    const allowed = await spendTranslationCalls(
-      fresh.length ? 1 : 0,
-      translationBudgetKey(videoId, mode),
-    );
+    // The batch is one call to the provider, and it is paid for before it
+    // goes out. A batch the reader asked for again is not new work: it is
+    // the same text the provider refused, and it is paid for out of the
+    // calls the reader was told about for the failures.
+    const budgetKey = translationBudgetKey(videoId, mode);
+    const allowed = askedAgain
+      ? await spendTranslationFailureCalls(1, budgetKey)
+      : await spendTranslationCalls(1, budgetKey);
     if (!allowed) {
       // The user said no. The row says so and keeps the button that asks
       // again, and nothing is spent.
@@ -9240,11 +9474,6 @@ async function requestTranscriptTranslationBatch(
       });
       return;
     }
-    sourceBatch.forEach((segment) =>
-      translationPaidText.add(
-        transcriptTranslationCacheKey(segment, videoId),
-      ),
-    );
     // The payload is built once and never changes between the attempts, so
     // every attempt asks for the very same thing and the cache key of the
     // batch stays correct.
@@ -9259,6 +9488,9 @@ async function requestTranscriptTranslationBatch(
         videoTitle: currentVideoTitle,
       },
       isStaleBatch,
+      // Every attempt after the first one is another call to the provider,
+      // and the reader's balance pays for it.
+      () => spendTranslationFailureCall(budgetKey),
     );
 
     const isStale = isStaleBatch();
@@ -9367,7 +9599,10 @@ async function translateTranscript() {
     if (processing || queue.length === 0 || generation !== translationGeneration)
       return;
     processing = true;
-    const indices = queue.splice(0, TRANSLATION_BATCH_SIZE);
+    const entries = queue.splice(0, TRANSLATION_BATCH_SIZE);
+    const indices = entries.map((entry) => entry.index);
+    // The reader asked for these rows again, so the batch is not new work.
+    const askedAgain = entries.some((entry) => entry.askedAgain);
     indices.forEach((index) => queued.delete(index));
     try {
       await requestTranscriptTranslationBatch(
@@ -9376,6 +9611,7 @@ async function translateTranscript() {
         generation,
         videoId,
         mode,
+        askedAgain,
       );
     } finally {
       processing = false;
@@ -9383,13 +9619,13 @@ async function translateTranscript() {
     }
   };
 
-  const enqueue = (index, force = false) => {
+  const enqueue = (index, askedAgain = false) => {
     if (!Number.isInteger(index) || !segments[index]) return;
     const cached = transcriptParagraphCache.has(
       transcriptTranslationCacheKey(segments[index]),
     );
-    if ((!force && cached) || queued.has(index)) return;
-    queue.push(index);
+    if ((!askedAgain && cached) || queued.has(index)) return;
+    queue.push({ index, askedAgain });
     queued.add(index);
     // Let all entries reported in the same viewport turn collect before the
     // worker starts, producing one small contextual multi-segment request.
